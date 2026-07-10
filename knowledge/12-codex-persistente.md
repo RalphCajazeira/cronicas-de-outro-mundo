@@ -1,21 +1,58 @@
 # Codex Persistente
 
-O Codex registra o conhecimento do personagem sobre:
+O Codex registra o conhecimento confirmado ou percebido pelo personagem do jogador.
+
+Pode conter informações sobre:
 
 - criaturas;
 - plantas;
 - minérios;
 - receitas;
-- NPCs;
+- atores conhecidos;
 - locais;
 - facções;
 - idiomas;
 - magias;
 - livros;
-- artefatos;
+- itens e artefatos;
 - divindades;
-- tesouros.
+- tesouros;
+- fenômenos;
+- culturas e eventos históricos.
 
-Separe fatos confirmados de informações incertas.
+## Diferença entre Codex, ator e memória
 
-Não revele segredos que o personagem ainda não descobriu.
+- O Codex representa o que o personagem sabe ou acredita saber.
+- O registro do ator representa o que existe no mundo.
+- `knowledge` representa o que aquele ator sabe.
+- `secrets` representa informações ocultas daquele ator ou sobre ele.
+- Memórias representam experiências vividas ou lembradas por um ator.
+
+O Codex não deve copiar automaticamente todos os dados internos de um ator.
+
+## Níveis de certeza
+
+Separe:
+
+- fato confirmado;
+- relato de terceiro;
+- hipótese;
+- rumor;
+- informação incompleta;
+- informação possivelmente falsa.
+
+Atualize a certeza quando novas evidências forem obtidas.
+
+## Segurança narrativa
+
+Não revele ao jogador:
+
+- segredos ainda não descobertos;
+- conhecimento privado de outros atores;
+- objetivos ocultos;
+- motivações secretas;
+- memórias que o personagem não testemunhou nem descobriu.
+
+Uma descoberta narrativa válida pode transformar informação oculta em entrada do Codex.
+
+Quando isso ocorrer, registre apenas o que o personagem realmente conseguiu compreender.
