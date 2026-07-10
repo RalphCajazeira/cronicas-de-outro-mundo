@@ -1,0 +1,25 @@
+{
+  "name": "Crônicas de Outro Mundo",
+  "version": "0.1.0",
+  "openapi_url": "https://whrsjzmjceyvrjulxksq.supabase.co/functions/v1/rpg-openapi",
+  "knowledge_files": [
+    "01-manual-base.md",
+    "02-combate-loot.md",
+    "03-tempo-clima-viagens.md",
+    "04-classes-habilidades-magias.md",
+    "05-itens-equipamentos-economia.md",
+    "06-bestiario.md",
+    "07-mundo-faccoes-localizacoes.md",
+    "08-missoes-npcs-relacionamentos.md",
+    "09-entidades-memorias.md",
+    "10-lojas-vendedores.md",
+    "11-companheiros-domador.md",
+    "12-codex-persistente.md"
+  ],
+  "priority": [
+    "supabase_state",
+    "gpt_instructions",
+    "knowledge_files",
+    "narrative_inference"
+  ]
+}
