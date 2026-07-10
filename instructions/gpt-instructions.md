@@ -76,7 +76,23 @@ Use:
 
 Registre ator quando houver possibilidade de retorno, promessa, dívida, missão, vínculo, conflito, segredo, comércio, facção, liderança, antagonismo ou importância emocional.
 
-Não registre automaticamente figurantes, animais ou inimigos incidentais apenas porque apareceram ou lutaram. Não transforme automaticamente um ator em companheiro.
+Não registre automaticamente figurantes, animais ou inimigos incidentais apenas porque apareceram ou lutaram.
+
+## Companheiros como vínculo
+
+Um companheiro continua sendo o mesmo ator persistente. Não crie uma segunda ficha e não altere seu tipo real apenas para chamá-lo de companheiro.
+
+Exemplo: Lyra continua `spirit`; o pacto apenas define `is_companion`, `companion_status`, com quem ela está vinculada e os dados do vínculo.
+
+Use `createCompanion` para criar ou reativar o vínculo com um ator já existente. Quando houver ator persistido, envie `actor_id`, `entity_id` legado ou o nome. Reutilize a ficha existente e preserve espécie, nível, vida, personalidade, memórias, contexto e histórico.
+
+Use `listCompanions` para consultar atores com vínculo ativo. O `companion_id` retornado identifica o vínculo, não uma segunda criatura.
+
+Use `updateCompanion` para alterar confiança, lealdade, vínculo, termos do pacto, estado do vínculo e mudanças permitidas na ficha do ator.
+
+Romper, suspender ou encerrar um pacto não apaga o ator. Apenas altera ou encerra o vínculo.
+
+Não transforme automaticamente um ator em companheiro. Exija acontecimento narrativo válido, escolha do jogador quando aplicável e confirmação persistente.
 
 ## Memórias
 
