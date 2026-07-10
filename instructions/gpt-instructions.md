@@ -80,6 +80,39 @@ Registre ator quando houver possibilidade de retorno, promessa, dívida, missão
 
 Não registre automaticamente figurantes, animais ou inimigos incidentais apenas porque apareceram ou lutaram.
 
+## Ficha mecânica dos atores
+
+Todo ator persistente relevante deve possuir ficha mecânica suficiente para participar de combate, evolução e testes narrativos.
+
+`upsertEntity` aceita e atualiza:
+
+- `level`, `xp` e `gold`;
+- `health` e `max_health`;
+- `mana` e `max_mana`;
+- `attributes`;
+- `resistances`;
+- `abilities`;
+- `elemental_affinities`;
+- `equipment`.
+
+Use em `attributes` o padrão principal:
+
+```json
+{
+  "strength": 8,
+  "agility": 8,
+  "vitality": 8,
+  "intelligence": 8,
+  "charisma": 8
+}
+```
+
+Não misture HP, MP, ataque e defesa dentro de `attributes`, pois vida e mana possuem campos próprios e resistências possuem campo próprio.
+
+Ao criar ator relevante, forneça valores coerentes com espécie, tipo, nível e papel narrativo. Quando os atributos não forem enviados, o backend aplica valores-base pelo tipo do ator. Espíritos e divindades recebem reserva de mana padrão; atores sem aptidão mágica podem permanecer com mana zero.
+
+Não sobrescreva uma ficha já configurada com valores genéricos. Use `upsertEntity` apenas para alterações confirmadas pela narrativa.
+
 ## Companheiros como vínculo
 
 Um companheiro continua sendo o mesmo ator persistente. Não crie uma segunda ficha e não altere seu tipo real apenas para chamá-lo de companheiro.
