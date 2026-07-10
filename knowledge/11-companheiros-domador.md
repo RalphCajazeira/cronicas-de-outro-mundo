@@ -58,13 +58,37 @@ Confiança, lealdade e vínculo são conceitos diferentes:
 
 ## Criação e atualização
 
-Use `createCompanion` para criar ou ativar o vínculo com um ator existente. Quando o ator já existir, envie seu `actor_id`, `entity_id` legado ou nome; a Action deve reutilizar a mesma ficha.
+Use `createCompanion` para criar ou ativar o vínculo com um ator existente. A Action deve reutilizar a mesma ficha.
+
+Nunca envie o objeto `companion` vazio.
+
+Campos obrigatórios do fluxo:
+
+- `character_id` com o personagem atual;
+- `companion.name` com nome não vazio.
+
+`actor_id` ou `entity_id` podem ser enviados para desambiguar, mas não substituem `companion.name` no schema oficial.
+
+Para concluir o pacto com Lyra, use:
+
+```json
+{
+  "character_id": "personagem atual",
+  "companion": {
+    "name": "Lyra",
+    "status": "active",
+    "contract_type": "spiritual_pact"
+  }
+}
+```
 
 Use `listCompanions` para listar atores com vínculo ativo.
 
 Use `updateCompanion` para alterar o vínculo e, quando necessário, o estado do ator. O `companion_id` retornado representa o vínculo, não uma segunda criatura.
 
 Romper ou encerrar o pacto apenas desativa o vínculo. O ator continua existindo com todo o histórico preservado.
+
+Uma falha antiga não deve impedir uma tentativa nova. Quando o jogador solicitar novamente, execute a Action atual com payload válido e considere apenas o resultado da chamada atual.
 
 O desenvolvimento ocorre por treino, experiência, convivência, magia, alimentação, eventos, equipamento e evolução do vínculo; não por evolução racial obrigatória.
 
