@@ -1,0 +1,13 @@
+{
+  "name": "cronicas-de-outro-mundo",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix backend",
+    "build": "npm run build --prefix backend",
+    "lint": "npm run lint --prefix backend",
+    "typecheck": "npm run typecheck --prefix backend",
+    "test": "npm test --prefix backend",
+    "prisma:validate": "npm run prisma:validate --prefix backend",
+    "prisma:generate": "npm run prisma:generate --prefix backend"
+  }
+}

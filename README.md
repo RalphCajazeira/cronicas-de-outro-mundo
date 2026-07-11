@@ -1,116 +1,61 @@
 # Crônicas de Outro Mundo
 
-Repositório oficial de documentação, regras, estrutura persistente e integração do GPT **Crônicas de Outro Mundo**.
+Nova plataforma do RPG narrativo **Crônicas de Outro Mundo**. O runtime ativo é uma API Node.js + TypeScript em `backend/`; a versão Supabase/GPT Actions anterior está preservada, sem uso automático, em `legacy/supabase-gpt-v1/`.
 
-## Arquitetura
+## Arquitetura ativa
 
-- **Instruções do GPT:** comportamento essencial e regras críticas.
-- **Knowledge:** regras detalhadas do RPG medieval.
-- **Supabase:** estado persistente da campanha e resolvedores mecânicos.
-- **OpenAPI:** Actions públicas do GPT.
-- **GitHub:** fonte versionada dos documentos, migrations, Edge Functions e contratos da API.
+- Express expõe a API HTTP e Zod valida configuração e entradas.
+- Prisma Client 7 acessa PostgreSQL pelo adapter oficial `@prisma/adapter-pg`; Prisma Migrate é a única autoridade do novo schema.
+- Supabase pode hospedar o PostgreSQL, mas somente o backend recebe credenciais privilegiadas.
+- `x-rpg-key` protege temporariamente `/api/v1`; `/health` é público.
+- O frontend e a integração do GPT serão adicionados em fases próprias e sempre chamarão o backend.
 
 ## Estrutura
 
 ```text
-instructions/   Instruções principais do GPT
-knowledge/      Arquivos para subir em Conhecimento
-docs/           Arquitetura e decisões
-supabase/       Migrations e código-fonte das Edge Functions
-schemas/        Contrato OpenAPI oficial
+backend/                  API, Prisma, seed e testes
+docs/ai/                  contexto, arquitetura e decisões ativas
+legacy/supabase-gpt-v1/   referência histórica, fora do runtime
 ```
 
-## Fonte de verdade
+## Preparação no Windows/PowerShell
 
-Para código e contratos:
-
-1. GitHub;
-2. deploy e migrations gerados a partir dos arquivos versionados;
-3. ambiente Supabase em execução.
-
-Para estado narrativo dinâmico:
-
-1. estado retornado pelo Supabase;
-2. Instruções do GPT;
-3. arquivos de Knowledge;
-4. inferência narrativa.
-
-## OpenAPI único
-
-Existe apenas um contrato oficial para copiar e colar no editor do GPT:
-
-```text
-schemas/openapi.json
+```powershell
+npm install
+npm install --prefix backend
+Copy-Item backend/.env.example backend/.env
 ```
 
-Versão atual:
+Preencha o `.env` local sem versioná-lo. `DATABASE_URL` é a conexão de runtime, `DIRECT_URL` é reservada para migrations e `RPG_API_KEY` é a chave interna temporária.
 
-```text
-9.0.0
+```powershell
+npm run prisma:generate
+npm run dev
 ```
 
-Ele reúne todas as Actions, inclusive:
+## Validação
 
-- estado e recuperação;
-- mundo e viagem;
-- combate;
-- atores e memórias;
-- companheiros;
-- Codex;
-- conteúdo dinâmico.
-
-O conteúdo dinâmico continua exposto por apenas três operações:
-
-- `searchWorldContent`;
-- `upsertWorldContent`;
-- `manageCharacterContent`.
-
-`manageCharacterContent` também permite leitura sem criar nova Action:
-
-- `operation: get` para consultar um vínculo específico;
-- `operation: list` com `content_id: "*"` para listar vínculos e atributos derivados.
-
-## Blueprints mecânicos
-
-A Fase 1 adicionou modelos consultáveis para:
-
-- habilidades;
-- magias;
-- armas;
-- armaduras;
-- escudos;
-- itens.
-
-`searchWorldContent` devolve o `blueprint` do tipo solicitado, contendo campos obrigatórios, recomendados, padrões e exemplo completo.
-
-`upsertWorldContent` normaliza o conteúdo e rejeita conteúdo ativo mecanicamente incompleto.
-
-Conteúdos persistidos passam a registrar:
-
-- `schema_version`;
-- `validation_status`;
-- `validation_errors`;
-- `validated_at`.
-
-## Fluxo obrigatório
-
-```text
-consultar conteúdo e blueprint
-→ reutilizar quando existir
-→ criar ficha mecânica completa quando necessário
-→ validar e persistir
-→ vincular ao personagem
-→ consultar estado e atributos derivados
+```powershell
+npm run prisma:validate
+npm run lint
+npm run typecheck
+npm test
+npm run build
 ```
 
-NPCs e criaturas individuais continuam em atores persistentes. Modelos reutilizáveis ficam no catálogo unificado.
+Para preparar uma migration offline a partir do schema, sem aplicar ao banco:
 
-## Próximas fases
+```powershell
+$env:DATABASE_URL='postgresql://user:password@localhost:5432/placeholder'
+npx --prefix backend prisma migrate diff --from-empty --to-schema backend/prisma/schema.prisma --script
+```
 
-1. inventário universal para personagens, NPCs e inimigos;
-2. encontros com equipamentos e itens físicos definidos antes do combate;
-3. loot derivado do inventário real;
-4. resolvedor de ações com buffs, debuffs, furtividade, percepção e proficiência;
-5. comércio e estoque de lojas.
+A migration inicial já está versionada em `backend/prisma/migrations/`. Nenhuma migration ou seed foi aplicado remotamente. O seed de desenvolvimento pode ser executado conscientemente com `npm run prisma:seed --prefix backend` apenas contra um banco seguro configurado.
 
-> Nunca coloque chaves, tokens ou credenciais neste repositório.
+### Banco local de desenvolvimento
+
+O banco PostgreSQL local `game_gpt_dev` existe, recebeu a migration inicial e o seed de desenvolvimento. Ele não contém dados de produção. As credenciais permanecem exclusivamente na configuração local ignorada pelo Git.
+
+## Escopo atual e próximas fases
+
+Existem healthcheck e leituras normalizadas de atores, personagens e conteúdo. Ainda não existem frontend, autenticação pública, combate, inventário físico, comércio, CORS, rate limit ou observabilidade de produção. Essas decisões devem ser tratadas antes do deploy.

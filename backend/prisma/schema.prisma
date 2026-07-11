@@ -1,0 +1,200 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+enum ActorType {
+  CHARACTER
+  NPC
+  CREATURE
+  COMPANION
+  SPIRIT
+}
+
+enum ActorStatus {
+  ACTIVE
+  INACTIVE
+  DEFEATED
+  DEAD
+  ARCHIVED
+}
+
+enum ContentType {
+  SKILL
+  SPELL
+  WEAPON
+  ARMOR
+  SHIELD
+  ITEM
+  TALENT
+  MATERIAL
+  CLASS
+  RACE
+  LOCATION
+  FACTION
+  QUEST_TEMPLATE
+  STATUS_EFFECT
+  RECIPE
+  CREATURE_TEMPLATE
+  OTHER
+}
+
+enum ContentStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum ActorContentState {
+  LOCKED
+  LEARNING
+  KNOWN
+  MASTERED
+}
+
+model Player {
+  id          String   @id @default(uuid()) @db.Uuid
+  slug        String   @unique
+  displayName String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  worlds      World[]
+}
+
+model World {
+  id          String   @id @default(uuid()) @db.Uuid
+  playerId    String   @db.Uuid
+  code        String
+  name        String
+  description String?
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  player      Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  campaigns   Campaign[]
+  content     ContentDefinition[]
+  @@unique([playerId, code])
+}
+
+model Campaign {
+  id          String         @id @default(uuid()) @db.Uuid
+  worldId     String         @db.Uuid
+  code        String
+  name        String
+  status      CampaignStatus @default(DRAFT)
+  currentTime Json?
+  metadata    Json           @default("{}")
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  world       World          @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  actors      Actor[]
+  content     ContentDefinition[]
+  events      GameEvent[]
+  @@unique([worldId, code])
+}
+
+model Actor {
+  id          String      @id @default(uuid()) @db.Uuid
+  campaignId  String      @db.Uuid
+  code        String
+  name        String
+  actorType   ActorType
+  species     String?
+  className   String?
+  role        String?
+  description String?
+  level       Int         @default(1)
+  xp          Int         @default(0)
+  gold        Int         @default(0)
+  health      Int
+  maxHealth   Int
+  mana        Int
+  maxMana     Int
+  attributes  Json        @default("{}")
+  resistances Json        @default("{}")
+  affinities  Json        @default("{}")
+  appearance  Json        @default("{}")
+  personality Json        @default("{}")
+  metadata    Json        @default("{}")
+  status      ActorStatus @default(ACTIVE)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  campaign    Campaign    @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  content     ActorContent[]
+  events      GameEvent[]
+  @@unique([campaignId, code])
+  @@index([campaignId, actorType, status])
+}
+
+model ContentDefinition {
+  id            String        @id @default(uuid()) @db.Uuid
+  worldId       String        @db.Uuid
+  campaignId    String?       @db.Uuid
+  code          String
+  name          String
+  contentType   ContentType
+  description   String?
+  mechanics     Json          @default("{}")
+  requirements  Json          @default("{}")
+  presentation  Json          @default("{}")
+  tags          Json          @default("[]")
+  schemaVersion Int           @default(1)
+  status        ContentStatus @default(DRAFT)
+  metadata      Json          @default("{}")
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  world         World         @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  campaign      Campaign?     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  actors        ActorContent[]
+  @@unique([worldId, campaignId, contentType, code])
+  @@unique([worldId, contentType, code], map: "ContentDefinition_global_scope_key", where: { campaignId: null })
+  @@index([worldId, contentType, code])
+}
+
+model ActorContent {
+  id                  String            @id @default(uuid()) @db.Uuid
+  actorId             String            @db.Uuid
+  contentDefinitionId String            @db.Uuid
+  state               ActorContentState @default(LOCKED)
+  rank                Int               @default(0)
+  progress            Int               @default(0)
+  mastery             Int               @default(0)
+  equipped            Boolean           @default(false)
+  quantity            Int               @default(1)
+  notes               String?
+  metadata            Json              @default("{}")
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  actor               Actor             @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  contentDefinition   ContentDefinition @relation(fields: [contentDefinitionId], references: [id], onDelete: Cascade)
+  @@unique([actorId, contentDefinitionId])
+}
+
+model GameEvent {
+  id             String   @id @default(uuid()) @db.Uuid
+  campaignId     String   @db.Uuid
+  actorId        String?  @db.Uuid
+  eventType      String
+  title          String
+  payload        Json     @default("{}")
+  idempotencyKey String?  @unique
+  createdAt      DateTime @default(now())
+  campaign       Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  actor          Actor?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  @@index([campaignId, createdAt])
+  @@index([actorId, createdAt])
+}
