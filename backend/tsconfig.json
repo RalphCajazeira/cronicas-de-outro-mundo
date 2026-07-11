@@ -13,5 +13,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src", "prisma", "prisma.config.ts", "vitest.config.ts"]
+  "include": ["src", "tests", "scripts", "prisma", "prisma.config.ts", "vitest.config.ts", "vitest.integration.config.ts"]
 }

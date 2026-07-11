@@ -7,6 +7,9 @@
     "lint": "npm run lint --prefix backend",
     "typecheck": "npm run typecheck --prefix backend",
     "test": "npm test --prefix backend",
+    "test:unit": "npm run test:unit --prefix backend",
+    "test:integration": "npm run test:integration --prefix backend",
+    "test:all": "npm run test:all --prefix backend",
     "prisma:validate": "npm run prisma:validate --prefix backend",
     "prisma:generate": "npm run prisma:generate --prefix backend"
   }

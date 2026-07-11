@@ -10,8 +10,11 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "npm run test:unit",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:integration": "tsx scripts/run-integration-tests.ts",
+    "test:all": "npm run test:unit && npm run test:integration",
+    "test:watch": "vitest --config vitest.config.ts",
     "prisma:validate": "prisma validate",
     "prisma:generate": "prisma generate",
     "prisma:seed": "tsx prisma/seed.ts"

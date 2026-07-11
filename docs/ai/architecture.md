@@ -21,6 +21,16 @@ HTTP -> routes/controller -> service -> repository -> Prisma -> PostgreSQL
 - módulos começam rasos; `characters` reutiliza atores e restringe `actorType`.
 - respostas são DTOs normalizados, nunca objetos Prisma brutos.
 
+## Arquitetura de testes
+
+```text
+unitário: regra/schema/service isolado
+HTTP: Supertest -> app em memória -> repository injetado
+integração: Supertest -> app -> repository real -> Prisma -> game_gpt_test local
+```
+
+`server.ts` permanece fora de todas as suítes. A preparação de integração valida o destino antes de recriar exclusivamente `game_gpt_test`, aplica migrations com `migrate deploy`, executa o seed e propaga o exit code. Testes rápidos não carregam Prisma real; integração fica restrita a comportamento dependente de PostgreSQL.
+
 ## Limites de responsabilidade
 
 O backend valida entrada, chave interna, regra de domínio e persistência. O GPT futuramente chama a API Node e cuida da interação narrativa dentro dos contratos. O frontend futuro cuida da UX e também chama a API; nunca recebe service role, URL privilegiada ou acesso direto a tabelas/RPCs.

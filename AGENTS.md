@@ -147,6 +147,8 @@ Antes de push autorizado, confirme branch, último commit e working tree limpa.
 
 Use os scripts reais do projeto. Não invente script que não existe.
 
+Toda feature ou correção deve atualizar os testes aplicáveis: unitário para regra, HTTP/Supertest para contrato, integração quando tocar repository, Prisma, migration, constraint ou relação, e E2E apenas para fluxo crítico. Consulte `docs/ai/validation.md` para detalhes operacionais.
+
 Em projetos JavaScript/TypeScript novos, considere ESLint desde a base mínima quando a stack estiver confirmada. Em projetos existentes sem ESLint, proponha uma task pequena para adicionar ESLint antes de grandes refactors, sem misturar com feature e sem instalar dependências sem autorização.
 
 Se existir:

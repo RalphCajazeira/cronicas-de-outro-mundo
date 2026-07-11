@@ -45,3 +45,13 @@ Decisão:
 - Não alterar banco remoto nesta etapa.
 
 Status: implementada
+
+## 2026-07-11 — Estratégia automatizada de testes do backend
+
+Decisão:
+- manter unitários e HTTP com Supertest como suíte rápida, sem banco e sem porta;
+- reservar integração para repositories, Prisma, migrations, seed, constraints, índices e relações;
+- recriar exclusivamente o PostgreSQL local `game_gpt_test` após validações de segurança;
+- usar scripts npm como fluxo normal de validação e testes manuais somente para investigação focal.
+
+Status: implementada

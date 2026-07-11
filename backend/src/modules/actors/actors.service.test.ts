@@ -1,0 +1,36 @@
+import { ActorStatus, ActorType } from '../../generated/prisma/client.js';
+import { describe, expect, it } from 'vitest';
+import { createActorsService } from './actors.service.js';
+import type { ActorRecord, ActorRepository } from './actors.types.js';
+
+const actor: ActorRecord = {
+  id: '7e7b7cbe-5767-47de-a0b5-4b7bc9365c89', code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER,
+  species: null, className: 'Aventureiro', level: 1, xp: 0, gold: 0, health: 20, maxHealth: 20,
+  mana: 10, maxMana: 10, attributes: { strength: 5 }, resistances: {}, affinities: {}, status: ActorStatus.ACTIVE,
+};
+
+function repository(found: ActorRecord | null = actor): ActorRepository {
+  return { findByReference: () => Promise.resolve(found), listContent: () => Promise.resolve([]) };
+}
+
+describe('actors service', () => {
+  it('returns a found actor as a normalized DTO', async () => {
+    await expect(createActorsService(repository()).get('ralph')).resolves.toEqual(expect.objectContaining({ code: 'ralph', actorType: 'character', status: 'active' }));
+  });
+
+  it('rejects a missing actor', async () => {
+    await expect(createActorsService(repository(null)).get('missing')).rejects.toMatchObject({ statusCode: 404, code: 'NOT_FOUND' });
+  });
+
+  it('lists and normalizes content without its repository relation wrapper', async () => {
+    const item = {
+      state: 'LEARNING', rank: 1, progress: 10, mastery: 0, equipped: false, quantity: 1, notes: 'Treino inicial com Lyra',
+      contentDefinition: { code: 'wind_breeze_step', name: 'Passo da Brisa', contentType: 'SKILL', description: null,
+        mechanics: {}, requirements: {}, presentation: {}, tags: ['wind'], schemaVersion: 1, status: 'ACTIVE' },
+    };
+    const contentRepository: ActorRepository = { findByReference: () => Promise.resolve(actor), listContent: () => Promise.resolve([item]) };
+    const content = await createActorsService(contentRepository).listContent('ralph');
+    expect(content[0]).toMatchObject({ contentType: 'skill', state: 'learning', status: 'active' });
+    expect(content[0]).not.toHaveProperty('contentDefinition');
+  });
+});

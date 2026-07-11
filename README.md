@@ -36,12 +36,27 @@ npm run dev
 ## Validação
 
 ```powershell
+npm test                  # suíte rápida: unitários + HTTP em memória
+npm run test:unit         # equivalente explícito da suíte rápida
+npm run test:integration  # recria somente game_gpt_test, migra, semeia e testa
+npm run test:all          # suíte rápida + integração
 npm run prisma:validate
 npm run lint
 npm run typecheck
-npm test
 npm run build
 ```
+
+### Estratégia de testes do backend
+
+- Unitários validam schemas Zod, configuração, segurança, services e transformações sem PostgreSQL ou Prisma real.
+- HTTP usa Supertest sobre o app Express em memória, com repositories injetados; `server.ts` não é importado, nenhuma porta é aberta.
+- Integração usa o fluxo real Express → services → repositories → Prisma → PostgreSQL somente quando migration, seed, query, constraint, índice ou relação são relevantes.
+
+O PostgreSQL local deve estar em execução. Desenvolvimento usa `game_gpt_dev`; testes de integração usam exclusivamente `game_gpt_test`. Docker e banco remoto não fazem parte desse fluxo. No `.env` ignorado, `TEST_DATABASE_URL`, `TEST_DIRECT_URL` e `TEST_RPG_API_KEY` podem definir a configuração de teste. Se as URLs de teste forem omitidas, a automação deriva `game_gpt_test` apenas de uma URL local existente e ainda aplica todas as proteções. Nunca documente ou versione valores reais.
+
+A preparação recusa produção, host diferente de `localhost`/`127.0.0.1`, banco diferente de `game_gpt_test`, URL igual a `DATABASE_URL` e destinos conhecidos como Supabase ou Render. Em caso de falha, nenhum SQL destrutivo é iniciado e a URL não é exibida.
+
+No Windows/PowerShell, se a integração não iniciar, confirme que o serviço PostgreSQL está ativo, que o usuário local pode criar bancos e que as variáveis estão no `backend/.env`. Execute o comando pela raiz ou por `npm run test:integration --prefix backend`; não use `server.ts` nem inicie a API manualmente. Testes manuais endpoint a endpoint são exceção para investigação focal, não o fluxo normal de validação.
 
 Para preparar uma migration offline a partir do schema, sem aplicar ao banco:
 

@@ -51,6 +51,40 @@ npm run build
 npm run test:e2e
 ```
 
+## Estratégia oficial de testes do backend
+
+O backend possui três níveis complementares:
+
+1. Unitário (`*.test.ts`): schemas, configuração, helpers, services, regras, transformações e erros isolados. Não usa PostgreSQL, Prisma real ou servidor.
+2. HTTP (`*.test.ts`): Supertest chama o app Express em memória com repositories injetados ou mockados. Valida middleware, autenticação, parâmetros, status, contratos e erros seguros sem abrir porta.
+3. Integração (`*.integration.test.ts`): usa services e repositories reais, Prisma e PostgreSQL local somente para migration, seed, queries, constraints, índices, relações e endpoints completos.
+
+Comandos na raiz:
+
+```bash
+npm test
+npm run test:unit
+npm run test:integration
+npm run test:all
+```
+
+No backend, `npm run test:watch` observa apenas a suíte rápida e nunca prepara ou reseta banco. `npm test` e `test:unit` executam unitários e HTTP mockado. `test:integration` valida o destino, recria somente `game_gpt_test`, aplica `prisma migrate deploy`, executa o seed e roda a configuração de integração. `test:all` combina as duas camadas.
+
+### Banco exclusivo e proteções
+
+- `game_gpt_dev` é desenvolvimento; `game_gpt_test` é integração automatizada.
+- PostgreSQL local é obrigatório; Docker, Supabase remoto e outros hosts remotos são proibidos nesse fluxo.
+- Variáveis opcionais do `.env` ignorado: `TEST_DATABASE_URL`, `TEST_DIRECT_URL` e `TEST_RPG_API_KEY`.
+- O helper recusa `NODE_ENV=production`, host não local, nome diferente de `game_gpt_test`, bancos administrativos ou de desenvolvimento, marcadores de Supabase/Render e `TEST_DATABASE_URL` igual a `DATABASE_URL`.
+- Erros são seguros e não exibem URL, credencial ou secret.
+- A automação usa `prisma migrate deploy`; não usa `db push`, `migrate reset` ou `migrate dev`.
+
+### Regra para features e correções
+
+Toda feature ou correção deve incluir, conforme aplicável, teste unitário da regra, teste HTTP do contrato e teste de integração ao tocar repository, Prisma, migration, constraint ou relação. E2E é reservado a fluxos críticos de frontend. A task só está concluída após os testes correspondentes, lint, typecheck, testes, build e validações adicionais do escopo.
+
+Validação manual de endpoints é exceção para investigar uma falha automatizada específica. O fluxo normal deve usar os scripts versionados.
+
 ## Projetos com backend/frontend
 
 Quando existirem scripts por pasta:
