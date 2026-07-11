@@ -1,0 +1,23 @@
+services:
+  - type: web
+    runtime: node
+    name: cronicas-de-outro-mundo-api
+    buildCommand: npm ci --prefix backend && npm run prisma:generate && npm run build
+    preDeployCommand: npm run prisma:migrate:deploy
+    startCommand: npm start
+    healthCheckPath: /health/ready
+    autoDeployTrigger: "off"
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: RPG_API_KEY
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false

@@ -20,6 +20,27 @@ Impacto:
 
 Status: implementada
 
+## 2026-07-11 — API GPT v1 e idempotência transacional
+
+Decisão:
+- preservar as leituras atuais e adicionar carga de estado, escrita de atores/conteúdo, progressão e eventos sob `/api/v1`;
+- exigir `idempotencyKey` nas escritas e persistir chave, hash e resposta na mesma transação Prisma;
+- retornar a resposta persistida para repetição idêntica e `409` para reutilização incompatível;
+- manter combate avançado, inventário físico e autenticação pública fora desta fase.
+
+Status: implementada localmente, ainda sem commit/deploy
+
+## 2026-07-11 — Contrato GPT ativo e preparação de produção
+
+Decisão:
+- tornar `gpt/openapi.json` o contrato OpenAPI 3.1 ativo e servi-lo com `PUBLIC_BASE_URL`;
+- manter o GPT legado apenas como referência;
+- preparar Render Node nativo com readiness e migration pré-deploy, sem migration/seed no startup;
+- habilitar RLS sem policies e revogar condicionalmente `anon`/`authenticated` nas tabelas Node;
+- usar futuramente usuário PostgreSQL específico, `DATABASE_URL` no runtime e `DIRECT_URL` em migrations, com secrets somente no Render.
+
+Status: preparado localmente; decisões e execução remotas pendentes
+
 ## 2026-07-11 — Dependências atuais com compatibilidade segura
 
 Decisão:

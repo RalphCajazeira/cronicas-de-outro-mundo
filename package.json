@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "npm run dev --prefix backend",
+    "start": "npm run start --prefix backend",
     "build": "npm run build --prefix backend",
     "lint": "npm run lint --prefix backend",
     "typecheck": "npm run typecheck --prefix backend",
@@ -11,6 +12,8 @@
     "test:integration": "npm run test:integration --prefix backend",
     "test:all": "npm run test:all --prefix backend",
     "prisma:validate": "npm run prisma:validate --prefix backend",
-    "prisma:generate": "npm run prisma:generate --prefix backend"
+    "prisma:generate": "npm run prisma:generate --prefix backend",
+    "prisma:migrate:deploy": "npm run prisma:migrate:deploy --prefix backend",
+    "prisma:seed": "npm run prisma:seed --prefix backend"
   }
 }
