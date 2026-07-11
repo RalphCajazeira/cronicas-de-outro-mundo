@@ -70,6 +70,8 @@ npm run test:all
 
 No backend, `npm run test:watch` observa apenas a suíte rápida e nunca prepara ou reseta banco. `npm test` e `test:unit` executam unitários e HTTP mockado. `test:integration` valida o destino, recria somente `game_gpt_test`, aplica `prisma migrate deploy`, executa o seed e roda a configuração de integração. `test:all` combina as duas camadas.
 
+O contrato ativo também possui testes de JSON/OpenAPI, `operationId`, limite de operações, correspondência com rotas Express, autenticação e idempotência. Integração cobre concorrência de chaves, rollback transacional, RLS e revogações condicionais.
+
 ### Banco exclusivo e proteções
 
 - `game_gpt_dev` é desenvolvimento; `game_gpt_test` é integração automatizada.

@@ -15,15 +15,17 @@ Projeto de RPG narrativo reiniciado como nova versão, com o sistema anterior ar
 
 ## Implementação atual
 
-- API somente de leitura com healthcheck e módulos de atores, personagens e conteúdo.
+- API GPT v1 com carga de estado, leitura e persistência mínima de atores, conteúdo, progressão e eventos.
 - Chave interna temporária `x-rpg-key` em `/api/v1`.
-- Schema inicial, migration offline e seed de desenvolvimento idempotente.
+- OpenAPI 3.1 ativo em `gpt/openapi.json` e `/openapi.json`; artefatos atuais do GPT separados do legado.
+- Idempotência transacional persistida no PostgreSQL, readiness segura e migration incremental de RLS/revogações.
+- Blueprint Render nativo Node, sem Docker e sem deploy automático nesta fase.
 
 ## Decisões pendentes
 
 - Autenticação pública, identidade e autorização por usuário.
 - Política de CORS, rate limit, auditoria e observabilidade antes de deploy.
-- Estratégia final de deploy e configuração de conexão Supabase.
+- Branch/plano/região finais no Render, criação do usuário Prisma no Supabase e execução remota controlada das migrations.
 
 ## Fases futuras
 
