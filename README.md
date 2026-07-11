@@ -17,7 +17,7 @@ instructions/   Instruções principais do GPT
 knowledge/      Arquivos para subir em Conhecimento
 docs/           Arquitetura e decisões
 supabase/       Migrations e código-fonte das Edge Functions
-schemas/        Contratos OpenAPI oficiais
+schemas/        Contrato OpenAPI oficial
 ```
 
 ## Fonte de verdade
@@ -35,27 +35,31 @@ Para estado narrativo dinâmico:
 3. arquivos de Knowledge;
 4. inferência narrativa.
 
-## OpenAPI
+## OpenAPI único
 
-Contrato principal:
+Existe apenas um contrato oficial para copiar e colar no editor do GPT:
 
 ```text
 schemas/openapi.json
 ```
 
-Módulo oficial de conteúdo dinâmico:
+Ele reúne todas as Actions, inclusive:
 
-```text
-schemas/openapi-content.json
-```
+- estado e recuperação;
+- mundo e viagem;
+- combate;
+- atores e memórias;
+- companheiros;
+- Codex;
+- conteúdo dinâmico.
 
-O módulo de conteúdo dinâmico expõe somente três operações:
+O conteúdo dinâmico continua exposto por apenas três operações:
 
 - `searchWorldContent`;
 - `upsertWorldContent`;
 - `manageCharacterContent`.
 
-Essas operações permitem consultar, criar e vincular magias, armas, armaduras, itens, materiais, habilidades, talentos, criaturas-base, locais, facções e outros conteúdos sem criar uma Action diferente para cada tipo.
+Essas operações permitem consultar, criar e vincular magias, armas, armaduras, itens, materiais, habilidades, talentos, criaturas-base, locais, facções e outros conteúdos sem criar uma Action separada para cada tipo.
 
 ## Fluxo obrigatório
 
