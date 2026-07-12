@@ -95,3 +95,19 @@ Impacto:
 - rollback usa deploy anterior e migration corretiva, nunca reset destrutivo.
 
 Status: preparado e validado localmente; serviço Render ainda não criado
+
+## 2026-07-12 — Consolidação do Knowledge ativo por domínio
+
+Decisão:
+- manter nove arquivos oficiais de Knowledge, organizados por narrativa, atores/conteúdo, limites, poderes, criaturas, mundo, missões, memória e fichas;
+- reutilizar princípios narrativos válidos do legado após revisão por seção, sem copiar contratos Supabase, Actions, tabelas ou campos obsoletos;
+- classificar cada regra como persistência estruturada, persistência genérica, regra narrativa ou sistema futuro;
+- fazer do backend e do OpenAPI atuais a autoridade para qualquer afirmação de capacidade;
+- proibir o envio de `legacy/supabase-gpt-v1/` ao GPT ativo.
+
+Impacto:
+- o corpus deixa de comprimir domínios distintos em três arquivos insuficientes;
+- combate, inventário, lojas, relações, memórias especializadas, Codex e viagens permanecem explicitamente adiados;
+- regras narrativas podem orientar coerência sem prometer persistência inexistente.
+
+Status: implementada
