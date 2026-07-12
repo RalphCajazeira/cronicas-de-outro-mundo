@@ -15,16 +15,17 @@ Projeto de RPG narrativo reiniciado como nova versão, com o sistema anterior ar
 
 ## Implementação atual
 
-- API GPT v1 com carga de estado, leitura e persistência mínima de atores, conteúdo, progressão e eventos.
+- API GPT v1 com criação transacional de novo jogo, carga de estado, leitura e persistência de atores, conteúdo, progressão e eventos.
 - Chave interna temporária `x-rpg-key` em `/api/v1`.
 - OpenAPI 3.1 ativo em `gpt/openapi.json` e `/openapi.json`; artefatos atuais do GPT separados do legado.
 - Idempotência transacional persistida no PostgreSQL, readiness segura e migration incremental de RLS/revogações.
+- Auditoria HTTP estruturada com `x-request-id`, resumos seguros de requisição/resposta e caminhos de validação, sem headers ou payloads sensíveis.
 - Blueprint Render de staging nativo Node, Free em `virginia`, branch `develop`, sem Docker, sem pre-deploy e sem deploy automático.
 
 ## Decisões pendentes
 
 - Autenticação pública, identidade e autorização por usuário.
-- Política de CORS, rate limit, auditoria e observabilidade antes de deploy.
+- Política de CORS, rate limit e retenção/exportação de logs para exposição além do GPT/admin.
 - Cadastro dos secrets e da CA no Render, preview do Blueprint publicado e primeiro deploy manual após o gate de migrations.
 
 ## Fases futuras

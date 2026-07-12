@@ -1,13 +1,13 @@
 import { createHash } from 'node:crypto';
 import {
-  ActorContentState, ActorStatus, ActorType, ContentStatus, ContentType, Prisma,
+  ActorContentState, ActorStatus, ActorType, CampaignStatus, ContentStatus, ContentType, Prisma,
 } from '../../generated/prisma/client.js';
 import { prisma } from '../../shared/database/prisma.js';
 import { ConflictError, NotFoundError } from '../../shared/errors/app-error.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import type {
   CreateEventInput, ListCampaignActorsInput, LoadGameInput, ManageActorContentInput,
-  PatchActorInput, UpsertActorInput, UpsertContentInput,
+  PatchActorInput, StartGameInput, UpsertActorInput, UpsertContentInput,
 } from './gpt.schemas.js';
 import type { ApiResult, GptRepository } from './gpt.types.js';
 
@@ -159,6 +159,25 @@ function actorUpdateData(input: UpsertActorInput | PatchActorInput): Prisma.Acto
   return data;
 }
 
+function actorCreateData(
+  campaignId: string,
+  input: UpsertActorInput | StartGameInput['protagonist'],
+): Prisma.ActorUncheckedCreateInput {
+  const data: Prisma.ActorUncheckedCreateInput = {
+    campaignId, code: input.code, name: input.name, actorType: input.actorType.toUpperCase() as ActorType,
+    level: input.level ?? 1, xp: input.xp ?? 0, gold: input.gold ?? 0, health: input.health ?? 1,
+    maxHealth: input.maxHealth ?? 1, mana: input.mana ?? 0, maxMana: input.maxMana ?? 0,
+    attributes: inputJson(input.attributes ?? {}), resistances: inputJson(input.resistances ?? {}),
+    affinities: inputJson(input.affinities ?? {}), metadata: inputJson(input.metadata ?? {}),
+    status: (input.status ?? 'active').toUpperCase() as ActorStatus,
+  };
+  if (input.species !== undefined) data.species = input.species;
+  if (input.className !== undefined) data.className = input.className;
+  if (input.role !== undefined) data.role = input.role;
+  if (input.description !== undefined) data.description = input.description;
+  return data;
+}
+
 function linkUpdateData(input: ManageActorContentInput): Prisma.ActorContentUpdateInput {
   const changes = input.changes;
   const data: Prisma.ActorContentUpdateInput = {};
@@ -173,24 +192,74 @@ function linkUpdateData(input: ManageActorContentInput): Prisma.ActorContentUpda
   return data;
 }
 
+async function loadGameState(client: DbClient, input: LoadGameInput) {
+  const { player, world, campaign } = await resolveScope(client, input);
+  const [actors, links, events] = await Promise.all([
+    client.actor.findMany({ where: { campaignId: campaign.id }, select: actorSelect, orderBy: [{ role: 'asc' }, { name: 'asc' }], take: 50 }),
+    client.actorContent.findMany({ where: { actor: { campaignId: campaign.id } }, include: { ...contentInclude, actor: { select: { code: true } } }, orderBy: { updatedAt: 'desc' }, take: 100 }),
+    client.gameEvent.findMany({ where: { campaignId: campaign.id }, include: { actor: { select: { code: true } } }, orderBy: { createdAt: 'desc' }, take: 20 }),
+  ]);
+  const protagonist = actors.find((actor) => actor.code === player.slug && actor.actorType === ActorType.CHARACTER) ?? null;
+  return {
+    player: { ref: player.slug, displayName: player.displayName },
+    world: { ref: world.code, name: world.name, description: world.description, metadata: world.metadata },
+    campaign: { ref: campaign.code, name: campaign.name, status: normalizeEnum(campaign.status), currentTime: campaign.currentTime, metadata: campaign.metadata },
+    protagonist: protagonist === null ? null : actorDto(protagonist),
+    mainActors: actors.filter((actor) => actor.id !== protagonist?.id).map(actorDto),
+    linkedContent: links.map((link) => ({ actorRef: link.actor.code, ...actorContentDto(link) })),
+    recentEvents: events.map((event) => ({ actorRef: event.actor?.code ?? null, eventType: event.eventType, title: event.title, payload: event.payload, createdAt: event.createdAt.toISOString() })),
+  };
+}
+
 export const prismaGptRepository: GptRepository = {
   async loadGame(input: LoadGameInput) {
-    const { player, world, campaign } = await resolveScope(prisma, input);
-    const [actors, links, events] = await Promise.all([
-      prisma.actor.findMany({ where: { campaignId: campaign.id }, select: actorSelect, orderBy: [{ role: 'asc' }, { name: 'asc' }], take: 50 }),
-      prisma.actorContent.findMany({ where: { actor: { campaignId: campaign.id } }, include: { ...contentInclude, actor: { select: { code: true } } }, orderBy: { updatedAt: 'desc' }, take: 100 }),
-      prisma.gameEvent.findMany({ where: { campaignId: campaign.id }, include: { actor: { select: { code: true } } }, orderBy: { createdAt: 'desc' }, take: 20 }),
-    ]);
-    const protagonist = actors.find((actor) => actor.code === player.slug && actor.actorType === ActorType.CHARACTER) ?? null;
-    return {
-      player: { ref: player.slug, displayName: player.displayName },
-      world: { ref: world.code, name: world.name, description: world.description, metadata: world.metadata },
-      campaign: { ref: campaign.code, name: campaign.name, status: normalizeEnum(campaign.status), currentTime: campaign.currentTime, metadata: campaign.metadata },
-      protagonist: protagonist === null ? null : actorDto(protagonist),
-      mainActors: actors.filter((actor) => actor.id !== protagonist?.id).map(actorDto),
-      linkedContent: links.map((link) => ({ actorRef: link.actor.code, ...actorContentDto(link) })),
-      recentEvents: events.map((event) => ({ actorRef: event.actor?.code ?? null, eventType: event.eventType, title: event.title, payload: event.payload, createdAt: event.createdAt.toISOString() })),
-    };
+    return loadGameState(prisma, input);
+  },
+
+  async startGame(input: StartGameInput) {
+    return executeIdempotent(input.idempotencyKey, 'game.start', input, async (transaction) => {
+      const player = await transaction.player.upsert({
+        where: { slug: input.playerRef },
+        update: { displayName: input.playerDisplayName },
+        create: { slug: input.playerRef, displayName: input.playerDisplayName },
+      });
+      const world = await transaction.world.upsert({
+        where: { playerId_code: { playerId: player.id, code: input.worldRef } },
+        update: {
+          name: input.worldName, metadata: inputJson(input.worldMetadata),
+          ...(input.worldDescription === undefined ? {} : { description: input.worldDescription }),
+        },
+        create: {
+          playerId: player.id, code: input.worldRef, name: input.worldName,
+          metadata: inputJson(input.worldMetadata),
+          ...(input.worldDescription === undefined ? {} : { description: input.worldDescription }),
+        },
+      });
+      const existingCampaign = await transaction.campaign.findUnique({
+        where: { worldId_code: { worldId: world.id, code: input.campaignRef } },
+      });
+      if (existingCampaign !== null) {
+        const [actors, definitions, events] = await Promise.all([
+          transaction.actor.count({ where: { campaignId: existingCampaign.id } }),
+          transaction.contentDefinition.count({ where: { campaignId: existingCampaign.id } }),
+          transaction.gameEvent.count({ where: { campaignId: existingCampaign.id } }),
+        ]);
+        if (actors + definitions + events > 0) throw new ConflictError('Campaign already contains state');
+      }
+      const campaign = existingCampaign === null
+        ? await transaction.campaign.create({
+          data: {
+            worldId: world.id, code: input.campaignRef, name: input.campaignName,
+            status: CampaignStatus.ACTIVE, metadata: inputJson(input.campaignMetadata),
+          },
+        })
+        : await transaction.campaign.update({
+          where: { id: existingCampaign.id },
+          data: { name: input.campaignName, status: CampaignStatus.ACTIVE, currentTime: Prisma.DbNull, metadata: inputJson(input.campaignMetadata) },
+        });
+      await transaction.actor.create({ data: actorCreateData(campaign.id, input.protagonist) });
+      return loadGameState(transaction, { playerRef: input.playerRef, worldRef: input.worldRef, campaignRef: input.campaignRef });
+    });
   },
 
   async listCampaignActors(input: ListCampaignActorsInput) {
@@ -202,22 +271,10 @@ export const prismaGptRepository: GptRepository = {
   async upsertActor(input: UpsertActorInput) {
     return executeIdempotent(input.idempotencyKey, 'actors.upsert', input, async (transaction) => {
       const { campaign } = await resolveScope(transaction, input);
-      const createData: Prisma.ActorUncheckedCreateInput = {
-        campaignId: campaign.id, code: input.code, name: input.name, actorType: input.actorType.toUpperCase() as ActorType,
-        level: input.level ?? 1, xp: input.xp ?? 0, gold: input.gold ?? 0, health: input.health ?? 1,
-        maxHealth: input.maxHealth ?? 1, mana: input.mana ?? 0, maxMana: input.maxMana ?? 0,
-        attributes: inputJson(input.attributes ?? {}), resistances: inputJson(input.resistances ?? {}),
-        affinities: inputJson(input.affinities ?? {}), metadata: inputJson(input.metadata ?? {}),
-        status: (input.status ?? 'active').toUpperCase() as ActorStatus,
-      };
-      if (input.species !== undefined) createData.species = input.species;
-      if (input.className !== undefined) createData.className = input.className;
-      if (input.role !== undefined) createData.role = input.role;
-      if (input.description !== undefined) createData.description = input.description;
       const actor = await transaction.actor.upsert({
         where: { campaignId_code: { campaignId: campaign.id, code: input.code } },
         update: actorUpdateData(input),
-        create: createData,
+        create: actorCreateData(campaign.id, input),
         select: actorSelect,
       });
       return actorDto(actor);

@@ -29,7 +29,7 @@
         "operationId": "getOpenApiContract",
         "summary": "Obter o contrato OpenAPI ativo",
         "security": [],
-        "responses": { "200": { "description": "Contrato OpenAPI 3.1", "content": { "application/json": { "schema": { "type": "object" } } } }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "responses": { "200": { "description": "Contrato OpenAPI 3.1", "content": { "application/json": { "schema": { "type": "object", "properties": {} } } } }, "500": { "$ref": "#/components/responses/InternalError" } }
       }
     },
     "/api/v1/game/load": {
@@ -40,11 +40,20 @@
         "responses": { "200": { "description": "Estado carregado", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GameState" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
       }
     },
+    "/api/v1/game/start": {
+      "post": {
+        "operationId": "startGame",
+        "summary": "Criar Player, World, Campaign e protagonista de um novo jogo",
+        "description": "Use somente após loadGame confirmar ausência do escopo ou do protagonista. A operação é idempotente e recusa sobrescrever uma campanha com estado.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StartGameInput" } } } },
+        "responses": { "200": { "description": "Novo jogo criado e carregado", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GameState" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
+      }
+    },
     "/api/v1/campaigns/{campaignRef}/actors": {
       "get": {
         "operationId": "listCampaignActors",
         "summary": "Listar atores da campanha",
-        "parameters": [{ "$ref": "#/components/parameters/CampaignRef" }, { "$ref": "#/components/parameters/PlayerRefQuery" }, { "$ref": "#/components/parameters/WorldRefQuery" }],
+        "parameters": [{ "name": "campaignRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }, { "name": "playerRef", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/Code", "default": "ralph" } }, { "name": "worldRef", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/Code", "default": "elarion" } }],
         "responses": { "200": { "description": "Atores normalizados", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Actor" } } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
       }
     },
@@ -52,7 +61,7 @@
       "get": {
         "operationId": "getCharacter",
         "summary": "Consultar personagem preservado da API inicial",
-        "parameters": [{ "$ref": "#/components/parameters/CharacterRef" }],
+        "parameters": [{ "name": "characterRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
         "responses": { "200": { "description": "Personagem", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Actor" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
       }
     },
@@ -60,7 +69,7 @@
       "get": {
         "operationId": "listCharacterContent",
         "summary": "Listar conteúdo do personagem preservado da API inicial",
-        "parameters": [{ "$ref": "#/components/parameters/CharacterRef" }],
+        "parameters": [{ "name": "characterRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
         "responses": { "200": { "description": "Conteúdo vinculado", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ActorContent" } } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
       }
     },
@@ -68,13 +77,13 @@
       "get": {
         "operationId": "getActor",
         "summary": "Consultar ator preservado da API inicial",
-        "parameters": [{ "$ref": "#/components/parameters/ActorRef" }],
+        "parameters": [{ "name": "actorRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
         "responses": { "200": { "description": "Ator", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Actor" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
       },
       "patch": {
         "operationId": "updateActor",
         "summary": "Atualizar somente campos aprovados do ator",
-        "parameters": [{ "$ref": "#/components/parameters/ActorRef" }],
+        "parameters": [{ "name": "actorRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActorPatchInput" } } } },
         "responses": { "200": { "description": "Ator atualizado", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Actor" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
       }
@@ -92,7 +101,7 @@
         "operationId": "manageActorContent",
         "summary": "Consultar, vincular ou evoluir conteúdo do ator",
         "description": "get/list são leituras. learn, grant, update, equip, unequip e remove exigem idempotencyKey.",
-        "parameters": [{ "$ref": "#/components/parameters/ActorRef" }],
+        "parameters": [{ "name": "actorRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActorContentManageInput" } } } },
         "responses": { "200": { "description": "Resultado normalizado da operação", "content": { "application/json": { "schema": { "oneOf": [{ "$ref": "#/components/schemas/ActorContent" }, { "type": "array", "items": { "$ref": "#/components/schemas/ActorContent" } }, { "$ref": "#/components/schemas/RemovalResult" }] } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
       }
@@ -101,7 +110,7 @@
       "get": {
         "operationId": "getContent",
         "summary": "Consultar definição de conteúdo preservada da API inicial",
-        "parameters": [{ "$ref": "#/components/parameters/ContentRef" }],
+        "parameters": [{ "name": "contentRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
         "responses": { "200": { "description": "Definição", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Content" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
       }
     },
@@ -142,11 +151,13 @@
     "schemas": {
       "Code": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$" },
       "IdempotencyKey": { "type": "string", "minLength": 8, "maxLength": 200, "description": "Chave estável reutilizada ao repetir a mesma escrita após falha." },
-      "JsonObject": { "type": "object", "additionalProperties": true },
+      "JsonObject": { "type": "object", "additionalProperties": true, "properties": {} },
       "ScopeInput": { "type": "object", "additionalProperties": false, "properties": { "playerRef": { "$ref": "#/components/schemas/Code", "default": "ralph" }, "worldRef": { "$ref": "#/components/schemas/Code", "default": "elarion" }, "campaignRef": { "$ref": "#/components/schemas/Code", "default": "main-campaign" } } },
+      "InitialActorInput": { "type": "object", "additionalProperties": false, "required": ["code", "name", "actorType"], "properties": { "code": { "$ref": "#/components/schemas/Code" }, "name": { "type": "string", "minLength": 1 }, "actorType": { "const": "character" }, "species": { "type": ["string", "null"] }, "className": { "type": ["string", "null"] }, "role": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] }, "level": { "type": "integer", "minimum": 1 }, "xp": { "type": "integer", "minimum": 0 }, "gold": { "type": "integer", "minimum": 0 }, "health": { "type": "integer", "minimum": 0 }, "maxHealth": { "type": "integer", "minimum": 1 }, "mana": { "type": "integer", "minimum": 0 }, "maxMana": { "type": "integer", "minimum": 0 }, "attributes": { "$ref": "#/components/schemas/JsonObject" }, "resistances": { "$ref": "#/components/schemas/JsonObject" }, "affinities": { "$ref": "#/components/schemas/JsonObject" }, "metadata": { "$ref": "#/components/schemas/JsonObject" }, "status": { "type": "string", "enum": ["active", "inactive", "defeated", "dead", "archived"] } } },
+      "StartGameInput": { "type": "object", "additionalProperties": false, "required": ["idempotencyKey", "playerDisplayName", "worldName", "campaignName", "protagonist"], "properties": { "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" }, "playerRef": { "$ref": "#/components/schemas/Code", "default": "ralph" }, "playerDisplayName": { "type": "string", "minLength": 1 }, "worldRef": { "$ref": "#/components/schemas/Code", "default": "elarion" }, "worldName": { "type": "string", "minLength": 1 }, "worldDescription": { "type": ["string", "null"] }, "worldMetadata": { "$ref": "#/components/schemas/JsonObject" }, "campaignRef": { "$ref": "#/components/schemas/Code", "default": "main-campaign" }, "campaignName": { "type": "string", "minLength": 1 }, "campaignMetadata": { "$ref": "#/components/schemas/JsonObject" }, "protagonist": { "$ref": "#/components/schemas/InitialActorInput" } } },
       "Health": { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "ok" } } },
       "Readiness": { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "type": "string", "enum": ["ready", "not_ready"] } } },
-      "Error": { "type": "object", "additionalProperties": false, "required": ["error"], "properties": { "error": { "type": "object", "additionalProperties": false, "required": ["code", "message"], "properties": { "code": { "type": "string" }, "message": { "type": "string" } } } } },
+      "Error": { "type": "object", "additionalProperties": false, "required": ["error"], "properties": { "error": { "type": "object", "additionalProperties": false, "required": ["code", "message"], "properties": { "code": { "type": "string" }, "message": { "type": "string" }, "retryable": { "type": "boolean", "description": "Somente INVALID_INPUT pode orientar uma nova tentativa corrigida." }, "retryInstruction": { "type": "string" }, "issues": { "type": "array", "maxItems": 20, "items": { "type": "object", "additionalProperties": false, "required": ["path", "code", "message"], "properties": { "path": { "type": "string" }, "code": { "type": "string" }, "message": { "type": "string" } } } } } } } },
       "Actor": { "type": "object", "additionalProperties": false, "required": ["code", "name", "actorType", "level", "xp", "gold", "health", "maxHealth", "mana", "maxMana", "attributes", "resistances", "affinities", "status"], "properties": { "code": { "$ref": "#/components/schemas/Code" }, "name": { "type": "string" }, "actorType": { "type": "string", "enum": ["character", "npc", "creature", "companion", "spirit"] }, "species": { "type": ["string", "null"] }, "className": { "type": ["string", "null"] }, "role": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] }, "level": { "type": "integer", "minimum": 1 }, "xp": { "type": "integer", "minimum": 0 }, "gold": { "type": "integer", "minimum": 0 }, "health": { "type": "integer", "minimum": 0 }, "maxHealth": { "type": "integer", "minimum": 1 }, "mana": { "type": "integer", "minimum": 0 }, "maxMana": { "type": "integer", "minimum": 0 }, "attributes": { "$ref": "#/components/schemas/JsonObject" }, "resistances": { "$ref": "#/components/schemas/JsonObject" }, "affinities": { "$ref": "#/components/schemas/JsonObject" }, "metadata": { "$ref": "#/components/schemas/JsonObject" }, "status": { "type": "string", "enum": ["active", "inactive", "defeated", "dead", "archived"] } } },
       "ActorPatchInput": { "type": "object", "additionalProperties": false, "required": ["idempotencyKey"], "properties": { "playerRef": { "$ref": "#/components/schemas/Code" }, "worldRef": { "$ref": "#/components/schemas/Code" }, "campaignRef": { "$ref": "#/components/schemas/Code" }, "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" }, "role": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] }, "level": { "type": "integer", "minimum": 1 }, "xp": { "type": "integer", "minimum": 0 }, "gold": { "type": "integer", "minimum": 0 }, "health": { "type": "integer", "minimum": 0 }, "maxHealth": { "type": "integer", "minimum": 1 }, "mana": { "type": "integer", "minimum": 0 }, "maxMana": { "type": "integer", "minimum": 0 }, "attributes": { "$ref": "#/components/schemas/JsonObject" }, "resistances": { "$ref": "#/components/schemas/JsonObject" }, "affinities": { "$ref": "#/components/schemas/JsonObject" }, "metadata": { "$ref": "#/components/schemas/JsonObject" }, "status": { "type": "string", "enum": ["active", "inactive", "defeated", "dead", "archived"] } } },
       "ActorUpsertInput": { "type": "object", "additionalProperties": false, "required": ["code", "name", "actorType", "idempotencyKey"], "properties": { "playerRef": { "$ref": "#/components/schemas/Code" }, "worldRef": { "$ref": "#/components/schemas/Code" }, "campaignRef": { "$ref": "#/components/schemas/Code" }, "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" }, "code": { "$ref": "#/components/schemas/Code" }, "name": { "type": "string", "minLength": 1 }, "actorType": { "type": "string", "enum": ["character", "npc", "creature", "companion", "spirit"] }, "species": { "type": ["string", "null"] }, "className": { "type": ["string", "null"] }, "role": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] }, "level": { "type": "integer", "minimum": 1 }, "xp": { "type": "integer", "minimum": 0 }, "gold": { "type": "integer", "minimum": 0 }, "health": { "type": "integer", "minimum": 0 }, "maxHealth": { "type": "integer", "minimum": 1 }, "mana": { "type": "integer", "minimum": 0 }, "maxMana": { "type": "integer", "minimum": 0 }, "attributes": { "$ref": "#/components/schemas/JsonObject" }, "resistances": { "$ref": "#/components/schemas/JsonObject" }, "affinities": { "$ref": "#/components/schemas/JsonObject" }, "metadata": { "$ref": "#/components/schemas/JsonObject" }, "status": { "type": "string", "enum": ["active", "inactive", "defeated", "dead", "archived"] } } },
@@ -158,7 +169,10 @@
       "RemovalResult": { "type": "object", "additionalProperties": false, "required": ["actorRef", "contentRef", "removed"], "properties": { "actorRef": { "$ref": "#/components/schemas/Code" }, "contentRef": { "$ref": "#/components/schemas/Code" }, "removed": { "const": true } } },
       "EventInput": { "type": "object", "additionalProperties": false, "required": ["campaignRef", "eventType", "title", "payload", "idempotencyKey"], "properties": { "playerRef": { "$ref": "#/components/schemas/Code" }, "worldRef": { "$ref": "#/components/schemas/Code" }, "campaignRef": { "$ref": "#/components/schemas/Code" }, "actorRef": { "$ref": "#/components/schemas/Code" }, "eventType": { "$ref": "#/components/schemas/Code" }, "title": { "type": "string", "minLength": 1 }, "payload": { "$ref": "#/components/schemas/JsonObject" }, "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" } } },
       "Event": { "type": "object", "additionalProperties": false, "required": ["campaignRef", "actorRef", "eventType", "title", "payload", "createdAt"], "properties": { "campaignRef": { "$ref": "#/components/schemas/Code" }, "actorRef": { "oneOf": [{ "$ref": "#/components/schemas/Code" }, { "type": "null" }] }, "eventType": { "$ref": "#/components/schemas/Code" }, "title": { "type": "string" }, "payload": { "$ref": "#/components/schemas/JsonObject" }, "createdAt": { "type": "string", "format": "date-time" } } },
-      "GameState": { "type": "object", "additionalProperties": false, "required": ["player", "world", "campaign", "protagonist", "mainActors", "linkedContent", "recentEvents"], "properties": { "player": { "type": "object" }, "world": { "type": "object" }, "campaign": { "type": "object" }, "protagonist": { "oneOf": [{ "$ref": "#/components/schemas/Actor" }, { "type": "null" }] }, "mainActors": { "type": "array", "items": { "$ref": "#/components/schemas/Actor" } }, "linkedContent": { "type": "array", "items": { "type": "object" } }, "recentEvents": { "type": "array", "items": { "$ref": "#/components/schemas/Event" } } } }
+      "PlayerState": { "type": "object", "additionalProperties": false, "required": ["ref", "displayName"], "properties": { "ref": { "$ref": "#/components/schemas/Code" }, "displayName": { "type": "string" } } },
+      "WorldState": { "type": "object", "additionalProperties": false, "required": ["ref", "name", "description", "metadata"], "properties": { "ref": { "$ref": "#/components/schemas/Code" }, "name": { "type": "string" }, "description": { "type": ["string", "null"] }, "metadata": { "$ref": "#/components/schemas/JsonObject" } } },
+      "CampaignState": { "type": "object", "additionalProperties": false, "required": ["ref", "name", "status", "currentTime", "metadata"], "properties": { "ref": { "$ref": "#/components/schemas/Code" }, "name": { "type": "string" }, "status": { "type": "string", "enum": ["draft", "active", "paused", "completed", "archived"] }, "currentTime": { "oneOf": [{ "$ref": "#/components/schemas/JsonObject" }, { "type": "null" }] }, "metadata": { "$ref": "#/components/schemas/JsonObject" } } },
+      "GameState": { "type": "object", "additionalProperties": false, "required": ["player", "world", "campaign", "protagonist", "mainActors", "linkedContent", "recentEvents"], "properties": { "player": { "$ref": "#/components/schemas/PlayerState" }, "world": { "$ref": "#/components/schemas/WorldState" }, "campaign": { "$ref": "#/components/schemas/CampaignState" }, "protagonist": { "oneOf": [{ "$ref": "#/components/schemas/Actor" }, { "type": "null" }] }, "mainActors": { "type": "array", "items": { "$ref": "#/components/schemas/Actor" } }, "linkedContent": { "type": "array", "items": { "type": "object", "properties": {} } }, "recentEvents": { "type": "array", "items": { "$ref": "#/components/schemas/Event" } } } }
     }
   }
 }

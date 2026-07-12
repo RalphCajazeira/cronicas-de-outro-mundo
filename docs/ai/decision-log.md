@@ -111,3 +111,33 @@ Impacto:
 - regras narrativas podem orientar coerência sem prometer persistência inexistente.
 
 Status: implementada
+
+## 2026-07-12 — Auditoria sanitizada da comunicação GPT/backend
+
+Decisão:
+- emitir um evento JSON `http_request_completed` por requisição e devolver `x-request-id` para correlação;
+- registrar método, caminho, status, duração e apenas resumos allowlisted da entrada e da resposta;
+- registrar caminhos/códigos de validação e fingerprint reduzida da chave idempotente para diagnosticar escritas GPT;
+- nunca registrar headers, API key, chave idempotente original, notas narrativas, valores livres de metadata/payload, stack traces ou connection strings;
+- devolver em `INVALID_INPUT` somente caminhos e orientações seguras para uma correção automática limitada a uma tentativa;
+- não orientar retry automático para `UNAUTHORIZED`, `NOT_FOUND`, `CONFLICT` ou `INTERNAL_ERROR`;
+- usar o log efêmero do Render somente para diagnóstico, preservando o PostgreSQL como fonte de verdade.
+
+Impacto:
+- falhas de Action podem ser analisadas diretamente por operação, status, caminho de validação e `requestId`;
+- a visibilidade aumenta sem transformar logs em cópia do estado narrativo ou novo repositório de dados sensíveis;
+- retenção/exportação centralizada permanece uma decisão futura.
+
+Status: implementada localmente; deploy pendente
+
+## 2026-07-12 — Novo jogo criado integralmente pelo GPT
+
+Decisão:
+- adicionar `startGame` para criar Player, World, Campaign e protagonista em uma transação idempotente;
+- permitir limpeza integral dos dados de aplicação no staging, preservando schema e migrations;
+- interpretar `NOT_FOUND` ou `protagonist: null` em `loadGame` como início de configuração;
+- exigir protagonista `character` com `code` igual a `playerRef` e recarregar o estado antes da primeira cena;
+- recusar sobrescrita de campanha que já contenha atores, conteúdo ou eventos;
+- não expor reset destrutivo como Action do GPT.
+
+Status: preparado localmente; limpeza e validação online pendentes
