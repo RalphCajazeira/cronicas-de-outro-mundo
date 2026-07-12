@@ -42,6 +42,18 @@ O backend valida entrada, chave interna, regra de domínio e persistência. O GP
 
 `GET /health` é público. `/api/v1` exige `x-rpg-key`, comparada sem logging. Essa é autenticação interna temporária entre GPT/admin e backend, não autenticação pública definitiva.
 
+## Auditoria HTTP segura
+
+Toda requisição recebe um `x-request-id` gerado pelo backend e produz ao final um evento JSON `http_request_completed`. O evento registra timestamp, origem pública ou GPT, método, caminho sem query string, status, duração e resumos allowlisted da entrada e da resposta. Falhas Zod acrescentam somente código, caminho e mensagem customizada conhecida; erros internos nunca incluem stack trace ou mensagem bruta.
+
+Para escritas GPT, o resumo preserva os dados operacionais necessários ao diagnóstico — operação, referências, tipo de conteúdo, campos alterados, valores mecânicos escalares e comprimento/fingerprint SHA-256 reduzida da chave idempotente. Não são registrados `x-rpg-key`, headers, cookies, chave idempotente original, descrições, notas narrativas, valores de metadata/payload, connection strings ou corpos completos.
+
+No Render, investigar primeiro pelo texto `http_request_completed`, depois restringir por `path`, `statusCode`, `requestId` ou fingerprint. A retenção do plano Free é operacionalmente limitada; os logs são diagnóstico temporário, não fonte de verdade nem armazenamento narrativo.
+
+Respostas `400 INVALID_INPUT` incluem `retryable`, uma instrução curta e uma lista `issues` com `path`, `code` e mensagem de correção sem ecoar o valor rejeitado. O GPT corrige somente os campos indicados e tenta uma vez; autenticação, ausência, conflito e erro interno não autorizam retry automático. Esse retorno melhora a recuperação de payloads incompletos sem transformar falhas em loops ou escritas duplicadas.
+
+`startGame` cria Player, World, Campaign e protagonista em uma única transação idempotente e recusa campanha que já contenha estado. Assim o staging pode ser integralmente limpo, preservando apenas schema/migrations; `NOT_FOUND` em `loadGame` inicia a configuração e o GPT persiste todo o escopo inicial após confirmação do jogador. Reset de jogo permanece operação administrativa manual, nunca uma Action destrutiva exposta ao GPT.
+
 ## Banco hospedado e deploy preparado
 
 O fluxo futuro é GitHub → Render (Node nativo) → Supabase PostgreSQL. Runtime usa `DATABASE_URL`; migrations usam `DIRECT_URL`. Em Supabase deve existir usuário específico para Prisma, com senha forte, e Supavisor Session mode pode ser usado no runtime quando adequado. Secrets pertencem somente ao Render.
@@ -77,7 +89,7 @@ A trava de custos é absoluta: não selecionar instância paga, upgrade, disco p
 
 ## Pendente antes de deploy
 
-Cadastrar secrets e o secret file no Render, executar o gate manual a partir do commit aprovado, validar o preview do Blueprint publicado e realizar o primeiro deploy controlado. Para futura exposição pública além do GPT/admin, definir autenticação pública, autorização, CORS explícito, rate limit, auditoria, retenção de logs e observabilidade. Não usar CORS `*`. Nenhuma migration ou seed roda no startup.
+Cadastrar secrets e o secret file no Render, executar o gate manual a partir do commit aprovado, validar o preview do Blueprint publicado e realizar o primeiro deploy controlado. Para futura exposição pública além do GPT/admin, definir autenticação pública, autorização, CORS explícito, rate limit e retenção/exportação de logs. Não usar CORS `*`. Nenhuma migration ou seed roda no startup.
 
 ## Fases futuras
 

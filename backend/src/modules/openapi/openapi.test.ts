@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { ACTIVE_API_ROUTES, getOfficialContract } from './openapi.routes.js';
 
-interface Operation { operationId?: string; security?: unknown; requestBody?: { content?: { 'application/json'?: { schema?: Schema } } }; description?: string; responses?: Record<string, unknown> }
+interface Operation { operationId?: string; security?: unknown; parameters?: Schema[]; requestBody?: { content?: { 'application/json'?: { schema?: Schema } } }; description?: string; responses?: Record<string, unknown> }
 interface Schema {
   $ref?: string;
   required?: string[];
   properties?: Record<string, Schema>;
+  items?: Schema;
   allOf?: Schema[];
   additionalProperties?: boolean;
   enum?: unknown[];
@@ -48,12 +49,12 @@ function collectEnums(value: unknown, result: unknown[][] = []): unknown[][] {
 }
 
 describe('official OpenAPI contract', () => {
-  it('is valid JSON loaded as OpenAPI 3.1 with exactly 14 unique operationIds', () => {
+  it('is valid JSON loaded as OpenAPI 3.1 with exactly 15 unique operationIds', () => {
     const ids = operations().map(({ operation }) => operation.operationId);
     expect(contract.openapi).toBe('3.1.0');
     expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(14);
+    expect(ids).toHaveLength(15);
   });
 
   it('matches every registered Express route exactly', () => {
@@ -72,7 +73,7 @@ describe('official OpenAPI contract', () => {
     expect(contract.servers.every(({ url }) => !/localhost|127\.0\.0\.1/i.test(url))).toBe(true);
   });
 
-  it.each(['upsertActor', 'updateActor', 'upsertContent', 'createGameEvent'])('%s requires idempotencyKey', (operationId) => {
+  it.each(['startGame', 'upsertActor', 'updateActor', 'upsertContent', 'createGameEvent'])('%s requires idempotencyKey', (operationId) => {
     const operation = operations().find((item) => item.operation.operationId === operationId)?.operation;
     const schema = resolveSchema(operation?.requestBody?.content?.['application/json']?.schema);
     const required = new Set([...(schema.required ?? []), ...(schema.allOf ?? []).flatMap((item) => resolveSchema(item).required ?? [])]);
@@ -93,6 +94,33 @@ describe('official OpenAPI contract', () => {
     for (const { path, operation } of operations().filter(({ path }) => path.startsWith('/api/v1/'))) {
       expect(Object.keys(operation.responses ?? {}), path).toEqual(expect.arrayContaining(['400', '401', '404', '409', '500']));
     }
+  });
+
+  it('documents retry guidance and field issues for invalid input only', () => {
+    const errorEnvelope = contract.components.schemas.Error;
+    expect(errorEnvelope).toBeDefined();
+    const error = errorEnvelope?.properties?.error;
+    expect(error?.properties).toMatchObject({
+      retryable: { type: 'boolean' },
+      retryInstruction: { type: 'string' },
+      issues: { type: 'array' },
+    });
+    expect(error?.properties?.issues?.items?.required).toEqual(['path', 'code', 'message']);
+  });
+
+  it('uses GPT Action-compatible inline parameters and explicit object properties', () => {
+    expect(operations().flatMap(({ operation }) => operation.parameters ?? []).every((parameter) => parameter.$ref === undefined)).toBe(true);
+    const objectSchemasWithoutProperties: string[] = [];
+    const visit = (value: unknown, path = '$'): void => {
+      if (Array.isArray(value)) value.forEach((item, index) => visit(item, `${path}[${index}]`));
+      else if (value !== null && typeof value === 'object') {
+        const record = value as Record<string, unknown>;
+        if (record.type === 'object' && !('properties' in record)) objectSchemasWithoutProperties.push(path);
+        Object.entries(record).forEach(([key, item]) => visit(item, `${path}.${key}`));
+      }
+    };
+    visit(contract);
+    expect(objectSchemasWithoutProperties).toEqual([]);
   });
 
   it('uses closed request objects and lowercase public enums', () => {

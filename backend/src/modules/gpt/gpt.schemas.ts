@@ -44,6 +44,33 @@ const actorChangesFields = {
   status: actorStatusSchema.optional(),
 };
 
+const initialProtagonistSchema = z.strictObject({
+  code: codeSchema,
+  name: z.string().trim().min(1).max(200),
+  actorType: z.literal('character'),
+  species: z.string().trim().min(1).max(100).nullable().optional(),
+  className: z.string().trim().min(1).max(100).nullable().optional(),
+  ...actorChangesFields,
+});
+
+export const startGameSchema = z.strictObject({
+  idempotencyKey: idempotencyKeySchema,
+  playerRef: codeSchema.default('ralph'),
+  playerDisplayName: z.string().trim().min(1).max(200),
+  worldRef: codeSchema.default('elarion'),
+  worldName: z.string().trim().min(1).max(200),
+  worldDescription: z.string().trim().min(1).max(5_000).nullable().optional(),
+  worldMetadata: jsonObjectSchema.default({}),
+  campaignRef: codeSchema.default('main-campaign'),
+  campaignName: z.string().trim().min(1).max(200),
+  campaignMetadata: jsonObjectSchema.default({}),
+  protagonist: initialProtagonistSchema,
+}).superRefine((value, context) => {
+  if (value.protagonist.code !== value.playerRef) {
+    context.addIssue({ code: 'custom', path: ['protagonist', 'code'], message: 'Must match playerRef' });
+  }
+});
+
 export const upsertActorSchema = z.strictObject({
   ...scopeFields,
   idempotencyKey: idempotencyKeySchema,
@@ -120,6 +147,7 @@ export const createEventSchema = z.strictObject({
 });
 
 export type LoadGameInput = z.infer<typeof loadGameSchema>;
+export type StartGameInput = z.infer<typeof startGameSchema>;
 export type ListCampaignActorsInput = z.infer<typeof listCampaignActorsSchema>;
 export type UpsertActorInput = z.infer<typeof upsertActorSchema>;
 export type PatchActorInput = z.infer<typeof patchActorSchema>;

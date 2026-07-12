@@ -218,6 +218,39 @@ describe('GPT v1 persistence with real transactions', () => {
     expect(JSON.stringify(response.body)).not.toMatch(/"id"|campaignId|worldId|actorId/);
   });
 
+  it('starts a complete new scope idempotently and refuses incompatible reuse', async () => {
+    const body = {
+      idempotencyKey: 'integration-start-game-001', playerRef: 'new-player', playerDisplayName: 'Novo Jogador',
+      worldRef: 'new-world', worldName: 'Novo Mundo', campaignRef: 'new-campaign', campaignName: 'Nova Campanha',
+      protagonist: { code: 'new-player', name: 'Novo Herói', actorType: 'character', className: 'Explorador', health: 18, maxHealth: 18, mana: 6, maxMana: 6, attributes: { vitality: 4 } },
+    };
+    const first = await post('/api/v1/game/start', body);
+    const retry = await post('/api/v1/game/start', body);
+    expect(first.status).toBe(200);
+    expect(retry.body).toEqual(first.body);
+    expect(first.body).toMatchObject({
+      player: { ref: 'new-player' }, world: { ref: 'new-world' }, campaign: { ref: 'new-campaign', status: 'active' },
+      protagonist: { code: 'new-player', actorType: 'character', health: 18 }, mainActors: [], linkedContent: [], recentEvents: [],
+    });
+    await expect(prisma.player.count({ where: { slug: 'new-player' } })).resolves.toBe(1);
+    await expect(prisma.idempotencyRecord.count({ where: { key: body.idempotencyKey } })).resolves.toBe(1);
+
+    const conflict = await post('/api/v1/game/start', { ...body, campaignName: 'Outra Campanha' });
+    expect(conflict.status).toBe(409);
+    expect(conflict.body).toEqual({ error: { code: 'CONFLICT', message: 'Idempotency key already used' } });
+  });
+
+  it('does not overwrite an existing campaign when starting a game', async () => {
+    const key = 'integration-start-existing-001';
+    const response = await post('/api/v1/game/start', {
+      idempotencyKey: key, playerDisplayName: 'Ralph', worldName: 'Elarion', campaignName: 'Campanha Principal',
+      protagonist: { code: 'ralph', name: 'Ralph', actorType: 'character' },
+    });
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: { code: 'CONFLICT', message: 'Campaign already contains state' } });
+    await expect(prisma.idempotencyRecord.count({ where: { key } })).resolves.toBe(0);
+  });
+
   it('lists campaign actors with normalized enums', async () => {
     const response = await authenticated('/api/v1/campaigns/main-campaign/actors');
     expect(response.status).toBe(200);

@@ -8,13 +8,14 @@ import type { ContentRepository } from './modules/content/content.types.js';
 import type { GptRepository } from './modules/gpt/gpt.types.js';
 import type { ReadinessCheck } from './modules/health/health.routes.js';
 import { getOfficialContract } from './modules/openapi/openapi.routes.js';
+import type { AuditLogWriter, HttpAuditRecord } from './shared/http/request-audit.js';
 
 const config: AppConfig = { NODE_ENV: 'test', HOST: '0.0.0.0', PORT: 3000, DATABASE_URL: 'postgresql://test:test@localhost:5432/test', DIRECT_URL: 'postgresql://test:test@localhost:5432/test', RPG_API_KEY: 'test-key' };
 const actor = { id: '7e7b7cbe-5767-47de-a0b5-4b7bc9365c89', code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER, species: null, className: 'Aventureiro', level: 1, xp: 0, gold: 0, health: 20, maxHealth: 20, mana: 10, maxMana: 10, attributes: { strength: 5 }, resistances: {}, affinities: {}, status: ActorStatus.ACTIVE };
 const contentItem = { state: 'LEARNING', rank: 1, progress: 10, mastery: 0, equipped: false, quantity: 1, notes: 'Treino inicial com Lyra', contentDefinition: { code: 'wind_breeze_step', name: 'Passo da Brisa', contentType: 'SKILL', description: 'Movimento pelo vento.', mechanics: { effect: 'mobility' }, requirements: { level: 1 }, presentation: { element: 'wind' }, tags: ['wind'], schemaVersion: 1, status: 'ACTIVE' } };
 const definition: ContentDefinition = { id: 'b41c2a1c-e2d2-4498-a7be-1f07cd85de1a', worldId: 'e2dc20e8-51dc-47d2-a5be-b841d08fa610', campaignId: null, code: 'wind_breeze_step', name: 'Passo da Brisa', contentType: ContentType.SKILL, description: null, mechanics: {}, requirements: {}, presentation: {}, tags: ['wind'], schemaVersion: 1, status: ContentStatus.ACTIVE, metadata: {}, createdAt: new Date(), updatedAt: new Date() };
 const emptyGptRepository: GptRepository = {
-  loadGame: () => Promise.resolve({}), listCampaignActors: () => Promise.resolve([]), upsertActor: () => Promise.resolve({}),
+  loadGame: () => Promise.resolve({}), startGame: () => Promise.resolve({}), listCampaignActors: () => Promise.resolve([]), upsertActor: () => Promise.resolve({}),
   patchActor: () => Promise.resolve({}), upsertContent: () => Promise.resolve({}), manageActorContent: () => Promise.resolve({}), createEvent: () => Promise.resolve({}),
 };
 
@@ -23,6 +24,7 @@ function appWith(
   contentRepository: ContentRepository = { findByReference: () => Promise.resolve(definition) },
   gptRepository: GptRepository = {
     loadGame: (input) => Promise.resolve({ ...input, protagonist: { code: 'ralph' } }),
+    startGame: (input) => Promise.resolve({ player: { ref: input.playerRef }, world: { ref: input.worldRef }, campaign: { ref: input.campaignRef }, protagonist: input.protagonist }),
     listCampaignActors: () => Promise.resolve([{ code: 'ralph', actorType: 'character' }]),
     upsertActor: (input) => Promise.resolve({ code: input.code, name: input.name, actorType: input.actorType }),
     patchActor: (actorRef, input) => Promise.resolve({ code: actorRef, health: input.health }),
@@ -31,8 +33,12 @@ function appWith(
     createEvent: (input) => Promise.resolve({ eventType: input.eventType, title: input.title }),
   },
   readiness: ReadinessCheck = { check: () => Promise.resolve(true) },
+  auditLog?: AuditLogWriter,
 ) {
-  return createApp(config, { actorRepository, contentRepository, gptRepository, readiness });
+  return createApp(config, {
+    actorRepository, contentRepository, gptRepository, readiness,
+    ...(auditLog === undefined ? {} : { auditLog }),
+  });
 }
 
 describe('HTTP API', () => {
@@ -71,6 +77,17 @@ describe('HTTP API', () => {
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({ playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' });
   });
+  it('starts a complete new game scope through one protected idempotent contract', async () => {
+    const response = await request(appWith()).post('/api/v1/game/start').set('x-rpg-key', 'test-key').send({
+      idempotencyKey: 'start-game-http-001', playerDisplayName: 'Ralph', worldName: 'Novo Mundo', campaignName: 'Nova Campanha',
+      protagonist: { code: 'ralph', name: 'Ralph', actorType: 'character', health: 20, maxHealth: 20, mana: 10, maxMana: 10 },
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      player: { ref: 'ralph' }, world: { ref: 'elarion' }, campaign: { ref: 'main-campaign' },
+      protagonist: { code: 'ralph', actorType: 'character' },
+    });
+  });
   it('lists campaign actors and supports actor upsert and approved patch fields', async () => {
     const list = await request(appWith()).get('/api/v1/campaigns/main-campaign/actors').set('x-rpg-key', 'test-key');
     const upsert = await request(appWith()).post('/api/v1/actors/upsert').set('x-rpg-key', 'test-key').send({ idempotencyKey: 'actor-create-001', code: 'orin', name: 'Orin', actorType: 'npc' });
@@ -100,5 +117,72 @@ describe('HTTP API', () => {
     const event = await request(appWith()).post('/api/v1/events').set('x-rpg-key', 'test-key').send({ campaignRef: 'main-campaign', eventType: 'scene-ended', title: 'Cena encerrada', payload: {}, idempotencyKey: 'event-scene-001' });
     expect(unauthorized.status).toBe(401);
     expect(event.body).toMatchObject({ eventType: 'scene-ended', title: 'Cena encerrada' });
+  });
+  it('audits a GPT write with safe request and response summaries', async () => {
+    const records: HttpAuditRecord[] = [];
+    const response = await request(appWith(undefined, undefined, undefined, undefined, (record) => records.push(record)))
+      .post('/api/v1/actors/ralph/content/manage')
+      .set('x-rpg-key', 'test-key')
+      .send({
+        operation: 'update', contentRef: 'wind_breeze_step', contentType: 'skill', idempotencyKey: 'persist-secret-key-001',
+        changes: { state: 'learning', progress: 20, notes: 'private narrative secret', metadata: { hidden: 'sensitive value' } },
+      });
+
+    expect(response.status).toBe(200);
+    expect(records).toHaveLength(1);
+    expect(response.headers['x-request-id']).toBe(records[0]?.requestId);
+    expect(records[0]).toMatchObject({
+      event: 'http_request_completed', source: 'gpt_api', method: 'POST', path: '/api/v1/actors/ralph/content/manage', statusCode: 200,
+      request: {
+        body: {
+          operation: 'update', contentRef: 'wind_breeze_step', contentType: 'skill',
+          idempotency: { length: 22 },
+          changes: { state: 'learning', progress: 20, notesPresent: true, metadataKeys: ['hidden'] },
+        },
+      },
+      response: { kind: 'object', operation: 'update', state: 'learning' },
+    });
+    const serialized = JSON.stringify(records);
+    expect(serialized).not.toContain('test-key');
+    expect(serialized).not.toContain('persist-secret-key-001');
+    expect(serialized).not.toContain('private narrative secret');
+    expect(serialized).not.toContain('sensitive value');
+  });
+  it('audits validation issue paths without rejected values or authentication headers', async () => {
+    const records: HttpAuditRecord[] = [];
+    const response = await request(appWith(undefined, undefined, undefined, undefined, (record) => records.push(record)))
+      .post('/api/v1/actors/ralph/content/manage')
+      .set('x-rpg-key', 'test-key')
+      .send({ operation: 'update', contentRef: 'wind_breeze_step', contentType: 'skill', changes: { progress: 20 } });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      error: {
+        code: 'INVALID_INPUT', retryable: true,
+        issues: [expect.objectContaining({ path: 'idempotencyKey', message: 'Required for write operations' })],
+      },
+    });
+    expect(JSON.stringify(response.body)).toContain('retry once');
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      statusCode: 400,
+      response: { error: { code: 'INVALID_INPUT' } },
+      error: { type: 'validation', code: 'INVALID_INPUT', issues: [expect.objectContaining({ path: 'idempotencyKey' })] },
+    });
+    expect(JSON.stringify(records)).not.toContain('test-key');
+  });
+  it('does not echo rejected field values in validation responses or audit logs', async () => {
+    const records: HttpAuditRecord[] = [];
+    const response = await request(appWith(undefined, undefined, undefined, undefined, (record) => records.push(record)))
+      .post('/api/v1/actors/ralph/content/manage')
+      .set('x-rpg-key', 'test-key')
+      .send({ operation: 'list', unexpected: 'private rejected value' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      error: { issues: [expect.objectContaining({ path: '$', message: 'Remove unsupported fields: unexpected' })] },
+    });
+    expect(JSON.stringify(response.body)).not.toContain('private rejected value');
+    expect(JSON.stringify(records)).not.toContain('private rejected value');
   });
 });

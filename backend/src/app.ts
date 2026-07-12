@@ -11,18 +11,21 @@ import type { GptRepository } from './modules/gpt/gpt.types.js';
 import { ACTIVE_API_ROUTES, createOpenApiRouter } from './modules/openapi/openapi.routes.js';
 import { createApiKeyAuth } from './shared/http/api-key-auth.js';
 import { errorHandler, notFoundHandler } from './shared/http/error-handler.js';
+import { createRequestAudit, type AuditLogWriter, writeHttpAuditLog } from './shared/http/request-audit.js';
 
 export interface AppDependencies {
   actorRepository: ActorRepository;
   contentRepository: ContentRepository;
   gptRepository: GptRepository;
   readiness: ReadinessCheck;
+  auditLog?: AuditLogWriter;
 }
 
 export function createApp(config: AppConfig, dependencies: AppDependencies) {
   const app = express();
   app.disable('x-powered-by');
   app.set('apiRoutes', ACTIVE_API_ROUTES);
+  app.use(createRequestAudit(dependencies.auditLog ?? (config.NODE_ENV === 'test' ? undefined : writeHttpAuditLog)));
   app.use(express.json({ limit: '100kb' }));
   app.use('/health', createHealthRouter(dependencies.readiness));
   app.use('/openapi.json', createOpenApiRouter(config.PUBLIC_BASE_URL ?? `http://localhost:${config.PORT}`));
