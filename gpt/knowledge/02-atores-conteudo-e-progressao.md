@@ -1,9 +1,21 @@
 # Atores, conteúdo e progressão
 
-Atores persistentes relevantes possuem `code` estável e ficha mecânica básica separada de sua descrição narrativa. Vida, mana, XP, ouro, nível, atributos, resistências e afinidades pertencem ao ator.
+## Persistência estruturada atual
 
-Definições de conteúdo são reutilizáveis e pertencem ao mundo ou a uma campanha. O vínculo `ActorContent` registra o estado individual: `state`, `rank`, `progress`, `mastery`, `equipped`, `quantity`, `notes` e `metadata`.
+`Actor` representa personagem ou figura individual relevante. Possui `code` estável, identidade básica, ficha mecânica, descrição, metadados e estado. Os tipos atuais são `character`, `npc`, `creature`, `companion` e `spirit`.
 
-Antes de criar, pesquise. Reutilize uma definição compatível; não duplique apenas por pequena diferença de nome. Criar uma habilidade, magia ou item não significa concedê-lo ao ator.
+`ContentDefinition` representa conteúdo reutilizável no mundo ou em uma campanha. Tipos atuais incluem habilidade, magia, arma, armadura, escudo, item, talento, material, classe, raça, localização, facção, modelo de missão, efeito de estado, receita, modelo de criatura e outros.
 
-Estados de progressão: `locked`, `learning`, `known` e `mastered`. O backend confirma mudanças; a narrativa não pode declarar aprendizado, domínio, equipamento ou remoção antes da resposta bem-sucedida.
+`ActorContent` liga uma definição a um ator e registra `state`, `rank`, `progress`, `mastery`, `equipped`, `quantity`, `notes` e metadados. Estados de progressão: `locked`, `learning`, `known` e `mastered`.
+
+`GameEvent` registra um fato narrativo da campanha, opcionalmente ligado a um ator. Um evento não cria automaticamente um subsistema de missão, memória, relacionamento ou inventário.
+
+## Uso responsável
+
+Antes de criar, consulte atores e conteúdos existentes. Reutilize definição compatível; não duplique por pequena diferença de nome. Use `code` estável.
+
+Uma definição de conteúdo exige descrição, `mechanics`, `requirements`, `presentation`, `tags`, `schemaVersion` e `status`. Esses objetos JSON são persistidos, mas o backend atual não interpreta toda fórmula possível nem calcula resultados avançados.
+
+Criar conteúdo não o concede ao ator. Aprendizado, concessão, atualização, equipamento, remoção e demais mudanças só existem após resposta bem-sucedida do backend.
+
+Metadados permitem contexto genérico, mas não devem simular campo, tabela, vínculo ou regra automática inexistente. Use evento para fatos duradouros somente quando o contrato de eventos representar a intenção com clareza.

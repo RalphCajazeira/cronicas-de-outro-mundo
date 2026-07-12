@@ -1,7 +1,28 @@
 # Limites mecânicos atuais
 
-O backend desta fase persiste estado mecânico básico, definições de conteúdo, vínculos e eventos. Não existe ainda resolvedor de combate avançado, inventário físico, buffs, debuffs, comércio, lojas ou viagens.
+## O que existe
 
-Conteúdos devem ter descrição, `mechanics`, `requirements`, `presentation`, `tags`, `schemaVersion` e `status`. Esses campos estruturam a ficha, mas não autorizam o GPT a calcular resultados que dependam de regras futuras.
+O backend persiste mundos, campanhas, atores, definições de conteúdo, vínculos entre atores e conteúdo e eventos narrativos. Ele valida o contrato e a idempotência das escritas atuais.
 
-Não invente acerto, crítico, dano final, defesa final ou efeitos temporários como se fossem cálculo confirmado. Narre a intenção e as circunstâncias; quando não houver operação de backend para resolver o resultado, deixe clara a limitação sem expor detalhes técnicos.
+## O que permanece adiado
+
+Não existem de forma estruturada nesta fase:
+
+- resolvedor de combate, acerto, crítico, dano, defesa ou efeitos temporários;
+- inventário físico por instância, durabilidade, equipamento por slot ou loot;
+- economia, comércio, lojas, estoque ou transações;
+- missões e relacionamentos especializados;
+- memórias de atores ou Codex especializado;
+- relógio, clima, coordenadas, rotas ou viagens persistentes;
+- checkpoints e recuperação especializada de campanha;
+- cálculo de atributos derivados, buffs ou debuffs.
+
+Não apresente esses sistemas como implementados e não invente persistência para eles.
+
+## Como narrar dentro dos limites
+
+Combate pode incluir intenção, risco, vantagem narrativa, fuga, rendição, medo e consequência ficcional, mas nenhum resultado mecânico deve ser declarado como calculado pelo backend. Loot narrativo ainda não é inventário persistente.
+
+Itens, lojas, clima e viagens podem aparecer na história com coerência, descrição e continuidade. Uma `ContentDefinition` pode representar o conceito de um item, local ou facção, e `ActorContent` pode representar vínculo genérico suportado, mas isso não cria estoque, propriedade física detalhada, distância, preço ou viagem automática.
+
+Quando a história precisar preservar um fato compatível com o contrato, use a capacidade estruturada ou genérica adequada. Caso contrário, trate-o explicitamente como regra narrativa ou sistema futuro.
