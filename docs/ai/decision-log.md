@@ -76,3 +76,22 @@ Decisão:
 - usar scripts npm como fluxo normal de validação e testes manuais somente para investigação focal.
 
 Status: implementada
+
+## 2026-07-12 — Staging Render Free com gate manual de migrations e TLS completo
+
+Decisão:
+- fixar no Blueprint o projeto `Game-GPT`, ambiente `Staging`, serviço `cronicas-de-outro-mundo-staging-api`, branch `develop`, região `virginia`, plano Free e auto-deploy desligado;
+- remover o pre-deploy, indisponível no plano Free, sem mover migrations para build, start, startup ou health check;
+- exigir `prisma validate`, `prisma migrate status`, `prisma migrate deploy` e novo status como gate manual antes de cada deploy;
+- usar Supavisor Session mode com `sslmode=verify-full`, CA oficial do Supabase e `NODE_EXTRA_CA_CERTS` definido antes do startup do processo;
+- cadastrar a CA futuramente como secret file do Render em `/etc/secrets/supabase-ca.crt`;
+- fazer a primeira criação pelo formulário manual do projeto/ambiente para inserir a CA antes do primeiro deploy, usando o Blueprint como configuração reproduzível para sincronizações posteriores;
+- manter seed, Docker, auto-deploy e recursos pagos fora do staging.
+
+Impacto:
+- `DIRECT_URL` permanece local ao gate de migrations e não é secret do serviço Render;
+- `DATABASE_URL`, `RPG_API_KEY` e `PUBLIC_BASE_URL` permanecem secrets/valores protegidos do serviço;
+- cada deploy manual depende de evidência de schema atualizado e TLS com cadeia e hostname validados;
+- rollback usa deploy anterior e migration corretiva, nunca reset destrutivo.
+
+Status: preparado e validado localmente; serviço Render ainda não criado

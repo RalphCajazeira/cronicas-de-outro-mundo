@@ -19,13 +19,13 @@ Projeto de RPG narrativo reiniciado como nova versão, com o sistema anterior ar
 - Chave interna temporária `x-rpg-key` em `/api/v1`.
 - OpenAPI 3.1 ativo em `gpt/openapi.json` e `/openapi.json`; artefatos atuais do GPT separados do legado.
 - Idempotência transacional persistida no PostgreSQL, readiness segura e migration incremental de RLS/revogações.
-- Blueprint Render nativo Node, sem Docker e sem deploy automático nesta fase.
+- Blueprint Render de staging nativo Node, Free em `virginia`, branch `develop`, sem Docker, sem pre-deploy e sem deploy automático.
 
 ## Decisões pendentes
 
 - Autenticação pública, identidade e autorização por usuário.
 - Política de CORS, rate limit, auditoria e observabilidade antes de deploy.
-- Branch/plano/região finais no Render, criação do usuário Prisma no Supabase e execução remota controlada das migrations.
+- Cadastro dos secrets e da CA no Render, preview do Blueprint publicado e primeiro deploy manual após o gate de migrations.
 
 ## Fases futuras
 
