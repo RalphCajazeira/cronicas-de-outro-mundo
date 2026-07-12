@@ -21,6 +21,9 @@ HTTP -> routes/controller -> service -> repository -> Prisma -> PostgreSQL
 - módulos começam rasos; `characters` reutiliza atores e restringe `actorType`.
 - respostas são DTOs normalizados, nunca objetos Prisma brutos.
 - `modules/gpt` reúne os casos de uso da Action v1 sem substituir os endpoints de leitura anteriores.
+- leituras de estado resolvem explicitamente `Player.slug` → `World(playerId, code)` → `Campaign(worldId, code)`; atores nunca são procurados globalmente por code.
+- `getContent` exige tipo e escopo, prioriza a definição da campanha e limita o fallback à definição global do mesmo World.
+- `listWorldCampaigns.hasProtagonist` é verdadeiro somente quando existe na Campaign um Actor `character` cujo code coincide com `Player.slug`.
 - escritas usam `IdempotencyRecord`: constraint única, hash de operação/payload e resposta persistida na mesma transação Prisma.
 - `/health/ready` executa consulta curta com timeout e resposta binária segura; `/openapi.json` substitui o servidor por `PUBLIC_BASE_URL`.
 

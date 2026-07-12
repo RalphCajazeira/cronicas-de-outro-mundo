@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ACTIVE_API_ROUTES, getOfficialContract } from './openapi.routes.js';
 
-interface Operation { operationId?: string; security?: unknown; parameters?: Schema[]; requestBody?: { content?: { 'application/json'?: { schema?: Schema } } }; description?: string; responses?: Record<string, unknown> }
+interface Operation { operationId?: string; security?: unknown; parameters?: Array<Schema & { name?: string; in?: string; required?: boolean }>; requestBody?: { content?: { 'application/json'?: { schema?: Schema } } }; description?: string; responses?: Record<string, unknown> }
 interface Schema {
   $ref?: string;
   required?: string[];
@@ -10,6 +10,7 @@ interface Schema {
   allOf?: Schema[];
   additionalProperties?: boolean;
   enum?: unknown[];
+  format?: string;
   if?: Schema;
   then?: Schema;
   not?: Schema;
@@ -49,12 +50,12 @@ function collectEnums(value: unknown, result: unknown[][] = []): unknown[][] {
 }
 
 describe('official OpenAPI contract', () => {
-  it('is valid JSON loaded as OpenAPI 3.1 with exactly 15 unique operationIds', () => {
+  it('is valid JSON loaded as OpenAPI 3.1 with exactly 17 unique operationIds', () => {
     const ids = operations().map(({ operation }) => operation.operationId);
     expect(contract.openapi).toBe('3.1.0');
     expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(15);
+    expect(ids).toHaveLength(17);
   });
 
   it('matches every registered Express route exactly', () => {
@@ -67,6 +68,7 @@ describe('official OpenAPI contract', () => {
     expect(contract.security).toEqual([{ RpgApiKey: [] }]);
     const publicIds = operations().filter(({ operation }) => Array.isArray(operation.security) && operation.security.length === 0).map(({ operation }) => operation.operationId).sort();
     expect(publicIds).toEqual(['checkHealth', 'checkReadiness', 'getOpenApiContract']);
+    expect(operations().filter(({ operation }) => !Array.isArray(operation.security) || operation.security.length > 0)).toHaveLength(14);
   });
 
   it('contains no localhost production server', () => {
@@ -121,6 +123,32 @@ describe('official OpenAPI contract', () => {
     };
     visit(contract);
     expect(objectSchemasWithoutProperties).toEqual([]);
+  });
+
+  it('documents discovery and requires explicit scope on every public game-state read', () => {
+    const byId = new Map(operations().map(({ operation }) => [operation.operationId, operation]));
+    expect([...byId.keys()]).toEqual(expect.arrayContaining(['listPlayerWorlds', 'listWorldCampaigns']));
+    const expectedQueryParameters: Record<string, string[]> = {
+      listCampaignActors: ['playerRef', 'worldRef'],
+      getActor: ['playerRef', 'worldRef', 'campaignRef'],
+      getCharacter: ['playerRef', 'worldRef', 'campaignRef'],
+      listCharacterContent: ['playerRef', 'worldRef', 'campaignRef'],
+      getContent: ['playerRef', 'worldRef', 'campaignRef', 'contentType'],
+    };
+    for (const [operationId, names] of Object.entries(expectedQueryParameters)) {
+      const query = (byId.get(operationId)?.parameters ?? []).filter((parameter) => parameter.in === 'query');
+      expect(query.map((parameter) => parameter.name), operationId).toEqual(names);
+      expect(query.every((parameter) => parameter.required === true), operationId).toBe(true);
+    }
+    const scope = contract.components.schemas.ScopeInput;
+    expect(scope?.required).toEqual(['playerRef', 'worldRef', 'campaignRef']);
+    expect(contract.components.schemas.Code?.not).toEqual({ format: 'uuid' });
+    for (const operationId of ['loadGame', 'startGame', 'upsertActor', 'updateActor', 'upsertContent', 'manageActorContent', 'createGameEvent']) {
+      const operation = byId.get(operationId);
+      const schema = resolveSchema(operation?.requestBody?.content?.['application/json']?.schema);
+      expect(schema.required, operationId).toEqual(expect.arrayContaining(['playerRef', 'worldRef', 'campaignRef']));
+    }
+    expect(JSON.stringify(contract)).not.toContain('"default"');
   });
 
   it('uses closed request objects and lowercase public enums', () => {

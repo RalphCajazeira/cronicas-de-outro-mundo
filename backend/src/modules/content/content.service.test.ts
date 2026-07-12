@@ -9,11 +9,12 @@ const item: ContentDefinition = {
   mechanics: { effect: 'mobility' }, requirements: {}, presentation: {}, tags: ['wind'], schemaVersion: 1,
   status: ContentStatus.ACTIVE, metadata: {}, createdAt: new Date(), updatedAt: new Date(),
 };
+const input = { playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign', contentType: 'skill' as const };
 
 describe('content service', () => {
   it('returns a found definition as a normalized DTO', async () => {
     const repository: ContentRepository = { findByReference: () => Promise.resolve(item) };
-    const result = await createContentService(repository).get('wind_breeze_step');
+    const result = await createContentService(repository).get(input, 'wind_breeze_step');
     expect(result).toMatchObject({ code: 'wind_breeze_step', contentType: 'skill', status: 'active' });
     expect(result).not.toHaveProperty('id');
     expect(result).not.toHaveProperty('worldId');
@@ -21,6 +22,6 @@ describe('content service', () => {
 
   it('rejects a missing definition', async () => {
     const repository: ContentRepository = { findByReference: () => Promise.resolve(null) };
-    await expect(createContentService(repository).get('missing')).rejects.toMatchObject({ statusCode: 404, message: 'Content not found' });
+    await expect(createContentService(repository).get(input, 'missing')).rejects.toMatchObject({ statusCode: 404, message: 'Content not found' });
   });
 });

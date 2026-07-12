@@ -5,15 +5,38 @@
     "version": "1.0.0",
     "description": "Contrato oficial ativo da API Node. O backend é a fonte de verdade do estado persistente."
   },
-  "servers": [{ "url": "https://api.example.com", "description": "Substituída por PUBLIC_BASE_URL no runtime" }],
-  "security": [{ "RpgApiKey": [] }],
+  "servers": [
+    {
+      "url": "https://api.example.com",
+      "description": "Substituída por PUBLIC_BASE_URL no runtime"
+    }
+  ],
+  "security": [
+    {
+      "RpgApiKey": []
+    }
+  ],
   "paths": {
     "/health": {
       "get": {
         "operationId": "checkHealth",
         "summary": "Verificar se o processo está ativo",
         "security": [],
-        "responses": { "200": { "description": "Processo ativo", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } } }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "responses": {
+          "200": {
+            "description": "Processo ativo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     },
     "/health/ready": {
@@ -21,7 +44,31 @@
         "operationId": "checkReadiness",
         "summary": "Verificar prontidão segura do banco",
         "security": [],
-        "responses": { "200": { "description": "Serviço pronto", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Readiness" } } } }, "503": { "description": "Serviço ainda não pronto", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Readiness" } } } }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "responses": {
+          "200": {
+            "description": "Serviço pronto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "description": "Serviço ainda não pronto",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/openapi.json": {
@@ -29,15 +76,65 @@
         "operationId": "getOpenApiContract",
         "summary": "Obter o contrato OpenAPI ativo",
         "security": [],
-        "responses": { "200": { "description": "Contrato OpenAPI 3.1", "content": { "application/json": { "schema": { "type": "object", "properties": {} } } } }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "responses": {
+          "200": {
+            "description": "Contrato OpenAPI 3.1",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     },
     "/api/v1/game/load": {
       "post": {
         "operationId": "loadGame",
         "summary": "Carregar o estado normalizado da campanha",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ScopeInput" } } } },
-        "responses": { "200": { "description": "Estado carregado", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GameState" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopeInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Estado carregado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameState"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidInput"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     },
     "/api/v1/game/start": {
@@ -45,55 +142,503 @@
         "operationId": "startGame",
         "summary": "Criar Player, World, Campaign e protagonista de um novo jogo",
         "description": "Use somente após loadGame confirmar ausência do escopo ou do protagonista. A operação é idempotente e recusa sobrescrever uma campanha com estado.",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StartGameInput" } } } },
-        "responses": { "200": { "description": "Novo jogo criado e carregado", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GameState" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartGameInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Novo jogo criado e carregado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameState"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidInput"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/v1/players/{playerRef}/worlds": {
+      "get": {
+        "operationId": "listPlayerWorlds",
+        "summary": "Listar os mundos pertencentes ao jogador",
+        "parameters": [
+          {
+            "name": "playerRef",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Mundos do jogador em ordem de ref",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorldSummary"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidInput"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/v1/players/{playerRef}/worlds/{worldRef}/campaigns": {
+      "get": {
+        "operationId": "listWorldCampaigns",
+        "summary": "Listar as campanhas do mundo pertencente ao jogador",
+        "parameters": [
+          {
+            "name": "playerRef",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "worldRef",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Campanhas do mundo em ordem de ref",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CampaignSummary"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidInput"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     },
     "/api/v1/campaigns/{campaignRef}/actors": {
       "get": {
         "operationId": "listCampaignActors",
         "summary": "Listar atores da campanha",
-        "parameters": [{ "name": "campaignRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }, { "name": "playerRef", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/Code", "default": "ralph" } }, { "name": "worldRef", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/Code", "default": "elarion" } }],
-        "responses": { "200": { "description": "Atores normalizados", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Actor" } } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "parameters": [
+          {
+            "name": "campaignRef",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "playerRef",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "worldRef",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Atores normalizados",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Actor"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidInput"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     },
     "/api/v1/characters/{characterRef}": {
       "get": {
         "operationId": "getCharacter",
         "summary": "Consultar personagem preservado da API inicial",
-        "parameters": [{ "name": "characterRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
-        "responses": { "200": { "description": "Personagem", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Actor" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "parameters": [
+          {
+            "name": "characterRef",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "playerRef",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "worldRef",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "campaignRef",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Personagem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Actor"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidInput"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     },
     "/api/v1/characters/{characterRef}/content": {
       "get": {
         "operationId": "listCharacterContent",
         "summary": "Listar conteúdo do personagem preservado da API inicial",
-        "parameters": [{ "name": "characterRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
-        "responses": { "200": { "description": "Conteúdo vinculado", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ActorContent" } } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "parameters": [
+          {
+            "name": "characterRef",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "playerRef",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "worldRef",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "campaignRef",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conteúdo vinculado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ActorContent"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidInput"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     },
     "/api/v1/actors/{actorRef}": {
       "get": {
         "operationId": "getActor",
         "summary": "Consultar ator preservado da API inicial",
-        "parameters": [{ "name": "actorRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
-        "responses": { "200": { "description": "Ator", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Actor" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "parameters": [
+          {
+            "name": "actorRef",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "playerRef",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "worldRef",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "campaignRef",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Actor"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidInput"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       },
       "patch": {
         "operationId": "updateActor",
         "summary": "Atualizar somente campos aprovados do ator",
-        "parameters": [{ "name": "actorRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActorPatchInput" } } } },
-        "responses": { "200": { "description": "Ator atualizado", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Actor" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "parameters": [
+          {
+            "name": "actorRef",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActorPatchInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ator atualizado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Actor"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidInput"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     },
     "/api/v1/actors/upsert": {
       "post": {
         "operationId": "upsertActor",
         "summary": "Criar ou atualizar ator por campanha e code",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActorUpsertInput" } } } },
-        "responses": { "200": { "description": "Ator persistido", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Actor" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActorUpsertInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ator persistido",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Actor"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidInput"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     },
     "/api/v1/actors/{actorRef}/content/manage": {
@@ -101,78 +646,1615 @@
         "operationId": "manageActorContent",
         "summary": "Consultar, vincular ou evoluir conteúdo do ator",
         "description": "get/list são leituras. learn, grant, update, equip, unequip e remove exigem idempotencyKey.",
-        "parameters": [{ "name": "actorRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActorContentManageInput" } } } },
-        "responses": { "200": { "description": "Resultado normalizado da operação", "content": { "application/json": { "schema": { "oneOf": [{ "$ref": "#/components/schemas/ActorContent" }, { "type": "array", "items": { "$ref": "#/components/schemas/ActorContent" } }, { "$ref": "#/components/schemas/RemovalResult" }] } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "parameters": [
+          {
+            "name": "actorRef",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActorContentManageInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resultado normalizado da operação",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ActorContent"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ActorContent"
+                      }
+                    },
+                    {
+                      "$ref": "#/components/schemas/RemovalResult"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidInput"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     },
     "/api/v1/content/{contentRef}": {
       "get": {
         "operationId": "getContent",
-        "summary": "Consultar definição de conteúdo preservada da API inicial",
-        "parameters": [{ "name": "contentRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
-        "responses": { "200": { "description": "Definição", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Content" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "summary": "Consultar definição de conteúdo no escopo e tipo explícitos",
+        "description": "Prioriza a definição específica da campanha; se ela não existir, usa somente a definição global do mesmo World e contentType.",
+        "parameters": [
+          {
+            "name": "contentRef",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "playerRef",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "worldRef",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "campaignRef",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Code"
+            }
+          },
+          {
+            "name": "contentType",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ContentType"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Definição",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Content"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidInput"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     },
     "/api/v1/content/upsert": {
       "post": {
         "operationId": "upsertContent",
         "summary": "Criar ou atualizar definição por escopo, tipo e code",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContentUpsertInput" } } } },
-        "responses": { "200": { "description": "Conteúdo persistido", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Content" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentUpsertInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Conteúdo persistido",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Content"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidInput"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     },
     "/api/v1/events": {
       "post": {
         "operationId": "createGameEvent",
         "summary": "Registrar evento narrativo idempotente",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EventInput" } } } },
-        "responses": { "200": { "description": "Evento persistido ou repetição segura", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Event" } } } }, "400": { "$ref": "#/components/responses/InvalidInput" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/InternalError" } }
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Evento persistido ou repetição segura",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidInput"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     }
   },
   "components": {
-    "securitySchemes": { "RpgApiKey": { "type": "apiKey", "in": "header", "name": "x-rpg-key", "description": "Chave interna provisória armazenada somente como secret." } },
+    "securitySchemes": {
+      "RpgApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-rpg-key",
+        "description": "Chave interna provisória armazenada somente como secret."
+      }
+    },
     "parameters": {
-      "ActorRef": { "name": "actorRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } },
-      "CharacterRef": { "name": "characterRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } },
-      "ContentRef": { "name": "contentRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } },
-      "CampaignRef": { "name": "campaignRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } },
-      "PlayerRefQuery": { "name": "playerRef", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/Code", "default": "ralph" } },
-      "WorldRefQuery": { "name": "worldRef", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/Code", "default": "elarion" } }
+      "ActorRef": {
+        "name": "actorRef",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Code"
+        }
+      },
+      "CharacterRef": {
+        "name": "characterRef",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Code"
+        }
+      },
+      "ContentRef": {
+        "name": "contentRef",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Code"
+        }
+      },
+      "CampaignRef": {
+        "name": "campaignRef",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Code"
+        }
+      },
+      "PlayerRefQuery": {
+        "name": "playerRef",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Code"
+        }
+      },
+      "WorldRefQuery": {
+        "name": "worldRef",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Code"
+        }
+      }
     },
     "responses": {
-      "InvalidInput": { "description": "Entrada inválida", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "Unauthorized": { "description": "Chave ausente ou inválida, sem distinção observável", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "NotFound": { "description": "Recurso não encontrado", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "Conflict": { "description": "Conflito de estado ou reutilização incompatível de idempotencyKey", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "InternalError": { "description": "Erro interno seguro, sem detalhes de infraestrutura", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+      "InvalidInput": {
+        "description": "Entrada inválida",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Chave ausente ou inválida, sem distinção observável",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Recurso não encontrado",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Conflito de estado ou reutilização incompatível de idempotencyKey",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "Erro interno seguro, sem detalhes de infraestrutura",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
     },
     "schemas": {
-      "Code": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$" },
-      "IdempotencyKey": { "type": "string", "minLength": 8, "maxLength": 200, "description": "Chave estável reutilizada ao repetir a mesma escrita após falha." },
-      "JsonObject": { "type": "object", "additionalProperties": true, "properties": {} },
-      "ScopeInput": { "type": "object", "additionalProperties": false, "properties": { "playerRef": { "$ref": "#/components/schemas/Code", "default": "ralph" }, "worldRef": { "$ref": "#/components/schemas/Code", "default": "elarion" }, "campaignRef": { "$ref": "#/components/schemas/Code", "default": "main-campaign" } } },
-      "InitialActorInput": { "type": "object", "additionalProperties": false, "required": ["code", "name", "actorType"], "properties": { "code": { "$ref": "#/components/schemas/Code" }, "name": { "type": "string", "minLength": 1 }, "actorType": { "const": "character" }, "species": { "type": ["string", "null"] }, "className": { "type": ["string", "null"] }, "role": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] }, "level": { "type": "integer", "minimum": 1 }, "xp": { "type": "integer", "minimum": 0 }, "gold": { "type": "integer", "minimum": 0 }, "health": { "type": "integer", "minimum": 0 }, "maxHealth": { "type": "integer", "minimum": 1 }, "mana": { "type": "integer", "minimum": 0 }, "maxMana": { "type": "integer", "minimum": 0 }, "attributes": { "$ref": "#/components/schemas/JsonObject" }, "resistances": { "$ref": "#/components/schemas/JsonObject" }, "affinities": { "$ref": "#/components/schemas/JsonObject" }, "metadata": { "$ref": "#/components/schemas/JsonObject" }, "status": { "type": "string", "enum": ["active", "inactive", "defeated", "dead", "archived"] } } },
-      "StartGameInput": { "type": "object", "additionalProperties": false, "required": ["idempotencyKey", "playerDisplayName", "worldName", "campaignName", "protagonist"], "properties": { "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" }, "playerRef": { "$ref": "#/components/schemas/Code", "default": "ralph" }, "playerDisplayName": { "type": "string", "minLength": 1 }, "worldRef": { "$ref": "#/components/schemas/Code", "default": "elarion" }, "worldName": { "type": "string", "minLength": 1 }, "worldDescription": { "type": ["string", "null"] }, "worldMetadata": { "$ref": "#/components/schemas/JsonObject" }, "campaignRef": { "$ref": "#/components/schemas/Code", "default": "main-campaign" }, "campaignName": { "type": "string", "minLength": 1 }, "campaignMetadata": { "$ref": "#/components/schemas/JsonObject" }, "protagonist": { "$ref": "#/components/schemas/InitialActorInput" } } },
-      "Health": { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "ok" } } },
-      "Readiness": { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "type": "string", "enum": ["ready", "not_ready"] } } },
-      "Error": { "type": "object", "additionalProperties": false, "required": ["error"], "properties": { "error": { "type": "object", "additionalProperties": false, "required": ["code", "message"], "properties": { "code": { "type": "string" }, "message": { "type": "string" }, "retryable": { "type": "boolean", "description": "Somente INVALID_INPUT pode orientar uma nova tentativa corrigida." }, "retryInstruction": { "type": "string" }, "issues": { "type": "array", "maxItems": 20, "items": { "type": "object", "additionalProperties": false, "required": ["path", "code", "message"], "properties": { "path": { "type": "string" }, "code": { "type": "string" }, "message": { "type": "string" } } } } } } } },
-      "Actor": { "type": "object", "additionalProperties": false, "required": ["code", "name", "actorType", "level", "xp", "gold", "health", "maxHealth", "mana", "maxMana", "attributes", "resistances", "affinities", "status"], "properties": { "code": { "$ref": "#/components/schemas/Code" }, "name": { "type": "string" }, "actorType": { "type": "string", "enum": ["character", "npc", "creature", "companion", "spirit"] }, "species": { "type": ["string", "null"] }, "className": { "type": ["string", "null"] }, "role": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] }, "level": { "type": "integer", "minimum": 1 }, "xp": { "type": "integer", "minimum": 0 }, "gold": { "type": "integer", "minimum": 0 }, "health": { "type": "integer", "minimum": 0 }, "maxHealth": { "type": "integer", "minimum": 1 }, "mana": { "type": "integer", "minimum": 0 }, "maxMana": { "type": "integer", "minimum": 0 }, "attributes": { "$ref": "#/components/schemas/JsonObject" }, "resistances": { "$ref": "#/components/schemas/JsonObject" }, "affinities": { "$ref": "#/components/schemas/JsonObject" }, "metadata": { "$ref": "#/components/schemas/JsonObject" }, "status": { "type": "string", "enum": ["active", "inactive", "defeated", "dead", "archived"] } } },
-      "ActorPatchInput": { "type": "object", "additionalProperties": false, "required": ["idempotencyKey"], "properties": { "playerRef": { "$ref": "#/components/schemas/Code" }, "worldRef": { "$ref": "#/components/schemas/Code" }, "campaignRef": { "$ref": "#/components/schemas/Code" }, "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" }, "role": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] }, "level": { "type": "integer", "minimum": 1 }, "xp": { "type": "integer", "minimum": 0 }, "gold": { "type": "integer", "minimum": 0 }, "health": { "type": "integer", "minimum": 0 }, "maxHealth": { "type": "integer", "minimum": 1 }, "mana": { "type": "integer", "minimum": 0 }, "maxMana": { "type": "integer", "minimum": 0 }, "attributes": { "$ref": "#/components/schemas/JsonObject" }, "resistances": { "$ref": "#/components/schemas/JsonObject" }, "affinities": { "$ref": "#/components/schemas/JsonObject" }, "metadata": { "$ref": "#/components/schemas/JsonObject" }, "status": { "type": "string", "enum": ["active", "inactive", "defeated", "dead", "archived"] } } },
-      "ActorUpsertInput": { "type": "object", "additionalProperties": false, "required": ["code", "name", "actorType", "idempotencyKey"], "properties": { "playerRef": { "$ref": "#/components/schemas/Code" }, "worldRef": { "$ref": "#/components/schemas/Code" }, "campaignRef": { "$ref": "#/components/schemas/Code" }, "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" }, "code": { "$ref": "#/components/schemas/Code" }, "name": { "type": "string", "minLength": 1 }, "actorType": { "type": "string", "enum": ["character", "npc", "creature", "companion", "spirit"] }, "species": { "type": ["string", "null"] }, "className": { "type": ["string", "null"] }, "role": { "type": ["string", "null"] }, "description": { "type": ["string", "null"] }, "level": { "type": "integer", "minimum": 1 }, "xp": { "type": "integer", "minimum": 0 }, "gold": { "type": "integer", "minimum": 0 }, "health": { "type": "integer", "minimum": 0 }, "maxHealth": { "type": "integer", "minimum": 1 }, "mana": { "type": "integer", "minimum": 0 }, "maxMana": { "type": "integer", "minimum": 0 }, "attributes": { "$ref": "#/components/schemas/JsonObject" }, "resistances": { "$ref": "#/components/schemas/JsonObject" }, "affinities": { "$ref": "#/components/schemas/JsonObject" }, "metadata": { "$ref": "#/components/schemas/JsonObject" }, "status": { "type": "string", "enum": ["active", "inactive", "defeated", "dead", "archived"] } } },
-      "Content": { "type": "object", "required": ["code", "name", "contentType", "description", "mechanics", "requirements", "presentation", "tags", "schemaVersion", "status"], "properties": { "code": { "$ref": "#/components/schemas/Code" }, "name": { "type": "string" }, "contentType": { "$ref": "#/components/schemas/ContentType" }, "description": { "type": ["string", "null"] }, "mechanics": { "$ref": "#/components/schemas/JsonObject" }, "requirements": { "$ref": "#/components/schemas/JsonObject" }, "presentation": { "$ref": "#/components/schemas/JsonObject" }, "tags": { "type": "array", "items": { "type": "string" } }, "schemaVersion": { "type": "integer", "minimum": 1 }, "status": { "type": "string", "enum": ["draft", "active", "inactive", "archived"] }, "metadata": { "$ref": "#/components/schemas/JsonObject" } } },
-      "ContentType": { "type": "string", "enum": ["skill", "spell", "weapon", "armor", "shield", "item", "talent", "material", "class", "race", "location", "faction", "quest_template", "status_effect", "recipe", "creature_template", "other"] },
-      "ContentUpsertInput": { "type": "object", "additionalProperties": false, "required": ["idempotencyKey", "contentType", "code", "name", "description", "mechanics", "requirements", "presentation", "tags", "schemaVersion", "status"], "properties": { "playerRef": { "$ref": "#/components/schemas/Code" }, "worldRef": { "$ref": "#/components/schemas/Code" }, "campaignRef": { "oneOf": [{ "$ref": "#/components/schemas/Code" }, { "type": "null" }] }, "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" }, "contentType": { "$ref": "#/components/schemas/ContentType" }, "code": { "$ref": "#/components/schemas/Code" }, "name": { "type": "string", "minLength": 1 }, "description": { "type": "string", "minLength": 1 }, "mechanics": { "$ref": "#/components/schemas/JsonObject" }, "requirements": { "$ref": "#/components/schemas/JsonObject" }, "presentation": { "$ref": "#/components/schemas/JsonObject" }, "tags": { "type": "array", "items": { "type": "string" } }, "schemaVersion": { "type": "integer", "minimum": 1 }, "status": { "type": "string", "enum": ["draft", "active", "inactive", "archived"] }, "metadata": { "$ref": "#/components/schemas/JsonObject" } } },
-      "ActorContent": { "allOf": [{ "$ref": "#/components/schemas/Content" }, { "type": "object", "required": ["state", "rank", "progress", "mastery", "equipped", "quantity"], "properties": { "state": { "type": "string", "enum": ["locked", "learning", "known", "mastered"] }, "rank": { "type": "integer", "minimum": 0 }, "progress": { "type": "integer", "minimum": 0 }, "mastery": { "type": "integer", "minimum": 0 }, "equipped": { "type": "boolean" }, "quantity": { "type": "integer", "minimum": 0 }, "notes": { "type": ["string", "null"] }, "linkMetadata": { "$ref": "#/components/schemas/JsonObject" } } }] },
-      "ActorContentManageInput": { "type": "object", "additionalProperties": false, "required": ["operation"], "allOf": [{ "if": { "properties": { "operation": { "enum": ["learn", "grant", "update", "equip", "unequip", "remove"] } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey"] } }, { "if": { "properties": { "operation": { "not": { "const": "list" } } }, "required": ["operation"] }, "then": { "required": ["contentRef", "contentType"] } }, { "if": { "properties": { "operation": { "const": "update" } }, "required": ["operation"] }, "then": { "required": ["changes"] } }], "properties": { "playerRef": { "$ref": "#/components/schemas/Code" }, "worldRef": { "$ref": "#/components/schemas/Code" }, "campaignRef": { "$ref": "#/components/schemas/Code" }, "operation": { "type": "string", "enum": ["get", "list", "learn", "grant", "update", "equip", "unequip", "remove"] }, "contentRef": { "$ref": "#/components/schemas/Code" }, "contentType": { "$ref": "#/components/schemas/ContentType" }, "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey", "description": "Obrigatória para todas as operações de escrita." }, "changes": { "type": "object", "additionalProperties": false, "properties": { "state": { "type": "string", "enum": ["locked", "learning", "known", "mastered"] }, "rank": { "type": "integer", "minimum": 0 }, "progress": { "type": "integer", "minimum": 0 }, "mastery": { "type": "integer", "minimum": 0 }, "equipped": { "type": "boolean" }, "quantity": { "type": "integer", "minimum": 0 }, "notes": { "type": ["string", "null"] }, "metadata": { "$ref": "#/components/schemas/JsonObject" } } } } },
-      "RemovalResult": { "type": "object", "additionalProperties": false, "required": ["actorRef", "contentRef", "removed"], "properties": { "actorRef": { "$ref": "#/components/schemas/Code" }, "contentRef": { "$ref": "#/components/schemas/Code" }, "removed": { "const": true } } },
-      "EventInput": { "type": "object", "additionalProperties": false, "required": ["campaignRef", "eventType", "title", "payload", "idempotencyKey"], "properties": { "playerRef": { "$ref": "#/components/schemas/Code" }, "worldRef": { "$ref": "#/components/schemas/Code" }, "campaignRef": { "$ref": "#/components/schemas/Code" }, "actorRef": { "$ref": "#/components/schemas/Code" }, "eventType": { "$ref": "#/components/schemas/Code" }, "title": { "type": "string", "minLength": 1 }, "payload": { "$ref": "#/components/schemas/JsonObject" }, "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" } } },
-      "Event": { "type": "object", "additionalProperties": false, "required": ["campaignRef", "actorRef", "eventType", "title", "payload", "createdAt"], "properties": { "campaignRef": { "$ref": "#/components/schemas/Code" }, "actorRef": { "oneOf": [{ "$ref": "#/components/schemas/Code" }, { "type": "null" }] }, "eventType": { "$ref": "#/components/schemas/Code" }, "title": { "type": "string" }, "payload": { "$ref": "#/components/schemas/JsonObject" }, "createdAt": { "type": "string", "format": "date-time" } } },
-      "PlayerState": { "type": "object", "additionalProperties": false, "required": ["ref", "displayName"], "properties": { "ref": { "$ref": "#/components/schemas/Code" }, "displayName": { "type": "string" } } },
-      "WorldState": { "type": "object", "additionalProperties": false, "required": ["ref", "name", "description", "metadata"], "properties": { "ref": { "$ref": "#/components/schemas/Code" }, "name": { "type": "string" }, "description": { "type": ["string", "null"] }, "metadata": { "$ref": "#/components/schemas/JsonObject" } } },
-      "CampaignState": { "type": "object", "additionalProperties": false, "required": ["ref", "name", "status", "currentTime", "metadata"], "properties": { "ref": { "$ref": "#/components/schemas/Code" }, "name": { "type": "string" }, "status": { "type": "string", "enum": ["draft", "active", "paused", "completed", "archived"] }, "currentTime": { "oneOf": [{ "$ref": "#/components/schemas/JsonObject" }, { "type": "null" }] }, "metadata": { "$ref": "#/components/schemas/JsonObject" } } },
-      "GameState": { "type": "object", "additionalProperties": false, "required": ["player", "world", "campaign", "protagonist", "mainActors", "linkedContent", "recentEvents"], "properties": { "player": { "$ref": "#/components/schemas/PlayerState" }, "world": { "$ref": "#/components/schemas/WorldState" }, "campaign": { "$ref": "#/components/schemas/CampaignState" }, "protagonist": { "oneOf": [{ "$ref": "#/components/schemas/Actor" }, { "type": "null" }] }, "mainActors": { "type": "array", "items": { "$ref": "#/components/schemas/Actor" } }, "linkedContent": { "type": "array", "items": { "type": "object", "properties": {} } }, "recentEvents": { "type": "array", "items": { "$ref": "#/components/schemas/Event" } } } }
+      "Code": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100,
+        "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$",
+        "not": {
+          "format": "uuid"
+        }
+      },
+      "IdempotencyKey": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 200,
+        "description": "Chave estável reutilizada ao repetir a mesma escrita após falha."
+      },
+      "JsonObject": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {}
+      },
+      "ScopeInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "playerRef",
+          "worldRef",
+          "campaignRef"
+        ],
+        "properties": {
+          "playerRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "worldRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "campaignRef": {
+            "$ref": "#/components/schemas/Code"
+          }
+        }
+      },
+      "InitialActorInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "name",
+          "actorType"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "actorType": {
+            "const": "character"
+          },
+          "species": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "className": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "level": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "xp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "gold": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "health": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxHealth": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mana": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxMana": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attributes": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "resistances": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "affinities": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive",
+              "defeated",
+              "dead",
+              "archived"
+            ]
+          }
+        }
+      },
+      "StartGameInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotencyKey",
+          "playerRef",
+          "playerDisplayName",
+          "worldRef",
+          "worldName",
+          "campaignRef",
+          "campaignName",
+          "protagonist"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "$ref": "#/components/schemas/IdempotencyKey"
+          },
+          "playerRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "playerDisplayName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "worldRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "worldName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "worldDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worldMetadata": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "campaignRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "campaignName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "campaignMetadata": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "protagonist": {
+            "$ref": "#/components/schemas/InitialActorInput"
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        }
+      },
+      "Readiness": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "not_ready"
+            ]
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean",
+                "description": "Somente INVALID_INPUT pode orientar uma nova tentativa corrigida."
+              },
+              "retryInstruction": {
+                "type": "string"
+              },
+              "issues": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "path",
+                    "code",
+                    "message"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "Actor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "name",
+          "actorType",
+          "level",
+          "xp",
+          "gold",
+          "health",
+          "maxHealth",
+          "mana",
+          "maxMana",
+          "attributes",
+          "resistances",
+          "affinities",
+          "status"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "name": {
+            "type": "string"
+          },
+          "actorType": {
+            "type": "string",
+            "enum": [
+              "character",
+              "npc",
+              "creature",
+              "companion",
+              "spirit"
+            ]
+          },
+          "species": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "className": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "level": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "xp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "gold": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "health": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxHealth": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mana": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxMana": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attributes": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "resistances": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "affinities": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive",
+              "defeated",
+              "dead",
+              "archived"
+            ]
+          }
+        }
+      },
+      "ActorPatchInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "playerRef",
+          "worldRef",
+          "campaignRef",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "playerRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "worldRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "campaignRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "idempotencyKey": {
+            "$ref": "#/components/schemas/IdempotencyKey"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "level": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "xp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "gold": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "health": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxHealth": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mana": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxMana": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attributes": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "resistances": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "affinities": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive",
+              "defeated",
+              "dead",
+              "archived"
+            ]
+          }
+        }
+      },
+      "ActorUpsertInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "playerRef",
+          "worldRef",
+          "campaignRef",
+          "code",
+          "name",
+          "actorType",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "playerRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "worldRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "campaignRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "idempotencyKey": {
+            "$ref": "#/components/schemas/IdempotencyKey"
+          },
+          "code": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "actorType": {
+            "type": "string",
+            "enum": [
+              "character",
+              "npc",
+              "creature",
+              "companion",
+              "spirit"
+            ]
+          },
+          "species": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "className": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "level": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "xp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "gold": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "health": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxHealth": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mana": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxMana": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attributes": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "resistances": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "affinities": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive",
+              "defeated",
+              "dead",
+              "archived"
+            ]
+          }
+        }
+      },
+      "Content": {
+        "type": "object",
+        "required": [
+          "code",
+          "name",
+          "contentType",
+          "description",
+          "mechanics",
+          "requirements",
+          "presentation",
+          "tags",
+          "schemaVersion",
+          "status"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "name": {
+            "type": "string"
+          },
+          "contentType": {
+            "$ref": "#/components/schemas/ContentType"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mechanics": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "requirements": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "active",
+              "inactive",
+              "archived"
+            ]
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "ContentType": {
+        "type": "string",
+        "enum": [
+          "skill",
+          "spell",
+          "weapon",
+          "armor",
+          "shield",
+          "item",
+          "talent",
+          "material",
+          "class",
+          "race",
+          "location",
+          "faction",
+          "quest_template",
+          "status_effect",
+          "recipe",
+          "creature_template",
+          "other"
+        ]
+      },
+      "ContentUpsertInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "playerRef",
+          "worldRef",
+          "campaignRef",
+          "idempotencyKey",
+          "contentType",
+          "code",
+          "name",
+          "description",
+          "mechanics",
+          "requirements",
+          "presentation",
+          "tags",
+          "schemaVersion",
+          "status"
+        ],
+        "properties": {
+          "playerRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "worldRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "campaignRef": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Code"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "idempotencyKey": {
+            "$ref": "#/components/schemas/IdempotencyKey"
+          },
+          "contentType": {
+            "$ref": "#/components/schemas/ContentType"
+          },
+          "code": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mechanics": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "requirements": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "active",
+              "inactive",
+              "archived"
+            ]
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "ActorContent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Content"
+          },
+          {
+            "type": "object",
+            "required": [
+              "state",
+              "rank",
+              "progress",
+              "mastery",
+              "equipped",
+              "quantity"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "locked",
+                  "learning",
+                  "known",
+                  "mastered"
+                ]
+              },
+              "rank": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "progress": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "mastery": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "equipped": {
+                "type": "boolean"
+              },
+              "quantity": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "notes": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "linkMetadata": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        ]
+      },
+      "ActorContentManageInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "playerRef",
+          "worldRef",
+          "campaignRef",
+          "operation"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "enum": [
+                    "learn",
+                    "grant",
+                    "update",
+                    "equip",
+                    "unequip",
+                    "remove"
+                  ]
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "idempotencyKey"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "not": {
+                    "const": "list"
+                  }
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "contentRef",
+                "contentType"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "update"
+                }
+              },
+              "required": [
+                "operation"
+              ]
+            },
+            "then": {
+              "required": [
+                "changes"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "playerRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "worldRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "campaignRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "get",
+              "list",
+              "learn",
+              "grant",
+              "update",
+              "equip",
+              "unequip",
+              "remove"
+            ]
+          },
+          "contentRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "contentType": {
+            "$ref": "#/components/schemas/ContentType"
+          },
+          "idempotencyKey": {
+            "$ref": "#/components/schemas/IdempotencyKey",
+            "description": "Obrigatória para todas as operações de escrita."
+          },
+          "changes": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "locked",
+                  "learning",
+                  "known",
+                  "mastered"
+                ]
+              },
+              "rank": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "progress": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "mastery": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "equipped": {
+                "type": "boolean"
+              },
+              "quantity": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "notes": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "metadata": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        }
+      },
+      "RemovalResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "actorRef",
+          "contentRef",
+          "removed"
+        ],
+        "properties": {
+          "actorRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "contentRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "removed": {
+            "const": true
+          }
+        }
+      },
+      "EventInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "playerRef",
+          "worldRef",
+          "campaignRef",
+          "eventType",
+          "title",
+          "payload",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "playerRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "worldRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "campaignRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "actorRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "eventType": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "payload": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "idempotencyKey": {
+            "$ref": "#/components/schemas/IdempotencyKey"
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "campaignRef",
+          "actorRef",
+          "eventType",
+          "title",
+          "payload",
+          "createdAt"
+        ],
+        "properties": {
+          "campaignRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "actorRef": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Code"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "eventType": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "title": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "WorldSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ref",
+          "name",
+          "description"
+        ],
+        "properties": {
+          "ref": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CampaignSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ref",
+          "name",
+          "status",
+          "currentTime",
+          "hasProtagonist"
+        ],
+        "properties": {
+          "ref": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "active",
+              "paused",
+              "completed",
+              "archived"
+            ]
+          },
+          "currentTime": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hasProtagonist": {
+            "type": "boolean",
+            "description": "Verdadeiro quando a Campaign contém um Actor character cujo code coincide com playerRef."
+          }
+        }
+      },
+      "PlayerState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ref",
+          "displayName"
+        ],
+        "properties": {
+          "ref": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "displayName": {
+            "type": "string"
+          }
+        }
+      },
+      "WorldState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ref",
+          "name",
+          "description",
+          "metadata"
+        ],
+        "properties": {
+          "ref": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "CampaignState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ref",
+          "name",
+          "status",
+          "currentTime",
+          "metadata"
+        ],
+        "properties": {
+          "ref": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "active",
+              "paused",
+              "completed",
+              "archived"
+            ]
+          },
+          "currentTime": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "GameState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "player",
+          "world",
+          "campaign",
+          "protagonist",
+          "mainActors",
+          "linkedContent",
+          "recentEvents"
+        ],
+        "properties": {
+          "player": {
+            "$ref": "#/components/schemas/PlayerState"
+          },
+          "world": {
+            "$ref": "#/components/schemas/WorldState"
+          },
+          "campaign": {
+            "$ref": "#/components/schemas/CampaignState"
+          },
+          "protagonist": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Actor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mainActors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Actor"
+            }
+          },
+          "linkedContent": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {}
+            }
+          },
+          "recentEvents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          }
+        }
+      }
     }
   }
 }

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { actorRefSchema } from '../actors/actors.schemas.js';
 import {
-  createEventSchema, listCampaignActorsSchema, loadGameSchema, manageActorContentSchema, startGameSchema,
+  createEventSchema, listCampaignActorsSchema, listPlayerWorldsSchema, listWorldCampaignsSchema, loadGameSchema, manageActorContentSchema, startGameSchema,
   patchActorSchema, upsertActorSchema, upsertContentSchema,
 } from './gpt.schemas.js';
 import { createGptService } from './gpt.service.js';
@@ -16,6 +16,12 @@ export function createGptRouter(repository: GptRepository) {
   });
   router.post('/game/start', async (request, response, next) => {
     try { response.json(await service.startGame(startGameSchema.parse(request.body))); } catch (error) { next(error); }
+  });
+  router.get('/players/:playerRef/worlds', async (request, response, next) => {
+    try { response.json(await service.listPlayerWorlds(listPlayerWorldsSchema.parse(request.params))); } catch (error) { next(error); }
+  });
+  router.get('/players/:playerRef/worlds/:worldRef/campaigns', async (request, response, next) => {
+    try { response.json(await service.listWorldCampaigns(listWorldCampaignsSchema.parse(request.params))); } catch (error) { next(error); }
   });
   router.get('/campaigns/:campaignRef/actors', async (request, response, next) => {
     try {

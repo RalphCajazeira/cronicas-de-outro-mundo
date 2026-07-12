@@ -1,12 +1,14 @@
 import type { GptRepository } from './gpt.types.js';
 import type {
   CreateEventInput, ListCampaignActorsInput, LoadGameInput, ManageActorContentInput,
-  PatchActorInput, StartGameInput, UpsertActorInput, UpsertContentInput,
+  ListPlayerWorldsInput, ListWorldCampaignsInput, PatchActorInput, StartGameInput, UpsertActorInput, UpsertContentInput,
 } from './gpt.schemas.js';
 
 export function createGptService(repository: GptRepository) {
   return {
     loadGame: (input: LoadGameInput) => repository.loadGame(input),
+    listPlayerWorlds: (input: ListPlayerWorldsInput) => repository.listPlayerWorlds(input),
+    listWorldCampaigns: (input: ListWorldCampaignsInput) => repository.listWorldCampaigns(input),
     startGame: (input: StartGameInput) => repository.startGame(input),
     listCampaignActors: (input: ListCampaignActorsInput) => repository.listCampaignActors(input),
     upsertActor: (input: UpsertActorInput) => repository.upsertActor(input),

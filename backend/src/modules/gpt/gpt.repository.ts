@@ -3,15 +3,16 @@ import {
   ActorContentState, ActorStatus, ActorType, CampaignStatus, ContentStatus, ContentType, Prisma,
 } from '../../generated/prisma/client.js';
 import { prisma } from '../../shared/database/prisma.js';
+import { resolveBase, resolvePlayer, resolveScope, type DbClient } from '../../shared/database/game-scope.js';
 import { ConflictError, NotFoundError } from '../../shared/errors/app-error.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
+import { scopedActorKey } from '../actors/actors.repository.js';
+import { findScopedContent } from '../content/content.repository.js';
 import type {
   CreateEventInput, ListCampaignActorsInput, LoadGameInput, ManageActorContentInput,
-  PatchActorInput, StartGameInput, UpsertActorInput, UpsertContentInput,
+  ListPlayerWorldsInput, ListWorldCampaignsInput, PatchActorInput, StartGameInput, UpsertActorInput, UpsertContentInput,
 } from './gpt.schemas.js';
 import type { ApiResult, GptRepository } from './gpt.types.js';
-
-type DbClient = Prisma.TransactionClient | typeof prisma;
 
 const actorSelect = {
   id: true, code: true, name: true, actorType: true, species: true, className: true, role: true,
@@ -67,26 +68,6 @@ async function executeIdempotent(
   }
 }
 
-async function resolveBase(client: DbClient, refs: { playerRef: string; worldRef: string }) {
-  const player = await client.player.findUnique({ where: { slug: refs.playerRef } });
-  if (player === null) throw new NotFoundError('Player');
-  const world = await client.world.findUnique({ where: { playerId_code: { playerId: player.id, code: refs.worldRef } } });
-  if (world === null) throw new NotFoundError('World');
-  return { player, world };
-}
-
-async function resolveScope(client: DbClient, refs: { playerRef: string; worldRef: string; campaignRef: string }) {
-  const { player, world } = await resolveBase(client, refs);
-  const campaign = await client.campaign.findUnique({ where: { worldId_code: { worldId: world.id, code: refs.campaignRef } } });
-  if (campaign === null) throw new NotFoundError('Campaign');
-  return { player, world, campaign };
-}
-
-function actorWhere(campaignId: string, reference: string): Prisma.ActorWhereInput {
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reference);
-  return { campaignId, OR: [{ code: reference }, ...(uuid ? [{ id: reference }] : [])] };
-}
-
 function actorDto(actor: Record<string, unknown>) {
   return {
     code: actor.code, name: actor.name, actorType: normalizeEnum(actor.actorType as string), species: actor.species,
@@ -115,25 +96,9 @@ function actorContentDto(link: Record<string, unknown> & { contentDefinition: Re
 }
 
 async function findActor(client: DbClient, campaignId: string, reference: string) {
-  const actor = await client.actor.findFirst({ where: actorWhere(campaignId, reference), select: actorSelect });
+  const actor = await client.actor.findUnique({ where: scopedActorKey(campaignId, reference), select: actorSelect });
   if (actor === null) throw new NotFoundError('Actor');
   return actor;
-}
-
-async function findContent(client: DbClient, worldId: string, campaignId: string, reference: string, type: string) {
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reference);
-  const items = await client.contentDefinition.findMany({
-    where: {
-      worldId,
-      contentType: type.toUpperCase() as ContentType,
-      OR: [{ code: reference }, ...(uuid ? [{ id: reference }] : [])],
-      AND: [{ OR: [{ campaignId }, { campaignId: null }] }],
-    },
-    take: 2,
-  });
-  const item = items.find((candidate) => candidate.campaignId === campaignId) ?? items[0];
-  if (item === undefined) throw new NotFoundError('Content');
-  return item;
 }
 
 function actorUpdateData(input: UpsertActorInput | PatchActorInput): Prisma.ActorUpdateInput {
@@ -195,9 +160,9 @@ function linkUpdateData(input: ManageActorContentInput): Prisma.ActorContentUpda
 async function loadGameState(client: DbClient, input: LoadGameInput) {
   const { player, world, campaign } = await resolveScope(client, input);
   const [actors, links, events] = await Promise.all([
-    client.actor.findMany({ where: { campaignId: campaign.id }, select: actorSelect, orderBy: [{ role: 'asc' }, { name: 'asc' }], take: 50 }),
-    client.actorContent.findMany({ where: { actor: { campaignId: campaign.id } }, include: { ...contentInclude, actor: { select: { code: true } } }, orderBy: { updatedAt: 'desc' }, take: 100 }),
-    client.gameEvent.findMany({ where: { campaignId: campaign.id }, include: { actor: { select: { code: true } } }, orderBy: { createdAt: 'desc' }, take: 20 }),
+    client.actor.findMany({ where: { campaignId: campaign.id }, select: actorSelect, orderBy: [{ role: 'asc' }, { name: 'asc' }, { code: 'asc' }], take: 50 }),
+    client.actorContent.findMany({ where: { actor: { campaignId: campaign.id } }, include: { ...contentInclude, actor: { select: { code: true } } }, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], take: 100 }),
+    client.gameEvent.findMany({ where: { campaignId: campaign.id }, include: { actor: { select: { code: true } } }, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], take: 20 }),
   ]);
   const protagonist = actors.find((actor) => actor.code === player.slug && actor.actorType === ActorType.CHARACTER) ?? null;
   return {
@@ -214,6 +179,32 @@ async function loadGameState(client: DbClient, input: LoadGameInput) {
 export const prismaGptRepository: GptRepository = {
   async loadGame(input: LoadGameInput) {
     return loadGameState(prisma, input);
+  },
+
+  async listPlayerWorlds(input: ListPlayerWorldsInput) {
+    const player = await resolvePlayer(prisma, input);
+    const worlds = await prisma.world.findMany({
+      where: { playerId: player.id },
+      select: { code: true, name: true, description: true },
+      orderBy: { code: 'asc' },
+    });
+    return worlds.map((world) => ({ ref: world.code, name: world.name, description: world.description }));
+  },
+
+  async listWorldCampaigns(input: ListWorldCampaignsInput) {
+    const { player, world } = await resolveBase(prisma, input);
+    const campaigns = await prisma.campaign.findMany({
+      where: { worldId: world.id },
+      select: {
+        code: true, name: true, status: true, currentTime: true,
+        actors: { where: { code: player.slug, actorType: ActorType.CHARACTER }, select: { code: true }, take: 1 },
+      },
+      orderBy: { code: 'asc' },
+    });
+    return campaigns.map((campaign) => ({
+      ref: campaign.code, name: campaign.name, status: normalizeEnum(campaign.status), currentTime: campaign.currentTime,
+      hasProtagonist: campaign.actors.length > 0,
+    }));
   },
 
   async startGame(input: StartGameInput) {
@@ -264,7 +255,7 @@ export const prismaGptRepository: GptRepository = {
 
   async listCampaignActors(input: ListCampaignActorsInput) {
     const { campaign } = await resolveScope(prisma, input);
-    const actors = await prisma.actor.findMany({ where: { campaignId: campaign.id }, select: actorSelect, orderBy: { name: 'asc' } });
+    const actors = await prisma.actor.findMany({ where: { campaignId: campaign.id }, select: actorSelect, orderBy: [{ name: 'asc' }, { code: 'asc' }] });
     return actors.map(actorDto);
   },
 
@@ -319,10 +310,13 @@ export const prismaGptRepository: GptRepository = {
       const { world, campaign } = await resolveScope(client, input);
       const actor = await findActor(client, campaign.id, actorRef);
       if (input.operation === 'list') {
-        const links = await client.actorContent.findMany({ where: { actorId: actor.id }, include: contentInclude, orderBy: { contentDefinition: { name: 'asc' } } });
+        const links = await client.actorContent.findMany({
+          where: { actorId: actor.id }, include: contentInclude,
+          orderBy: [{ contentDefinition: { name: 'asc' } }, { contentDefinition: { contentType: 'asc' } }, { contentDefinition: { code: 'asc' } }],
+        });
         return links.map(actorContentDto);
       }
-      const definition = await findContent(client, world.id, campaign.id, input.contentRef ?? '', input.contentType ?? 'other');
+      const definition = await findScopedContent(client, { worldId: world.id, campaignId: campaign.id }, input.contentRef ?? '', input.contentType ?? 'other');
       const link = await client.actorContent.findUnique({ where: { actorId_contentDefinitionId: { actorId: actor.id, contentDefinitionId: definition.id } }, include: contentInclude });
       if (input.operation === 'get') {
         if (link === null) throw new NotFoundError('Actor content');

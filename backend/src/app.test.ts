@@ -14,8 +14,11 @@ const config: AppConfig = { NODE_ENV: 'test', HOST: '0.0.0.0', PORT: 3000, DATAB
 const actor = { id: '7e7b7cbe-5767-47de-a0b5-4b7bc9365c89', code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER, species: null, className: 'Aventureiro', level: 1, xp: 0, gold: 0, health: 20, maxHealth: 20, mana: 10, maxMana: 10, attributes: { strength: 5 }, resistances: {}, affinities: {}, status: ActorStatus.ACTIVE };
 const contentItem = { state: 'LEARNING', rank: 1, progress: 10, mastery: 0, equipped: false, quantity: 1, notes: 'Treino inicial com Lyra', contentDefinition: { code: 'wind_breeze_step', name: 'Passo da Brisa', contentType: 'SKILL', description: 'Movimento pelo vento.', mechanics: { effect: 'mobility' }, requirements: { level: 1 }, presentation: { element: 'wind' }, tags: ['wind'], schemaVersion: 1, status: 'ACTIVE' } };
 const definition: ContentDefinition = { id: 'b41c2a1c-e2d2-4498-a7be-1f07cd85de1a', worldId: 'e2dc20e8-51dc-47d2-a5be-b841d08fa610', campaignId: null, code: 'wind_breeze_step', name: 'Passo da Brisa', contentType: ContentType.SKILL, description: null, mechanics: {}, requirements: {}, presentation: {}, tags: ['wind'], schemaVersion: 1, status: ContentStatus.ACTIVE, metadata: {}, createdAt: new Date(), updatedAt: new Date() };
+const scope = { playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' };
+const scopeQuery = 'playerRef=ralph&worldRef=elarion&campaignRef=main-campaign';
 const emptyGptRepository: GptRepository = {
-  loadGame: () => Promise.resolve({}), startGame: () => Promise.resolve({}), listCampaignActors: () => Promise.resolve([]), upsertActor: () => Promise.resolve({}),
+  loadGame: () => Promise.resolve({}), listPlayerWorlds: () => Promise.resolve([]), listWorldCampaigns: () => Promise.resolve([]),
+  startGame: () => Promise.resolve({}), listCampaignActors: () => Promise.resolve([]), upsertActor: () => Promise.resolve({}),
   patchActor: () => Promise.resolve({}), upsertContent: () => Promise.resolve({}), manageActorContent: () => Promise.resolve({}), createEvent: () => Promise.resolve({}),
 };
 
@@ -24,6 +27,8 @@ function appWith(
   contentRepository: ContentRepository = { findByReference: () => Promise.resolve(definition) },
   gptRepository: GptRepository = {
     loadGame: (input) => Promise.resolve({ ...input, protagonist: { code: 'ralph' } }),
+    listPlayerWorlds: () => Promise.resolve([{ ref: 'elarion', name: 'Elarion', description: null }]),
+    listWorldCampaigns: () => Promise.resolve([{ ref: 'main-campaign', name: 'Campanha Principal', status: 'active', currentTime: null, hasProtagonist: true }]),
     startGame: (input) => Promise.resolve({ player: { ref: input.playerRef }, world: { ref: input.worldRef }, campaign: { ref: input.campaignRef }, protagonist: input.protagonist }),
     listCampaignActors: () => Promise.resolve([{ code: 'ralph', actorType: 'character' }]),
     upsertActor: (input) => Promise.resolve({ code: input.code, name: input.name, actorType: input.actorType }),
@@ -63,23 +68,34 @@ describe('HTTP API', () => {
     expect(response.body).toMatchObject({ servers: [{ url: 'https://rpg.example.com' }] });
     expect(getOfficialContract()).toMatchObject({ servers: [{ url: 'https://api.example.com' }] });
   });
-  it('rejects a private route without x-rpg-key', async () => { expect((await request(appWith()).get('/api/v1/characters/ralph')).status).toBe(401); });
-  it('rejects a private route with the wrong x-rpg-key', async () => { expect((await request(appWith()).get('/api/v1/characters/ralph').set('x-rpg-key', 'wrong-key')).status).toBe(401); });
-  it('reaches the controller with a valid key and normalizes a character', async () => { const response = await request(appWith()).get('/api/v1/characters/ralph').set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toEqual({ code: 'ralph', name: 'Ralph', actorType: 'character', species: null, className: 'Aventureiro', level: 1, xp: 0, gold: 0, health: 20, maxHealth: 20, mana: 10, maxMana: 10, attributes: { strength: 5 }, resistances: {}, affinities: {}, status: 'active' }); expect(response.body).not.toHaveProperty('id'); });
-  it('validates an invalid characterRef', async () => { expect((await request(appWith()).get('/api/v1/characters/not%20valid').set('x-rpg-key', 'test-key')).status).toBe(400); });
-  it('returns 404 for a missing character', async () => { const repository: ActorRepository = { findByReference: () => Promise.resolve(null), listContent: () => Promise.resolve(null) }; expect((await request(appWith(repository)).get('/api/v1/characters/missing').set('x-rpg-key', 'test-key')).status).toBe(404); });
-  it('normalizes character content', async () => { const response = await request(appWith()).get('/api/v1/characters/ralph/content').set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toEqual([expect.objectContaining({ code: 'wind_breeze_step', contentType: 'skill', state: 'learning', status: 'active', progress: 10, notes: 'Treino inicial com Lyra', mechanics: { effect: 'mobility' } })]); expect(JSON.stringify(response.body)).not.toContain('contentDefinition'); });
-  it('normalizes content and omits raw Prisma fields', async () => { const response = await request(appWith()).get('/api/v1/content/wind_breeze_step').set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toMatchObject({ code: 'wind_breeze_step', contentType: 'skill', status: 'active' }); expect(response.body).not.toHaveProperty('id'); expect(response.body).not.toHaveProperty('worldId'); });
-  it('returns a contract-safe 404 for a missing content definition', async () => { const repository: ContentRepository = { findByReference: () => Promise.resolve(null) }; const response = await request(appWith(undefined, repository)).get('/api/v1/content/missing').set('x-rpg-key', 'test-key'); expect(response.status).toBe(404); expect(response.body).toEqual({ error: { code: 'NOT_FOUND', message: 'Content not found' } }); });
-  it('does not expose repository errors', async () => { const repository: ActorRepository = { findByReference: () => Promise.reject(new Error('postgresql://secret@remote/internal Prisma failure')), listContent: () => Promise.resolve([]) }; const response = await request(appWith(repository)).get('/api/v1/actors/ralph').set('x-rpg-key', 'test-key'); expect(response.status).toBe(500); expect(JSON.stringify(response.body)).not.toContain('Prisma'); expect(JSON.stringify(response.body)).not.toContain('secret'); });
-  it('loads the game with defaults through the protected GPT API', async () => {
-    const response = await request(appWith()).post('/api/v1/game/load').set('x-rpg-key', 'test-key').send({});
+  it('rejects a private route without x-rpg-key', async () => { expect((await request(appWith()).get(`/api/v1/characters/ralph?${scopeQuery}`)).status).toBe(401); });
+  it('rejects a private route with the wrong x-rpg-key', async () => { expect((await request(appWith()).get(`/api/v1/characters/ralph?${scopeQuery}`).set('x-rpg-key', 'wrong-key')).status).toBe(401); });
+  it('reaches the controller with a valid key and normalizes a character', async () => { const response = await request(appWith()).get(`/api/v1/characters/ralph?${scopeQuery}`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toEqual({ code: 'ralph', name: 'Ralph', actorType: 'character', species: null, className: 'Aventureiro', level: 1, xp: 0, gold: 0, health: 20, maxHealth: 20, mana: 10, maxMana: 10, attributes: { strength: 5 }, resistances: {}, affinities: {}, status: 'active' }); expect(response.body).not.toHaveProperty('id'); });
+  it('validates an invalid characterRef', async () => { expect((await request(appWith()).get(`/api/v1/characters/not%20valid?${scopeQuery}`).set('x-rpg-key', 'test-key')).status).toBe(400); });
+  it('returns 404 for a missing character', async () => { const repository: ActorRepository = { findByReference: () => Promise.resolve(null), listContent: () => Promise.resolve(null) }; expect((await request(appWith(repository)).get(`/api/v1/characters/missing?${scopeQuery}`).set('x-rpg-key', 'test-key')).status).toBe(404); });
+  it('normalizes character content', async () => { const response = await request(appWith()).get(`/api/v1/characters/ralph/content?${scopeQuery}`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toEqual([expect.objectContaining({ code: 'wind_breeze_step', contentType: 'skill', state: 'learning', status: 'active', progress: 10, notes: 'Treino inicial com Lyra', mechanics: { effect: 'mobility' } })]); expect(JSON.stringify(response.body)).not.toContain('contentDefinition'); });
+  it('normalizes content and omits raw Prisma fields', async () => { const response = await request(appWith()).get(`/api/v1/content/wind_breeze_step?${scopeQuery}&contentType=skill`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toMatchObject({ code: 'wind_breeze_step', contentType: 'skill', status: 'active' }); expect(response.body).not.toHaveProperty('id'); expect(response.body).not.toHaveProperty('worldId'); });
+  it('returns a contract-safe 404 for a missing content definition', async () => { const repository: ContentRepository = { findByReference: () => Promise.resolve(null) }; const response = await request(appWith(undefined, repository)).get(`/api/v1/content/missing?${scopeQuery}&contentType=skill`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(404); expect(response.body).toEqual({ error: { code: 'NOT_FOUND', message: 'Content not found' } }); });
+  it('does not expose repository errors', async () => { const repository: ActorRepository = { findByReference: () => Promise.reject(new Error('postgresql://secret@remote/internal Prisma failure')), listContent: () => Promise.resolve([]) }; const response = await request(appWith(repository)).get(`/api/v1/actors/ralph?${scopeQuery}`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(500); expect(JSON.stringify(response.body)).not.toContain('Prisma'); expect(JSON.stringify(response.body)).not.toContain('secret'); });
+  it('requires explicit scope when loading the protected GPT API', async () => {
+    const missingScope = await request(appWith()).post('/api/v1/game/load').set('x-rpg-key', 'test-key').send({});
+    const response = await request(appWith()).post('/api/v1/game/load').set('x-rpg-key', 'test-key').send(scope);
+    expect(missingScope.status).toBe(400);
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({ playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' });
   });
+  it('requires explicit scope on preserved reads and discovers worlds and campaigns without IDs', async () => {
+    const missingScope = await request(appWith()).get('/api/v1/actors/ralph').set('x-rpg-key', 'test-key');
+    const worlds = await request(appWith()).get('/api/v1/players/ralph/worlds').set('x-rpg-key', 'test-key');
+    const campaigns = await request(appWith()).get('/api/v1/players/ralph/worlds/elarion/campaigns').set('x-rpg-key', 'test-key');
+    expect(missingScope.status).toBe(400);
+    expect(worlds.body).toEqual([{ ref: 'elarion', name: 'Elarion', description: null }]);
+    expect(campaigns.body).toEqual([{ ref: 'main-campaign', name: 'Campanha Principal', status: 'active', currentTime: null, hasProtagonist: true }]);
+    expect(JSON.stringify([worlds.body, campaigns.body])).not.toMatch(/"id"|playerId|worldId/);
+  });
   it('starts a complete new game scope through one protected idempotent contract', async () => {
     const response = await request(appWith()).post('/api/v1/game/start').set('x-rpg-key', 'test-key').send({
-      idempotencyKey: 'start-game-http-001', playerDisplayName: 'Ralph', worldName: 'Novo Mundo', campaignName: 'Nova Campanha',
+      ...scope, idempotencyKey: 'start-game-http-001', playerDisplayName: 'Ralph', worldName: 'Novo Mundo', campaignName: 'Nova Campanha',
       protagonist: { code: 'ralph', name: 'Ralph', actorType: 'character', health: 20, maxHealth: 20, mana: 10, maxMana: 10 },
     });
     expect(response.status).toBe(200);
@@ -89,24 +105,24 @@ describe('HTTP API', () => {
     });
   });
   it('lists campaign actors and supports actor upsert and approved patch fields', async () => {
-    const list = await request(appWith()).get('/api/v1/campaigns/main-campaign/actors').set('x-rpg-key', 'test-key');
-    const upsert = await request(appWith()).post('/api/v1/actors/upsert').set('x-rpg-key', 'test-key').send({ idempotencyKey: 'actor-create-001', code: 'orin', name: 'Orin', actorType: 'npc' });
-    const patchResponse = await request(appWith()).patch('/api/v1/actors/orin').set('x-rpg-key', 'test-key').send({ idempotencyKey: 'actor-patch-001', health: 7 });
+    const list = await request(appWith()).get('/api/v1/campaigns/main-campaign/actors?playerRef=ralph&worldRef=elarion').set('x-rpg-key', 'test-key');
+    const upsert = await request(appWith()).post('/api/v1/actors/upsert').set('x-rpg-key', 'test-key').send({ ...scope, idempotencyKey: 'actor-create-001', code: 'orin', name: 'Orin', actorType: 'npc' });
+    const patchResponse = await request(appWith()).patch('/api/v1/actors/orin').set('x-rpg-key', 'test-key').send({ ...scope, idempotencyKey: 'actor-patch-001', health: 7 });
     expect(list.body).toEqual([{ code: 'ralph', actorType: 'character' }]);
     expect(upsert.body).toMatchObject({ code: 'orin', actorType: 'npc' });
     expect(patchResponse.body).toMatchObject({ code: 'orin', health: 7 });
   });
   it('rejects arbitrary actor relation fields', async () => {
-    const response = await request(appWith()).patch('/api/v1/actors/ralph').set('x-rpg-key', 'test-key').send({ idempotencyKey: 'actor-patch-002', campaignId: 'forbidden' });
+    const response = await request(appWith()).patch('/api/v1/actors/ralph').set('x-rpg-key', 'test-key').send({ ...scope, idempotencyKey: 'actor-patch-002', campaignId: 'forbidden' });
     expect(response.status).toBe(400);
   });
   it('upserts content and validates actor-content idempotency for writes', async () => {
     const content = await request(appWith()).post('/api/v1/content/upsert').set('x-rpg-key', 'test-key').send({
-      idempotencyKey: 'content-upsert-001', contentType: 'skill', code: 'quiet-step', name: 'Passo Silencioso',
+      ...scope, idempotencyKey: 'content-upsert-001', contentType: 'skill', code: 'quiet-step', name: 'Passo Silencioso',
       description: 'Movimento discreto.', mechanics: {}, requirements: {}, presentation: {}, tags: ['stealth'], schemaVersion: 1, status: 'active',
     });
-    const invalidManage = await request(appWith()).post('/api/v1/actors/ralph/content/manage').set('x-rpg-key', 'test-key').send({ operation: 'learn', contentRef: 'quiet-step', contentType: 'skill' });
-    const manage = await request(appWith()).post('/api/v1/actors/ralph/content/manage').set('x-rpg-key', 'test-key').send({ operation: 'learn', contentRef: 'quiet-step', contentType: 'skill', idempotencyKey: 'learn-quiet-step-001' });
+    const invalidManage = await request(appWith()).post('/api/v1/actors/ralph/content/manage').set('x-rpg-key', 'test-key').send({ ...scope, operation: 'learn', contentRef: 'quiet-step', contentType: 'skill' });
+    const manage = await request(appWith()).post('/api/v1/actors/ralph/content/manage').set('x-rpg-key', 'test-key').send({ ...scope, operation: 'learn', contentRef: 'quiet-step', contentType: 'skill', idempotencyKey: 'learn-quiet-step-001' });
     expect(content.status).toBe(200);
     expect(content.body).toMatchObject({ code: 'quiet-step', contentType: 'skill' });
     expect(invalidManage.status).toBe(400);
@@ -114,7 +130,7 @@ describe('HTTP API', () => {
   });
   it('registers events and requires authentication before input validation', async () => {
     const unauthorized = await request(appWith()).post('/api/v1/events').send({});
-    const event = await request(appWith()).post('/api/v1/events').set('x-rpg-key', 'test-key').send({ campaignRef: 'main-campaign', eventType: 'scene-ended', title: 'Cena encerrada', payload: {}, idempotencyKey: 'event-scene-001' });
+    const event = await request(appWith()).post('/api/v1/events').set('x-rpg-key', 'test-key').send({ ...scope, eventType: 'scene-ended', title: 'Cena encerrada', payload: {}, idempotencyKey: 'event-scene-001' });
     expect(unauthorized.status).toBe(401);
     expect(event.body).toMatchObject({ eventType: 'scene-ended', title: 'Cena encerrada' });
   });
@@ -124,7 +140,7 @@ describe('HTTP API', () => {
       .post('/api/v1/actors/ralph/content/manage')
       .set('x-rpg-key', 'test-key')
       .send({
-        operation: 'update', contentRef: 'wind_breeze_step', contentType: 'skill', idempotencyKey: 'persist-secret-key-001',
+        ...scope, operation: 'update', contentRef: 'wind_breeze_step', contentType: 'skill', idempotencyKey: 'persist-secret-key-001',
         changes: { state: 'learning', progress: 20, notes: 'private narrative secret', metadata: { hidden: 'sensitive value' } },
       });
 
@@ -153,7 +169,7 @@ describe('HTTP API', () => {
     const response = await request(appWith(undefined, undefined, undefined, undefined, (record) => records.push(record)))
       .post('/api/v1/actors/ralph/content/manage')
       .set('x-rpg-key', 'test-key')
-      .send({ operation: 'update', contentRef: 'wind_breeze_step', contentType: 'skill', changes: { progress: 20 } });
+      .send({ ...scope, operation: 'update', contentRef: 'wind_breeze_step', contentType: 'skill', changes: { progress: 20 } });
 
     expect(response.status).toBe(400);
     expect(response.body).toMatchObject({
@@ -176,7 +192,7 @@ describe('HTTP API', () => {
     const response = await request(appWith(undefined, undefined, undefined, undefined, (record) => records.push(record)))
       .post('/api/v1/actors/ralph/content/manage')
       .set('x-rpg-key', 'test-key')
-      .send({ operation: 'list', unexpected: 'private rejected value' });
+      .send({ ...scope, operation: 'list', unexpected: 'private rejected value' });
 
     expect(response.status).toBe(400);
     expect(response.body).toMatchObject({

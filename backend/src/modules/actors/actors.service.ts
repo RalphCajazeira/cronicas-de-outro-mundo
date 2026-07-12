@@ -1,5 +1,6 @@
 import { NotFoundError } from '../../shared/errors/app-error.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
+import type { CampaignReference } from '../../shared/database/game-scope.js';
 import type { ActorContentRecord, ActorRecord, ActorRepository } from './actors.types.js';
 
 export function normalizeActor(actor: ActorRecord) {
@@ -20,13 +21,13 @@ export function normalizeActorContent(item: ActorContentRecord) {
 
 export function createActorsService(repository: ActorRepository) {
   return {
-    async get(reference: string) {
-      const actor = await repository.findByReference(reference);
+    async get(scope: CampaignReference, reference: string) {
+      const actor = await repository.findByReference(scope, reference);
       if (actor === null) throw new NotFoundError('Actor');
       return normalizeActor(actor);
     },
-    async listContent(reference: string) {
-      const content = await repository.listContent(reference);
+    async listContent(scope: CampaignReference, reference: string) {
+      const content = await repository.listContent(scope, reference);
       if (content === null) throw new NotFoundError('Actor');
       return content.map(normalizeActorContent);
     },

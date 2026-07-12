@@ -8,6 +8,7 @@ const actor: ActorRecord = {
   species: null, className: 'Aventureiro', level: 1, xp: 0, gold: 0, health: 20, maxHealth: 20,
   mana: 10, maxMana: 10, attributes: { strength: 5 }, resistances: {}, affinities: {}, status: ActorStatus.ACTIVE,
 };
+const scope = { playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' };
 
 function repository(found: ActorRecord | null = actor): ActorRepository {
   return { findByReference: () => Promise.resolve(found), listContent: () => Promise.resolve([]) };
@@ -15,11 +16,11 @@ function repository(found: ActorRecord | null = actor): ActorRepository {
 
 describe('actors service', () => {
   it('returns a found actor as a normalized DTO', async () => {
-    await expect(createActorsService(repository()).get('ralph')).resolves.toEqual(expect.objectContaining({ code: 'ralph', actorType: 'character', status: 'active' }));
+    await expect(createActorsService(repository()).get(scope, 'ralph')).resolves.toEqual(expect.objectContaining({ code: 'ralph', actorType: 'character', status: 'active' }));
   });
 
   it('rejects a missing actor', async () => {
-    await expect(createActorsService(repository(null)).get('missing')).rejects.toMatchObject({ statusCode: 404, code: 'NOT_FOUND' });
+    await expect(createActorsService(repository(null)).get(scope, 'missing')).rejects.toMatchObject({ statusCode: 404, code: 'NOT_FOUND' });
   });
 
   it('lists and normalizes content without its repository relation wrapper', async () => {
@@ -29,7 +30,7 @@ describe('actors service', () => {
         mechanics: {}, requirements: {}, presentation: {}, tags: ['wind'], schemaVersion: 1, status: 'ACTIVE' },
     };
     const contentRepository: ActorRepository = { findByReference: () => Promise.resolve(actor), listContent: () => Promise.resolve([item]) };
-    const content = await createActorsService(contentRepository).listContent('ralph');
+    const content = await createActorsService(contentRepository).listContent(scope, 'ralph');
     expect(content[0]).toMatchObject({ contentType: 'skill', state: 'learning', status: 'active' });
     expect(content[0]).not.toHaveProperty('contentDefinition');
   });
