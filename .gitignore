@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 backend/src/generated/prisma/
+backend/.secrets/
 .env
 .env.*
 !.env.example
