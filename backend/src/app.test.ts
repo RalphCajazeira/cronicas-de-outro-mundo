@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { ActorStatus, ActorType, ContentStatus, ContentType, type ContentDefinition } from './generated/prisma/client.js';
+import { ActorStatus, ActorType } from './generated/prisma/client.js';
 import { describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import type { AppConfig } from './config/env.js';
@@ -11,13 +11,14 @@ import { getOfficialContract } from './modules/openapi/openapi.routes.js';
 import type { AuditLogWriter, HttpAuditRecord } from './shared/http/request-audit.js';
 import { actorMechanicalSheetFixture } from '../tests/support/actor-mechanics-fixture.js';
 import { getInitialAttributePreset } from './modules/rules/core-v1/index.js';
+import { actorContentFixture, publishedContentFixture, skillPublicationInput } from '../tests/support/content-fixture.js';
 
 const config: AppConfig = { NODE_ENV: 'test', HOST: '0.0.0.0', PORT: 3000, DATABASE_URL: 'postgresql://test:test@localhost:5432/test', DIRECT_URL: 'postgresql://test:test@localhost:5432/test', RPG_API_KEY: 'test-key' };
 const primaryAttributes = getInitialAttributePreset('balanced');
 const mechanicalSheet = actorMechanicalSheetFixture(primaryAttributes);
 const actor = { id: '7e7b7cbe-5767-47de-a0b5-4b7bc9365c89', code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER, species: null, className: 'Aventureiro', role: null, description: null, level: 1, xp: 0, gold: 0, appearance: {}, personality: {}, metadata: {}, status: ActorStatus.ACTIVE, mechanicalSheet };
-const contentItem = { state: 'LEARNING', rank: 1, progress: 10, mastery: 0, equipped: false, quantity: 1, notes: 'Treino inicial com Lyra', contentDefinition: { code: 'wind_breeze_step', name: 'Passo da Brisa', contentType: 'SKILL', description: 'Movimento pelo vento.', mechanics: { effect: 'mobility' }, requirements: { level: 1 }, presentation: { element: 'wind' }, tags: ['wind'], schemaVersion: 1, status: 'ACTIVE' } };
-const definition: ContentDefinition = { id: 'b41c2a1c-e2d2-4498-a7be-1f07cd85de1a', worldId: 'e2dc20e8-51dc-47d2-a5be-b841d08fa610', campaignId: null, code: 'wind_breeze_step', name: 'Passo da Brisa', contentType: ContentType.SKILL, description: null, mechanics: {}, requirements: {}, presentation: {}, tags: ['wind'], schemaVersion: 1, status: ContentStatus.ACTIVE, metadata: {}, createdAt: new Date(), updatedAt: new Date() };
+const contentItem = actorContentFixture();
+const definition = publishedContentFixture();
 const scope = { playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' };
 const scopeQuery = 'playerRef=ralph&worldRef=elarion&campaignRef=main-campaign';
 const startGameBody = {
@@ -40,7 +41,14 @@ const startGameBody = {
   initialContentPackages: [{
     definition: {
       mode: 'create', scope: 'world', contentType: 'weapon', code: 'longbow', name: 'Arco', description: 'Descrição privada.',
-      mechanics: { equipBehavior: 'wieldable', private: 'secret mechanics' }, requirements: {}, presentation: {}, tags: ['weapon'], schemaVersion: 1, status: 'active',
+      profile: {
+        schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical', contentKind: 'weapon',
+        code: 'longbow', name: 'Arco', description: 'Descrição privada.', lore: 'segredo narrativo', presentation: {}, tags: ['weapon'],
+        tier: 1, rarity: 'common', activation: { type: 'active' }, cost: { type: 'none' }, actionProfile: 'bow',
+        targeting: { type: 'single_target', rangeBand: 'far', maxTargets: 1 },
+        damageComponents: [{ id: 'arrow', channel: 'physical', element: null, baseDamage: 3, scaling: 'full', canCrit: true }],
+        handedness: 'two_handed', weaponTags: ['bow'],
+      }, presentation: {}, tags: ['weapon'], status: 'active',
     },
     protagonistLink: { state: 'known', rank: 0, progress: 0, mastery: 0, equipped: true, quantity: 1, metadata: { slotHint: 'hands' } },
   }],
@@ -103,7 +111,7 @@ describe('HTTP API', () => {
   it('reaches the controller with a valid key and normalizes a character', async () => { const response = await request(appWith()).get(`/api/v1/characters/ralph?${scopeQuery}`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toEqual({ code: 'ralph', name: 'Ralph', actorType: 'character', species: null, className: 'Aventureiro', role: null, description: null, level: 1, xp: 0, gold: 0, appearance: {}, personality: {}, metadata: {}, status: 'active', ...mechanicalSheet }); expect(response.body).not.toHaveProperty('id'); expect(JSON.stringify(response.body)).not.toMatch(/inputHash|rulesetVersionId|[0-9a-f]{8}-[0-9a-f-]{27}/); });
   it('validates an invalid characterRef', async () => { expect((await request(appWith()).get(`/api/v1/characters/not%20valid?${scopeQuery}`).set('x-rpg-key', 'test-key')).status).toBe(400); });
   it('returns 404 for a missing character', async () => { const repository: ActorRepository = { findByReference: () => Promise.resolve(null), listContent: () => Promise.resolve(null) }; expect((await request(appWith(repository)).get(`/api/v1/characters/missing?${scopeQuery}`).set('x-rpg-key', 'test-key')).status).toBe(404); });
-  it('normalizes character content', async () => { const response = await request(appWith()).get(`/api/v1/characters/ralph/content?${scopeQuery}`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toEqual([expect.objectContaining({ code: 'wind_breeze_step', contentType: 'skill', state: 'learning', status: 'active', progress: 10, notes: 'Treino inicial com Lyra', mechanics: { effect: 'mobility' } })]); expect(JSON.stringify(response.body)).not.toContain('contentDefinition'); });
+  it('normalizes character content', async () => { const response = await request(appWith()).get(`/api/v1/characters/ralph/content?${scopeQuery}`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toEqual([expect.objectContaining({ code: 'wind_breeze_step', contentType: 'skill', state: 'learning', status: 'active', progress: 10, notes: 'Treino inicial com Lyra', versionNumber: 1 })]); expect(JSON.stringify(response.body)).not.toContain('contentDefinition'); });
   it('normalizes content and omits raw Prisma fields', async () => { const response = await request(appWith()).get(`/api/v1/content/wind_breeze_step?${scopeQuery}&contentType=skill`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toMatchObject({ code: 'wind_breeze_step', contentType: 'skill', status: 'active' }); expect(response.body).not.toHaveProperty('id'); expect(response.body).not.toHaveProperty('worldId'); });
   it('returns a contract-safe 404 for a missing content definition', async () => { const repository: ContentRepository = { findByReference: () => Promise.resolve(null) }; const response = await request(appWith(undefined, repository)).get(`/api/v1/content/missing?${scopeQuery}&contentType=skill`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(404); expect(response.body).toEqual({ error: { code: 'NOT_FOUND', message: 'Content not found' } }); });
   it('does not expose repository errors', async () => { const repository: ActorRepository = { findByReference: () => Promise.reject(new Error('postgresql://secret@remote/internal Prisma failure')), listContent: () => Promise.resolve([]) }; const response = await request(appWith(repository)).get(`/api/v1/actors/ralph?${scopeQuery}`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(500); expect(JSON.stringify(response.body)).not.toContain('Prisma'); expect(JSON.stringify(response.body)).not.toContain('secret'); });
@@ -134,9 +142,17 @@ describe('HTTP API', () => {
   it('rejects a startGame payload above the domain limit before repository persistence', async () => {
     const repository = { ...emptyGptRepository, startGame: () => Promise.reject(new Error('repository must not be reached')) };
     const firstPackage = startGameBody.initialContentPackages[0]!;
-    const oversized = { ...startGameBody, initialContentPackages: [{
-      ...firstPackage, definition: { ...firstPackage.definition, mechanics: { equipBehavior: 'wieldable', text: 'x'.repeat(82_000) } },
-    }] };
+    const oversized = { ...startGameBody, initialContentPackages: Array.from({ length: 24 }, (_, index) => {
+      const code = `oversized-${String(index).padStart(2, '0')}`;
+      const name = `Oversized ${index}`;
+      return {
+        ...firstPackage,
+        definition: {
+          ...firstPackage.definition, code, name,
+          profile: { ...firstPackage.definition.profile, code, name, lore: '😀'.repeat(800) },
+        },
+      };
+    }) };
     const response = await request(appWith(undefined, undefined, repository)).post('/api/v1/game/start').set('x-rpg-key', 'test-key').send(oversized);
     expect(response.status).toBe(400);
     expect(response.body).toMatchObject({ error: { code: 'INVALID_INPUT', issues: [expect.objectContaining({ path: '$' })] } });
@@ -157,7 +173,7 @@ describe('HTTP API', () => {
     expect(serialized).not.toContain('Premissa narrativa privada');
     expect(serialized).not.toContain('Descrição privada');
     expect(serialized).not.toContain('Personalidade privada');
-    expect(serialized).not.toContain('secret mechanics');
+    expect(serialized).not.toContain('segredo narrativo');
     expect(serialized).not.toContain('start-game-http-001');
     expect(serialized).not.toContain('"strength"');
   });
@@ -177,8 +193,7 @@ describe('HTTP API', () => {
   });
   it('upserts content and validates actor-content idempotency for writes', async () => {
     const content = await request(appWith()).post('/api/v1/content/upsert').set('x-rpg-key', 'test-key').send({
-      ...scope, idempotencyKey: 'content-upsert-001', contentType: 'skill', code: 'quiet-step', name: 'Passo Silencioso',
-      description: 'Movimento discreto.', mechanics: {}, requirements: {}, presentation: {}, tags: ['stealth'], schemaVersion: 1, status: 'active',
+      ...scope, idempotencyKey: 'content-upsert-001', ...skillPublicationInput(),
     });
     const invalidManage = await request(appWith()).post('/api/v1/actors/ralph/content/manage').set('x-rpg-key', 'test-key').send({ ...scope, operation: 'learn', contentRef: 'quiet-step', contentType: 'skill' });
     const manage = await request(appWith()).post('/api/v1/actors/ralph/content/manage').set('x-rpg-key', 'test-key').send({ ...scope, operation: 'learn', contentRef: 'quiet-step', contentType: 'skill', idempotencyKey: 'learn-quiet-step-001' });

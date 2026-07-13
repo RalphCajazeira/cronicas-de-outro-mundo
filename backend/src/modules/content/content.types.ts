@@ -1,4 +1,4 @@
-import type { ContentDefinition } from '../../generated/prisma/client.js';
 import type { GetContentInput } from './content.schemas.js';
+import type { PublishedContent } from './content-publication.service.js';
 
-export interface ContentRepository { findByReference(input: GetContentInput, reference: string): Promise<ContentDefinition | null>; }
+export interface ContentRepository { findByReference(input: GetContentInput, reference: string): Promise<PublishedContent | null>; }

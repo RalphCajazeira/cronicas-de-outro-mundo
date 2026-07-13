@@ -1145,6 +1145,187 @@
           "customRules": { "type": "array", "maxItems": 12, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 500 } }
         }
       },
+      "ContentPresentation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "appearance": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "sensory": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      },
+      "ContentReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["contentKind", "code"],
+        "properties": {
+          "contentKind": { "type": "string", "enum": ["weapon", "armor", "shield", "clothing", "spell", "skill", "talent", "item", "consumable", "status_effect", "race", "class", "creature_template"] },
+          "code": { "$ref": "#/components/schemas/Code" }
+        }
+      },
+      "ContentActivation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type"],
+        "properties": {
+          "type": { "type": "string", "enum": ["passive", "active", "triggered", "reaction"] },
+          "trigger": { "type": "string", "enum": ["on_hit", "on_critical_hit", "on_damage_taken", "on_block", "on_dodge", "on_cast", "on_resource_threshold", "on_scene_start", "on_encounter_start"] },
+          "reactionKind": { "type": "string", "enum": ["block", "dodge", "interrupt", "counter_attack"] }
+        }
+      },
+      "ContentCost": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type"],
+        "properties": {
+          "type": { "type": "string", "enum": ["mana", "sp", "hybrid", "active_defense", "special_dodge", "maintenance", "hp", "none", "custom"] },
+          "amount": { "type": "integer", "minimum": 1 },
+          "mana": { "type": "integer", "minimum": 1 },
+          "sp": { "type": "integer", "minimum": 1 },
+          "resource": { "type": "string", "enum": ["mana", "sp"] },
+          "activationCost": { "type": "integer", "minimum": 1 },
+          "percentBps": { "type": "integer", "minimum": 1 },
+          "resourceRef": { "$ref": "#/components/schemas/Code" }
+        },
+        "description": "Objeto fechado; a coerência entre type e campos é validada pelo backend."
+      },
+      "ContentTargeting": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "rangeBand"],
+        "properties": {
+          "type": { "type": "string", "enum": ["self", "single_target", "multi_target", "area", "chain", "cleave", "weapon_attack"] },
+          "rangeBand": { "type": "string", "enum": ["self", "engaged", "near", "medium", "far"] },
+          "maxTargets": { "type": "integer", "minimum": 1, "maximum": 64 },
+          "areaShape": { "type": "string", "enum": ["circle", "cone", "line", "burst", "zone"] },
+          "chainCount": { "type": "integer", "minimum": 1, "maximum": 64 },
+          "chainInterval": { "type": "integer", "minimum": 50, "maximum": 1000000000 },
+          "targetFalloffBps": { "type": "integer", "minimum": 0, "maximum": 10000 },
+          "damageMultiplierPerTargetBps": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "integer", "minimum": 1, "maximum": 6000 } }
+        }
+      },
+      "ContentDuration": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type"],
+        "properties": {
+          "type": { "type": "string", "enum": ["instant", "ticks", "actions", "scene", "encounter", "permanent"] },
+          "value": { "type": "integer", "minimum": 1, "maximum": 1000000000 }
+        }
+      },
+      "ContentStacking": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type"],
+        "properties": {
+          "type": { "type": "string", "enum": ["none", "refresh", "stack_intensity", "stack_duration", "replace"] },
+          "maxStacks": { "type": "integer", "minimum": 2, "maximum": 20 }
+        }
+      },
+      "DamageComponent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "channel", "element", "baseDamage", "scaling", "canCrit"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/Code" },
+          "channel": { "type": "string", "enum": ["physical", "magical"] },
+          "element": { "type": ["string", "null"], "enum": ["fire", "ice", "lightning", "earth", "wind", "water", "light", "shadow", "poison", "arcane", null] },
+          "baseDamage": { "type": "integer", "minimum": 1 },
+          "scaling": { "type": "string", "enum": ["none", "half", "full"] },
+          "canCrit": { "type": "boolean" }
+        }
+      },
+      "ContentEffect": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type"],
+        "properties": {
+          "type": { "type": "string", "enum": ["damage", "add_damage", "restore_resource", "modify_primary_attribute", "modify_secondary_attribute", "apply_status", "remove_status", "grant_reaction", "movement"] },
+          "damageComponents": { "type": "array", "minItems": 1, "maxItems": 6, "items": { "$ref": "#/components/schemas/DamageComponent" } },
+          "targeting": { "$ref": "#/components/schemas/ContentTargeting" },
+          "resource": { "type": "string", "enum": ["hp", "mana", "sp"] },
+          "amount": { "type": "integer" },
+          "attributeCode": { "type": "string", "enum": ["strength", "vitality", "agility", "dexterity", "intelligence", "wisdom", "perception", "willpower", "luck"] },
+          "secondaryCode": { "type": "string", "enum": ["actorPhysicalPower", "actorMagicalPower", "physicalDefense", "magicalDefense", "accuracy", "evasion", "attackSpeedBps", "castingSpeedBps", "criticalChanceBps", "criticalDamageBps", "movementSpeed", "carryingCapacity", "physicalResistanceBps", "magicalResistanceBps", "maxHp", "maxMana", "maxSp"] },
+          "duration": { "$ref": "#/components/schemas/ContentDuration" },
+          "statusRef": { "$ref": "#/components/schemas/Code" },
+          "stacking": { "$ref": "#/components/schemas/ContentStacking" },
+          "reactionKind": { "type": "string", "enum": ["block", "dodge", "interrupt", "counter_attack"] },
+          "reactionDepth": { "type": "integer", "minimum": 1, "maximum": 2 },
+          "from": { "type": "string", "enum": ["engaged", "near", "medium", "far", "out_of_range"] },
+          "to": { "type": "string", "enum": ["engaged", "near", "medium", "far", "out_of_range"] },
+          "maximumTransitions": { "type": "integer", "minimum": 1, "maximum": 2 }
+        },
+        "description": "Objeto fechado discriminado por type; a coerência cruzada é validada pelo backend."
+      },
+      "ContentRequirements": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "minimumLevel": { "type": "integer", "minimum": 1, "maximum": 20 },
+          "minimumPrimaryAttributes": { "$ref": "#/components/schemas/PrimaryAttributeRequirements" },
+          "requiredContent": { "type": "array", "maxItems": 32, "items": { "$ref": "#/components/schemas/ContentReference" } },
+          "requiredWeaponTags": { "type": "array", "minItems": 1, "maxItems": 24, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
+          "requiredEquipmentTags": { "type": "array", "minItems": 1, "maxItems": 24, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
+          "requiredRuleset": { "const": "core-v1" }
+        }
+      },
+      "PrimaryAttributeRequirements": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "strength": { "type": "integer", "minimum": 1, "maximum": 30 }, "vitality": { "type": "integer", "minimum": 1, "maximum": 30 },
+          "agility": { "type": "integer", "minimum": 1, "maximum": 30 }, "dexterity": { "type": "integer", "minimum": 1, "maximum": 30 },
+          "intelligence": { "type": "integer", "minimum": 1, "maximum": 30 }, "wisdom": { "type": "integer", "minimum": 1, "maximum": 30 },
+          "perception": { "type": "integer", "minimum": 1, "maximum": 30 }, "willpower": { "type": "integer", "minimum": 1, "maximum": 30 },
+          "luck": { "type": "integer", "minimum": 1, "maximum": 30 }
+        }
+      },
+      "CoreV1ContentProfile": {
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "required": ["schemaVersion", "rulesetCode", "profileMode", "contentKind", "code", "name"],
+        "properties": {
+          "schemaVersion": { "const": 1 },
+          "rulesetCode": { "const": "core-v1" },
+          "profileMode": { "type": "string", "enum": ["mechanical", "narrative"] },
+          "contentKind": { "type": "string", "enum": ["weapon", "armor", "shield", "clothing", "spell", "skill", "talent", "item", "consumable", "status_effect", "race", "class", "creature_template"] },
+          "code": { "$ref": "#/components/schemas/Code" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "description": { "type": "string", "minLength": 1, "maxLength": 10000 },
+          "lore": { "type": "string", "minLength": 1, "maxLength": 10000 },
+          "tags": { "type": "array", "maxItems": 24, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
+          "presentation": { "$ref": "#/components/schemas/ContentPresentation" },
+          "tier": { "type": "integer", "minimum": 1, "maximum": 10 },
+          "rarity": { "type": "string", "enum": ["common", "uncommon", "rare", "epic", "legendary", "mythic"] },
+          "activation": { "$ref": "#/components/schemas/ContentActivation" },
+          "cost": { "$ref": "#/components/schemas/ContentCost" },
+          "actionProfile": { "type": "string", "enum": ["quick", "normal", "heavy", "very_heavy", "dagger", "short_sword", "long_sword", "heavy_axe", "bow", "crossbow", "unarmed", "potion", "equipment_swap", "whirlwind", "fireball", "long_spell", "block", "dodge", "interrupt", "counter_attack"] },
+          "targeting": { "$ref": "#/components/schemas/ContentTargeting" },
+          "damageComponents": { "type": "array", "minItems": 1, "maxItems": 6, "items": { "$ref": "#/components/schemas/DamageComponent" } },
+          "effects": { "type": "array", "minItems": 1, "maxItems": 12, "items": { "$ref": "#/components/schemas/ContentEffect" } },
+          "requirements": { "$ref": "#/components/schemas/ContentRequirements" },
+          "handedness": { "type": "string", "enum": ["one_handed", "two_handed", "versatile"] },
+          "weaponTags": { "type": "array", "minItems": 1, "maxItems": 24, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
+          "equipmentSlots": { "type": "array", "minItems": 1, "maxItems": 9, "uniqueItems": true, "items": { "type": "string", "enum": ["main_hand", "off_hand", "head", "chest", "hands", "legs", "feet", "body", "accessory"] } },
+          "consumable": { "type": "boolean" },
+          "duration": { "$ref": "#/components/schemas/ContentDuration" },
+          "stacking": { "$ref": "#/components/schemas/ContentStacking" },
+          "grants": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/components/schemas/ContentReference" } },
+          "passiveModifiers": { "type": "array", "minItems": 1, "maxItems": 12, "items": { "type": "object", "additionalProperties": false, "required": ["target", "amount", "sourceRule"], "properties": { "target": { "type": "string", "enum": ["strength", "vitality", "agility", "dexterity", "intelligence", "wisdom", "perception", "willpower", "luck", "actorPhysicalPower", "actorMagicalPower", "physicalDefense", "magicalDefense", "accuracy", "evasion", "attackSpeedBps", "castingSpeedBps", "criticalChanceBps", "criticalDamageBps", "movementSpeed", "carryingCapacity", "physicalResistanceBps", "magicalResistanceBps", "maxHp", "maxMana", "maxSp", "elementalResistanceBps", "hpRegen", "manaRegen", "spRegen", "manaCostBps", "spCostBps", "hpCostBps"] }, "amount": { "type": "integer" }, "sourceRule": { "type": "string", "enum": ["content_intrinsic", "equipped_content", "granted_content", "status_effect", "ruleset"] } } } },
+          "defense": { "type": "object", "additionalProperties": false, "properties": { "physicalFlatDefense": { "type": "integer", "minimum": 0, "maximum": 300 }, "magicalFlatDefense": { "type": "integer", "minimum": 0, "maximum": 300 }, "physicalResistanceBps": { "type": "integer", "minimum": 0, "maximum": 4000 }, "magicalResistanceBps": { "type": "integer", "minimum": 0, "maximum": 4000 }, "elementalResistanceBps": { "$ref": "#/components/schemas/ElementalResistanceProfile" }, "blockValue": { "type": "integer", "minimum": 0, "maximum": 300 }, "immunities": { "$ref": "#/components/schemas/ContentImmunities" } } },
+          "template": { "type": "object", "additionalProperties": false, "required": ["role", "primaryAttributeBudget", "contentRefs", "tags", "limits"], "properties": { "role": { "type": "string", "enum": ["minion", "standard", "elite", "boss"] }, "primaryAttributeBudget": { "type": "integer", "minimum": 1 }, "contentRefs": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/components/schemas/ContentReference" } }, "tags": { "type": "array", "minItems": 1, "maxItems": 24, "items": { "$ref": "#/components/schemas/Code" } }, "limits": { "type": "object", "additionalProperties": false, "required": ["maxContentRefs", "maxActiveAbilities"], "properties": { "maxContentRefs": { "type": "integer", "minimum": 0, "maximum": 32 }, "maxActiveAbilities": { "type": "integer", "minimum": 0, "maximum": 32 } } } } }
+        },
+        "description": "Perfil core-v1 fechado. Campos mecânicos são coeridos por contentKind/profileMode no backend."
+      },
+      "ElementalResistanceProfile": {
+        "type": "object", "additionalProperties": false,
+        "properties": { "fire": { "type": "integer", "minimum": 0, "maximum": 7500 }, "ice": { "type": "integer", "minimum": 0, "maximum": 7500 }, "lightning": { "type": "integer", "minimum": 0, "maximum": 7500 }, "earth": { "type": "integer", "minimum": 0, "maximum": 7500 }, "wind": { "type": "integer", "minimum": 0, "maximum": 7500 }, "water": { "type": "integer", "minimum": 0, "maximum": 7500 }, "light": { "type": "integer", "minimum": 0, "maximum": 7500 }, "shadow": { "type": "integer", "minimum": 0, "maximum": 7500 }, "poison": { "type": "integer", "minimum": 0, "maximum": 7500 }, "arcane": { "type": "integer", "minimum": 0, "maximum": 7500 } }
+      },
+      "ContentImmunities": {
+        "type": "object", "additionalProperties": false,
+        "properties": { "physical": { "type": "boolean" }, "magical": { "type": "boolean" }, "elements": { "type": "array", "minItems": 1, "maxItems": 10, "uniqueItems": true, "items": { "type": "string", "enum": ["fire", "ice", "lightning", "earth", "wind", "water", "light", "shadow", "poison", "arcane"] } } }
+      },
       "InitialContentDefinition": {
         "type": "object",
         "additionalProperties": false,
@@ -1156,11 +1337,9 @@
           "contentType": { "$ref": "#/components/schemas/ContentType" },
           "name": { "type": "string", "minLength": 1, "maxLength": 200 },
           "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
-          "mechanics": { "$ref": "#/components/schemas/JsonObject" },
-          "requirements": { "$ref": "#/components/schemas/JsonObject" },
-          "presentation": { "$ref": "#/components/schemas/JsonObject" },
-          "tags": { "type": "array", "maxItems": 12, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 50 } },
-          "schemaVersion": { "type": "integer", "minimum": 1 },
+          "profile": { "$ref": "#/components/schemas/CoreV1ContentProfile" },
+          "presentation": { "$ref": "#/components/schemas/ContentPresentation" },
+          "tags": { "type": "array", "maxItems": 24, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 100 } },
           "status": { "const": "active" },
           "metadata": { "$ref": "#/components/schemas/JsonObject", "description": "Até 4096 bytes UTF-8, profundidade 5 e 30 chaves recursivas." },
           "overridesWorldDefinition": { "type": "boolean" }
@@ -1643,17 +1822,20 @@
       },
       "Content": {
         "type": "object",
+        "additionalProperties": false,
         "required": [
           "code",
           "name",
           "contentType",
           "description",
-          "mechanics",
-          "requirements",
+          "profile",
           "presentation",
           "tags",
-          "schemaVersion",
-          "status"
+          "status",
+          "metadata",
+          "versionNumber",
+          "ruleset",
+          "contentProfile"
         ],
         "properties": {
           "code": {
@@ -1671,24 +1853,15 @@
               "null"
             ]
           },
-          "mechanics": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
-          "requirements": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
+          "profile": { "$ref": "#/components/schemas/CoreV1ContentProfile" },
           "presentation": {
-            "$ref": "#/components/schemas/JsonObject"
+            "$ref": "#/components/schemas/ContentPresentation"
           },
           "tags": {
             "type": "array",
             "items": {
               "type": "string"
             }
-          },
-          "schemaVersion": {
-            "type": "integer",
-            "minimum": 1
           },
           "status": {
             "type": "string",
@@ -1701,7 +1874,10 @@
           },
           "metadata": {
             "$ref": "#/components/schemas/JsonObject"
-          }
+          },
+          "versionNumber": { "type": "integer", "minimum": 1 },
+          "ruleset": { "type": "object", "additionalProperties": false, "required": ["code", "revision"], "properties": { "code": { "const": "core-v1" }, "revision": { "type": "string" } } },
+          "contentProfile": { "type": "object", "additionalProperties": false, "required": ["code", "schemaVersion"], "properties": { "code": { "const": "core-v1-content-v1" }, "schemaVersion": { "const": 1 } } }
         }
       },
       "ContentType": {
@@ -1712,7 +1888,9 @@
           "weapon",
           "armor",
           "shield",
+          "clothing",
           "item",
+          "consumable",
           "talent",
           "material",
           "class",
@@ -1738,11 +1916,9 @@
           "code",
           "name",
           "description",
-          "mechanics",
-          "requirements",
+          "profile",
           "presentation",
           "tags",
-          "schemaVersion",
           "status"
         ],
         "properties": {
@@ -1779,24 +1955,15 @@
             "type": "string",
             "minLength": 1
           },
-          "mechanics": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
-          "requirements": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
+          "profile": { "$ref": "#/components/schemas/CoreV1ContentProfile" },
           "presentation": {
-            "$ref": "#/components/schemas/JsonObject"
+            "$ref": "#/components/schemas/ContentPresentation"
           },
           "tags": {
             "type": "array",
             "items": {
               "type": "string"
             }
-          },
-          "schemaVersion": {
-            "type": "integer",
-            "minimum": 1
           },
           "status": {
             "type": "string",
@@ -1810,24 +1977,29 @@
           "metadata": {
             "$ref": "#/components/schemas/JsonObject"
           }
-        }
+        },
+        "description": "Compatibilidade preservada: upsert publica nova versão imutável quando o hash muda; nunca atualiza uma versão existente. profile é obrigatório nos 13 tipos canônicos e null nos tipos genéricos."
       },
       "ActorContent": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/Content"
-          },
-          {
-            "type": "object",
-            "required": [
-              "state",
-              "rank",
-              "progress",
-              "mastery",
-              "equipped",
-              "quantity"
-            ],
-            "properties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code", "name", "contentType", "description", "profile", "presentation", "tags", "status", "metadata",
+          "versionNumber", "ruleset", "contentProfile", "state", "rank", "progress", "mastery", "equipped", "quantity", "notes", "linkMetadata"
+        ],
+        "properties": {
+              "code": { "$ref": "#/components/schemas/Code" },
+              "name": { "type": "string" },
+              "contentType": { "$ref": "#/components/schemas/ContentType" },
+              "description": { "type": ["string", "null"] },
+              "profile": { "$ref": "#/components/schemas/CoreV1ContentProfile" },
+              "presentation": { "$ref": "#/components/schemas/ContentPresentation" },
+              "tags": { "type": "array", "items": { "type": "string" } },
+              "status": { "type": "string", "enum": ["draft", "active", "inactive", "archived"] },
+              "metadata": { "$ref": "#/components/schemas/JsonObject" },
+              "versionNumber": { "type": "integer", "minimum": 1 },
+              "ruleset": { "type": "object", "additionalProperties": false, "required": ["code", "revision"], "properties": { "code": { "const": "core-v1" }, "revision": { "type": "string" } } },
+              "contentProfile": { "type": "object", "additionalProperties": false, "required": ["code", "schemaVersion"], "properties": { "code": { "const": "core-v1-content-v1" }, "schemaVersion": { "const": 1 } } },
               "state": {
                 "type": "string",
                 "enum": [
@@ -1865,9 +2037,7 @@
               "linkMetadata": {
                 "$ref": "#/components/schemas/JsonObject"
               }
-            }
-          }
-        ]
+        }
       },
       "ActorContentManageInput": {
         "type": "object",

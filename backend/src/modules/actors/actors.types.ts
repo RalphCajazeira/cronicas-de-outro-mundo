@@ -1,4 +1,4 @@
-import type { ActorStatus, ActorType, Prisma } from '../../generated/prisma/client.js';
+import type { ActorStatus, ActorType, ContentProfileMode, ContentStatus, ContentType, Prisma } from '../../generated/prisma/client.js';
 import type { CampaignReference } from '../../shared/database/game-scope.js';
 import type { ActorMechanicalSheet } from './actor-mechanics.service.js';
 
@@ -16,10 +16,16 @@ export interface ActorRepository {
 
 export interface ActorContentRecord {
   state: string; rank: number; progress: number; mastery: number; equipped: boolean;
-  quantity: number; notes: string | null;
+  quantity: number; notes: string | null; metadata: Prisma.JsonValue;
   contentDefinition: {
-    code: string; name: string; contentType: string; description: string | null;
-    mechanics: Prisma.JsonValue; requirements: Prisma.JsonValue; presentation: Prisma.JsonValue;
-    tags: Prisma.JsonValue; schemaVersion: number; status: string;
+    code: string; contentType: ContentType; status: ContentStatus;
+  };
+  contentVersion: {
+    id: string; contentDefinitionId: string; rulesetVersionId: string; contentProfileVersionId: string;
+    versionNumber: number; schemaVersion: number; profileMode: ContentProfileMode; name: string;
+    description: string | null; profile: Prisma.JsonValue | null; presentation: Prisma.JsonValue;
+    tags: Prisma.JsonValue; metadata: Prisma.JsonValue; contentHash: string; createdAt: Date;
+    rulesetVersion: { code: string; revision: string };
+    contentProfileVersion: { code: string; schemaVersion: number };
   };
 }

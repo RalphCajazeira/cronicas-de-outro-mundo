@@ -4,7 +4,7 @@
 
 O backend persiste mundos, campanhas, atores, os nove atributos primários, HP/Mana/SP atuais, snapshot derivado, definições de conteúdo, vínculos entre atores e conteúdo e eventos narrativos. Ele valida o contrato e a idempotência das escritas atuais e calcula máximos/derivados pelo ruleset `core-v1`.
 
-O código versionado também possui, desde a Fase 1E, um validador puro para fichas canônicas de conteúdo mecânico. Ele reconhece tier, raridade, dano físico/mágico separado, custos explícitos, perfis temporais, targeting, duração, efeitos, stacking, modificadores e requisitos. Essa fronteira ainda não está ligada ao OpenAPI, às Actions ou à persistência de definições; a integração pertence à Fase 1F. Portanto, o GPT pode usar essas regras como orientação futura, mas não deve afirmar que uma ficha foi validada ou aplicada sem resposta de uma operação backend que venha a expor essa capacidade.
+O validador puro de fichas canônicas está ligado ao contrato e à persistência versionada. Ele reconhece tier, raridade, dano físico/mágico separado, custos explícitos, perfis temporais, targeting, duração, efeitos, stacking, modificadores e requisitos. Uma resposta bem-sucedida de publicação confirma validação estrutural e cria ou reutiliza uma versão; ela não aplica efeitos ao ator, resolve combate ou gasta recursos.
 
 ## O que permanece adiado
 

@@ -5,6 +5,7 @@ import process from 'node:process';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { PrismaClient } from '../src/generated/prisma/client.js';
+import { ensureCoreV1ContentProfileVersion } from '../src/modules/rules/content-profile.registry.js';
 import { ensureCoreV1RulesetVersion } from '../src/modules/rules/ruleset.registry.js';
 import { createAdminUrl, resolveTestDatabaseConfig } from '../tests/support/test-database.js';
 
@@ -120,6 +121,55 @@ async function verifyActorCleanSlatePrecondition(databaseUrl: URL, adminUrl: URL
   console.info('Phase 1D clean-slate precondition verified safely');
 }
 
+async function verifyContentCleanSlatePrecondition(databaseUrl: URL, adminUrl: URL): Promise<void> {
+  await recreateTestDatabase(adminUrl);
+  const client = new Client({ connectionString: databaseUrl.toString() });
+  await client.connect();
+  try {
+    await client.query(migrationSql('20260711183000_init'));
+    await client.query(migrationSql('20260711223000_production_gpt_security'));
+    await client.query(migrationSql('20260713174337_engine_v1_ruleset_persistence'));
+    await client.query(migrationSql('20260713190000_engine_v1_actor_mechanics'));
+    await client.query(`
+      INSERT INTO "Ruleset" ("id", "code", "name")
+      VALUES ('20000000-0000-0000-0000-000000000001', 'content-precondition', 'Content Precondition');
+      INSERT INTO "RulesetVersion" ("id", "rulesetId", "code", "revision", "schemaVersion", "configHash", "configSnapshot")
+      VALUES ('20000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001', 'content-precondition-v1', 'test', 1, repeat('0', 64), '{}');
+      INSERT INTO "Player" ("id", "slug", "displayName", "updatedAt")
+      VALUES ('20000000-0000-0000-0000-000000000003', 'content-precondition-player', 'Content Precondition Player', CURRENT_TIMESTAMP);
+      INSERT INTO "World" ("id", "playerId", "defaultRulesetVersionId", "code", "name", "updatedAt")
+      VALUES ('20000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000002', 'content-precondition-world', 'Content Precondition World', CURRENT_TIMESTAMP);
+      INSERT INTO "Campaign" ("id", "worldId", "rulesetVersionId", "code", "name", "updatedAt")
+      VALUES ('20000000-0000-0000-0000-000000000005', '20000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000002', 'content-precondition-campaign', 'Content Precondition Campaign', CURRENT_TIMESTAMP);
+      INSERT INTO "Actor" ("id", "campaignId", "code", "name", "actorType", "updatedAt")
+      VALUES ('20000000-0000-0000-0000-000000000006', '20000000-0000-0000-0000-000000000005', 'content-precondition-actor', 'Content Precondition Actor', 'NPC', CURRENT_TIMESTAMP);
+      INSERT INTO "ContentDefinition" ("id", "worldId", "code", "name", "contentType", "updatedAt")
+      VALUES ('20000000-0000-0000-0000-000000000007', '20000000-0000-0000-0000-000000000004', 'content-precondition-skill', 'Content Precondition Skill', 'SKILL', CURRENT_TIMESTAMP);
+      INSERT INTO "ActorContent" ("id", "actorId", "contentDefinitionId", "updatedAt")
+      VALUES ('20000000-0000-0000-0000-000000000008', '20000000-0000-0000-0000-000000000006', '20000000-0000-0000-0000-000000000007', CURRENT_TIMESTAMP);
+    `);
+
+    let rejected = false;
+    try {
+      await client.query(migrationSql('20260713230000_engine_v1_content_versioning'));
+    } catch (error) {
+      rejected = error instanceof Error
+        && error.message.includes('Phase 1F migration requires empty ContentDefinition and ActorContent tables; clear functional data before rollout');
+    }
+    if (!rejected) throw new Error('Phase 1F clean-slate precondition was not enforced');
+    const persisted = await client.query<{ definitions: number; links: number }>(`
+      SELECT (SELECT count(*)::int FROM "ContentDefinition") AS definitions,
+             (SELECT count(*)::int FROM "ActorContent") AS links
+    `);
+    if (persisted.rows[0]?.definitions !== 1 || persisted.rows[0]?.links !== 1) {
+      throw new Error('Phase 1F clean-slate precondition changed functional content data');
+    }
+  } finally {
+    await client.end();
+  }
+  console.info('Phase 1F clean-slate precondition verified safely');
+}
+
 async function verifyRulesetRegistryTransactions(databaseUrl: URL): Promise<void> {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl.toString(), max: 5 }) });
   try {
@@ -153,11 +203,41 @@ async function verifyRulesetRegistryTransactions(databaseUrl: URL): Promise<void
   console.info('Phase 1C registry rollback and concurrency verified safely');
 }
 
+async function verifyContentProfileRegistryTransactions(databaseUrl: URL): Promise<void> {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl.toString(), max: 5 }) });
+  try {
+    let rolledBack = false;
+    try {
+      await prisma.$transaction(async (transaction) => {
+        await ensureCoreV1ContentProfileVersion(transaction);
+        throw new Error('intentional content profile registry rollback');
+      });
+    } catch (error) {
+      rolledBack = error instanceof Error && error.message === 'intentional content profile registry rollback';
+    }
+    if (!rolledBack || await prisma.contentProfileVersion.count() !== 0) {
+      throw new Error('Content profile registry transaction did not roll back completely');
+    }
+    const versions = await Promise.all([
+      prisma.$transaction((transaction) => ensureCoreV1ContentProfileVersion(transaction)),
+      prisma.$transaction((transaction) => ensureCoreV1ContentProfileVersion(transaction)),
+    ]);
+    const persistedVersions = await prisma.contentProfileVersion.count({ where: { code: 'core-v1-content-v1' } });
+    if (persistedVersions !== 1 || versions[0].id !== versions[1].id) {
+      throw new Error('Concurrent content profile registry creation was not idempotent');
+    }
+  } finally {
+    await prisma.$disconnect();
+  }
+  console.info('Phase 1F profile registry rollback and concurrency verified safely');
+}
+
 async function main(): Promise<void> {
   const config = resolveTestDatabaseConfig(process.env);
   const adminUrl = createAdminUrl(config.directUrl);
   await verifyCleanSlatePrecondition(config.directUrl, adminUrl);
   await verifyActorCleanSlatePrecondition(config.directUrl, adminUrl);
+  await verifyContentCleanSlatePrecondition(config.directUrl, adminUrl);
   await recreateTestDatabase(adminUrl);
   console.info('Local test database recreated safely');
 
@@ -176,6 +256,7 @@ async function main(): Promise<void> {
     '--to-schema=prisma/schema.prisma', '--exit-code',
   ], environment);
   await verifyRulesetRegistryTransactions(config.databaseUrl);
+  await verifyContentProfileRegistryTransactions(config.databaseUrl);
   runNpm(['run', 'prisma:seed'], environment);
   runNpm(['exec', '--', 'vitest', 'run', '--config', 'vitest.integration.config.ts'], environment);
 }

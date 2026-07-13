@@ -12,9 +12,9 @@ O GPT envia somente `primaryAttributes` na criação. Cada valor deve ser inteir
 
 Habilidades, magias, equipamentos narrativos e outros conceitos podem existir como `ContentDefinition` e vínculo `ActorContent`. `equipped` e `quantity` no vínculo são dados genéricos, não um inventário físico completo nem equipamento por slot.
 
-Uma espécie nominal usa `species`. Conteúdo `race` só é criado quando houver regra mecânica real. Condição mecânica permanente usa `status_effect`, `metadata.category: condition`, `mechanics.permanence: permanent` e permanece não equipada.
+Uma espécie nominal usa `species`. Conteúdo `race` só é criado quando houver regra mecânica real. Condições canônicas usam `status_effect` e duração/stacking allowlisted no perfil; elas não são estado ativo aplicado ao ator nesta fase e permanecem normalmente não equipadas.
 
-O backend calcula máximos, poderes do ator, defesas, precisão, evasão, velocidades, crítico, movimento, capacidade, resistências e regenerações pelo `core-v1`. O GPT nunca envia esses resultados como autoridade. Valores em `ContentDefinition.mechanics` organizam conteúdo, mas ainda não são modificadores aplicados ao snapshot nesta fase.
+O backend calcula máximos, poderes do ator, defesas, precisão, evasão, velocidades, crítico, movimento, capacidade, resistências e regenerações pelo `core-v1`. O GPT nunca envia esses resultados como autoridade. Modificadores de um `ContentVersion.profile` são validados e persistidos, mas ainda não são aplicados ao snapshot do ator nesta fase.
 
 ## Coerência
 

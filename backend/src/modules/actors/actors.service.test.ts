@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createActorsService } from './actors.service.js';
 import type { ActorRecord, ActorRepository } from './actors.types.js';
 import { actorMechanicalSheetFixture } from '../../../tests/support/actor-mechanics-fixture.js';
+import { actorContentFixture } from '../../../tests/support/content-fixture.js';
 
 const actor: ActorRecord = {
   id: '7e7b7cbe-5767-47de-a0b5-4b7bc9365c89', code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER,
@@ -29,11 +30,7 @@ describe('actors service', () => {
   });
 
   it('lists and normalizes content without its repository relation wrapper', async () => {
-    const item = {
-      state: 'LEARNING', rank: 1, progress: 10, mastery: 0, equipped: false, quantity: 1, notes: 'Treino inicial com Lyra',
-      contentDefinition: { code: 'wind_breeze_step', name: 'Passo da Brisa', contentType: 'SKILL', description: null,
-        mechanics: {}, requirements: {}, presentation: {}, tags: ['wind'], schemaVersion: 1, status: 'ACTIVE' },
-    };
+    const item = actorContentFixture();
     const contentRepository: ActorRepository = { findByReference: () => Promise.resolve(actor), listContent: () => Promise.resolve([item]) };
     const content = await createActorsService(contentRepository).listContent(scope, 'ralph');
     expect(content[0]).toMatchObject({ contentType: 'skill', state: 'learning', status: 'active' });

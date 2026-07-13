@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { codeSchema } from '../actors/actors.schemas.js';
-import { contentTypeSchema } from '../content/content.schemas.js';
+import {
+  contentPresentationSchema, contentTagsSchema, contentTypeSchema, coreV1ContentProfileSchema,
+  validateContentPublicationShape,
+} from '../content/content.schemas.js';
 import { validateInitialPrimaryAttributes, type PrimaryAttributes } from '../rules/core-v1/index.js';
 import {
   METADATA_MAX_BYTES, METADATA_TOTAL_MAX_BYTES, PROFILE_MAX_BYTES, START_GAME_MAX_BYTES,
@@ -185,11 +188,11 @@ const initialDefinitionSchema = z.strictObject({
   contentType: contentTypeSchema,
   name: z.string().trim().min(1).max(200).optional(),
   description: z.string().trim().min(1).max(2_000).optional(),
-  mechanics: jsonObjectSchema.optional(), requirements: jsonObjectSchema.optional(), presentation: jsonObjectSchema.optional(),
-  tags: uniqueTextArray(12, 50).optional(), schemaVersion: z.number().int().min(1).max(10_000).optional(),
+  profile: coreV1ContentProfileSchema.nullable().optional(), presentation: contentPresentationSchema.optional(),
+  tags: contentTagsSchema.optional(),
   status: contentStatusSchema.optional(), metadata: limitedJsonObject().optional(), overridesWorldDefinition: z.boolean().optional(),
 }).superRefine((value, context) => {
-  const createFields = ['name', 'description', 'mechanics', 'requirements', 'presentation', 'tags', 'schemaVersion', 'status'] as const;
+  const createFields = ['name', 'description', 'presentation', 'tags', 'status'] as const;
   if (value.mode === 'create') {
     createFields.forEach((field) => {
       if (value[field] === undefined) context.addIssue({ code: 'custom', path: [field], message: 'Required when mode is create' });
@@ -198,9 +201,18 @@ const initialDefinitionSchema = z.strictObject({
     if (value.overridesWorldDefinition === true && value.scope !== 'campaign') {
       context.addIssue({ code: 'custom', path: ['overridesWorldDefinition'], message: 'Only campaign definitions can override World content' });
     }
+    if (value.status !== undefined && value.status !== 'active') {
+      context.addIssue({ code: 'custom', path: ['status'], message: 'Initial content publications must be active' });
+    }
+    if (value.name !== undefined && value.description !== undefined && value.presentation !== undefined && value.tags !== undefined) {
+      validateContentPublicationShape({
+        contentType: value.contentType, code: value.code, name: value.name, description: value.description,
+        profile: value.profile, presentation: value.presentation, tags: value.tags,
+      }, context);
+    }
   } else {
     if (value.scope !== 'world') context.addIssue({ code: 'custom', path: ['scope'], message: 'Reused content must have world scope' });
-    [...createFields, 'metadata', 'overridesWorldDefinition'].forEach((field) => {
+    [...createFields, 'profile', 'metadata', 'overridesWorldDefinition'].forEach((field) => {
       if (value[field as keyof typeof value] !== undefined) context.addIssue({ code: 'custom', path: [field], message: 'Not allowed when mode is reuse' });
     });
   }
@@ -210,10 +222,6 @@ const initialContentPackageSchema = z.strictObject({
   definition: initialDefinitionSchema,
   protagonistLink: initialLinkSchema.optional(),
 });
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
 
 function isInitiallyKnown(state: unknown): boolean {
   return state === 'known' || state === 'mastered';
@@ -232,61 +240,46 @@ function validateKnownRequirements(
   value: z.infer<typeof initialContentPackageSchema>, index: number, linkedKnown: Set<string>, attributes: Record<string, unknown>,
   context: z.RefinementCtx,
 ) {
-  const requirements = value.definition.requirements;
-  if (!isRecord(requirements)) return;
-  if ('requiredContent' in requirements) {
-    if (!Array.isArray(requirements.requiredContent)) {
-      context.addIssue({ code: 'custom', path: ['initialContentPackages', index, 'definition', 'requirements', 'requiredContent'], message: 'Must be an array' });
-    } else {
-      requirements.requiredContent.forEach((required, requiredIndex) => {
-        const path = ['initialContentPackages', index, 'definition', 'requirements', 'requiredContent', requiredIndex];
-        if (!isRecord(required) || Object.keys(required).some((key) => !['contentType', 'code'].includes(key))) {
-          context.addIssue({ code: 'custom', path, message: 'Must contain only contentType and code' });
-          return;
-        }
-        const parsedType = contentTypeSchema.safeParse(required.contentType);
-        const parsedCode = codeSchema.safeParse(required.code);
-        if (!parsedType.success || !parsedCode.success) {
-          context.addIssue({ code: 'custom', path, message: 'Must contain a valid contentType and code' });
-          return;
-        }
-        if (!linkedKnown.has(`${parsedType.data}:${parsedCode.data}`)) {
-          context.addIssue({ code: 'custom', path, message: 'Required content must be initially known or mastered by the protagonist' });
-        }
+  const profile = value.definition.profile;
+  if (profile?.profileMode !== 'mechanical' || profile.requirements === undefined) return;
+  profile.requirements.requiredContent?.forEach((required, requiredIndex) => {
+    if (!linkedKnown.has(`${required.contentKind}:${required.code}`)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['initialContentPackages', index, 'definition', 'profile', 'requirements', 'requiredContent', requiredIndex],
+        message: 'Required content must be initially known or mastered by the protagonist',
       });
     }
-  }
-  if ('minimumAttributes' in requirements) {
-    if (!isRecord(requirements.minimumAttributes)) {
-      context.addIssue({ code: 'custom', path: ['initialContentPackages', index, 'definition', 'requirements', 'minimumAttributes'], message: 'Must be an object' });
-    } else {
-      Object.entries(requirements.minimumAttributes).forEach(([attribute, minimum]) => {
-        const actual = attributes[attribute];
-        if (typeof minimum !== 'number' || !Number.isFinite(minimum)) {
-          context.addIssue({ code: 'custom', path: ['initialContentPackages', index, 'definition', 'requirements', 'minimumAttributes', attribute], message: 'Must be a finite number' });
-        } else if (typeof actual !== 'number' || actual < minimum) {
-          context.addIssue({ code: 'custom', path: ['initialContentPackages', index, 'definition', 'requirements', 'minimumAttributes', attribute], message: 'Protagonist does not meet the minimum attribute' });
-        }
+  });
+  Object.entries(profile.requirements.minimumPrimaryAttributes ?? {}).forEach(([attribute, minimum]) => {
+    const actual = attributes[attribute];
+    if (typeof actual !== 'number' || actual < minimum) {
+      context.addIssue({
+        code: 'custom',
+        path: ['initialContentPackages', index, 'definition', 'profile', 'requirements', 'minimumPrimaryAttributes', attribute],
+        message: 'Protagonist does not meet the minimum primary attribute',
       });
     }
+  });
+  if ((profile.requirements.minimumLevel ?? 1) > 1) {
+    context.addIssue({
+      code: 'custom',
+      path: ['initialContentPackages', index, 'definition', 'profile', 'requirements', 'minimumLevel'],
+      message: 'The level 1 protagonist does not meet the minimum level',
+    });
   }
 }
 
 function validateEquipped(value: z.infer<typeof initialContentPackageSchema>, index: number, context: z.RefinementCtx) {
   if (value.protagonistLink?.equipped !== true || value.definition.mode !== 'create') return;
-  const mechanics = value.definition.mechanics ?? {};
-  const behavior = mechanics.equipBehavior;
+  const profile = value.definition.profile;
   const type = value.definition.contentType;
   const path = ['initialContentPackages', index, 'protagonistLink', 'equipped'];
-  if (type === 'race' || type === 'class' || (type === 'status_effect' && mechanics.permanence === 'permanent') || mechanics.passive === true || behavior === 'none') {
-    context.addIssue({ code: 'custom', path, message: 'This content cannot be equipped' });
-    return;
-  }
-  const allowed: Partial<Record<z.infer<typeof contentTypeSchema>, string[]>> = {
-    weapon: ['wieldable'], armor: ['wearable'], shield: ['wieldable', 'wearable'], item: ['readied', 'activatable'],
-    spell: ['prepared', 'activatable'], talent: ['activatable'], skill: ['activatable'],
-  };
-  if (typeof behavior !== 'string' || !(allowed[type]?.includes(behavior) ?? false)) context.addIssue({ code: 'custom', path, message: 'equipBehavior is incompatible with contentType' });
+  const directlySelectable = ['weapon', 'armor', 'shield', 'clothing'].includes(type);
+  const activatable = profile?.profileMode === 'mechanical'
+    && ['spell', 'skill', 'talent', 'item', 'consumable'].includes(type)
+    && profile.activation.type !== 'passive';
+  if (!directlySelectable && !activatable) context.addIssue({ code: 'custom', path, message: 'This canonical profile cannot be selected, prepared or equipped' });
 }
 
 export const startGameSchema = z.strictObject({
@@ -322,20 +315,8 @@ export const startGameSchema = z.strictObject({
     const key = `${definition.scope}:${definition.contentType}:${definition.code}`;
     if (seen.has(key)) context.addIssue({ code: 'custom', path: ['initialContentPackages', index, 'definition', 'code'], message: 'Duplicate scope, contentType and code in payload' });
     seen.add(key);
-    if (['none', 'identity'].includes(classModel.mode) && isRecord(definition.requirements) && 'className' in definition.requirements) {
-      context.addIssue({ code: 'custom', path: ['initialContentPackages', index, 'definition', 'requirements', 'className'], message: 'className requirements require a mechanical class model' });
-    }
     if (classModel.mode === 'none' && definition.contentType === 'class' && item.protagonistLink !== undefined) {
       context.addIssue({ code: 'custom', path: ['initialContentPackages', index, 'protagonistLink'], message: 'Class content cannot be linked when classModel.mode is none' });
-    }
-    if (definition.mode === 'create' && definition.contentType === 'race' && definition.name === value.protagonist.species
-      && Object.keys(definition.mechanics ?? {}).length === 0 && Object.keys(definition.requirements ?? {}).length === 0) {
-      context.addIssue({ code: 'custom', path: ['initialContentPackages', index, 'definition'], message: 'Do not create race content only to repeat protagonist.species' });
-    }
-    if (definition.mode === 'create' && definition.contentType === 'status_effect') {
-      const condition = definition.metadata?.category === 'condition';
-      const permanent = definition.mechanics?.permanence === 'permanent';
-      if (condition !== permanent) context.addIssue({ code: 'custom', path: ['initialContentPackages', index, 'definition'], message: 'Permanent conditions require metadata.category=condition and mechanics.permanence=permanent' });
     }
     validateEquipped(item, index, context);
     if (isInitiallyKnown(item.protagonistLink?.state)) validateKnownRequirements(item, index, linkedKnown, value.protagonist.primaryAttributes, context);
@@ -396,10 +377,10 @@ export const patchActorSchema = z.strictObject({
 export const upsertContentSchema = z.strictObject({
   ...scopeFields, campaignRef: codeSchema.nullable(), idempotencyKey: idempotencyKeySchema, contentType: contentTypeSchema,
   code: codeSchema, name: z.string().trim().min(1).max(200), description: z.string().trim().min(1).max(10_000),
-  mechanics: jsonObjectSchema, requirements: jsonObjectSchema, presentation: jsonObjectSchema,
-  tags: z.array(z.string().trim().min(1).max(100)).max(50), schemaVersion: z.number().int().min(1).max(10_000),
+  profile: coreV1ContentProfileSchema.nullable().optional(), presentation: contentPresentationSchema,
+  tags: contentTagsSchema,
   status: contentStatusSchema, metadata: limitedJsonObject().optional(),
-});
+}).superRefine((value, context) => validateContentPublicationShape(value, context));
 
 const actorContentChangesSchema = z.strictObject({
   state: actorContentStateSchema.optional(), rank: z.number().int().min(0).optional(), progress: z.number().int().min(0).optional(),

@@ -6,6 +6,7 @@ import {
 } from './gpt.schemas.js';
 import { jsonByteSize, jsonDepth, jsonKeyCount } from './gpt.start-game.js';
 import { getInitialAttributePreset } from '../rules/core-v1/index.js';
+import { skillPublicationInput } from '../../../tests/support/content-fixture.js';
 
 const scope = { playerRef: 'ralph', worldRef: 'mundo-cardinal', campaignRef: 'harem-perfeito' };
 const primaryAttributes = getInitialAttributePreset('balanced');
@@ -35,11 +36,10 @@ function validStartGame() {
 }
 
 function createSkill(code = 'quiet-step') {
+  const publication = skillPublicationInput(code);
   return {
     definition: {
-      mode: 'create' as const, scope: 'world' as const, contentType: 'skill' as const, code, name: 'Passo Silencioso',
-      description: 'Movimento discreto.', mechanics: { equipBehavior: 'activatable' }, requirements: {}, presentation: {},
-      tags: ['stealth'], schemaVersion: 1, status: 'active' as const, metadata: {},
+      mode: 'create' as const, scope: 'world' as const, ...publication, metadata: {},
     },
     protagonistLink: { state: 'known' as const, rank: 1, progress: 0, mastery: 0, equipped: false, quantity: 1, metadata: {} },
   };
@@ -59,7 +59,7 @@ describe('GPT API schemas', () => {
       [startGameSchema, start],
       [upsertActorSchema, { ...scope, idempotencyKey: 'actor-scope-001', code: 'lyra', name: 'Lyra', actorType: 'spirit', primaryAttributes }],
       [patchActorSchema, { ...scope, idempotencyKey: 'patch-scope-001', name: 'Lyra' }],
-      [upsertContentSchema, { ...scope, idempotencyKey: 'content-scope-001', contentType: 'skill', code: 'step', name: 'Step', description: 'Movement.', mechanics: {}, requirements: {}, presentation: {}, tags: [], schemaVersion: 1, status: 'active' }],
+      [upsertContentSchema, { ...scope, idempotencyKey: 'content-scope-001', ...skillPublicationInput('step', 'Step') }],
       [manageActorContentSchema, { ...scope, operation: 'list' }],
       [createEventSchema, { ...scope, eventType: 'scene', title: 'Scene', payload: {}, idempotencyKey: 'event-scope-001' }],
     ] as const;
@@ -105,7 +105,14 @@ describe('GPT API schemas', () => {
     expect(startGameSchema.safeParse({ ...base, campaignConfiguration: none }).success).toBe(false);
     const classSkill = createSkill('arcane-archer');
     const classPackage = { ...classSkill, definition: {
-      ...classSkill.definition, contentType: 'class' as const, name: 'Arqueiro Arcano', mechanics: { equipBehavior: 'none' },
+      ...classSkill.definition, contentType: 'class' as const, name: 'Arqueiro Arcano',
+      profile: {
+        schemaVersion: 1 as const, rulesetCode: 'core-v1' as const, profileMode: 'mechanical' as const,
+        contentKind: 'class' as const, code: 'arcane-archer', name: 'Arqueiro Arcano', description: 'Movimento discreto.',
+        presentation: {}, tags: ['wind'], tier: 1, rarity: 'common' as const,
+        activation: { type: 'passive' as const }, cost: { type: 'none' as const },
+        grants: [{ contentKind: 'skill' as const, code: 'quiet-step' }],
+      },
     } };
     const mechanical = { ...base.campaignConfiguration, classModel: { mode: 'mechanical', startingClass: 'required', progressionBasis: ['class', 'content'], description: 'Classes mecânicas.' } };
     const coherent = { ...base, campaignConfiguration: mechanical, protagonist: { ...base.protagonist, className: 'Arqueiro Arcano' }, initialContentPackages: [classPackage] };
@@ -123,7 +130,10 @@ describe('GPT API schemas', () => {
     expect(startGameSchema.safeParse({ ...optionalKnown, initialContentPackages: [{ ...classPackage, protagonistLink: { ...classPackage.protagonistLink, equipped: true } }] }).success).toBe(false);
     expect(startGameSchema.safeParse({ ...base, campaignConfiguration: optional, protagonist: { ...base.protagonist, className: 'Arqueiro Arcano' }, initialContentPackages: [] }).success).toBe(false);
     expect(startGameSchema.safeParse({ ...base, campaignConfiguration: optional, protagonist: { ...base.protagonist, className: null }, initialContentPackages: [classPackage] }).success).toBe(false);
-    const secondClass = { ...classPackage, definition: { ...classPackage.definition, code: 'arcane-mage', name: 'Mago Arcano' } };
+    const secondClass = { ...classPackage, definition: {
+      ...classPackage.definition, code: 'arcane-mage', name: 'Mago Arcano',
+      profile: { ...classPackage.definition.profile, code: 'arcane-mage', name: 'Mago Arcano' },
+    } };
     expect(startGameSchema.safeParse({ ...optionalKnown, initialContentPackages: [classPackage, secondClass] }).success).toBe(false);
     expect(startGameSchema.safeParse({ ...optionalKnown, protagonist: { ...optionalKnown.protagonist, className: 'Mago' } }).success).toBe(false);
 
@@ -135,6 +145,8 @@ describe('GPT API schemas', () => {
   it('accepts create packages and restricts reuse to a World reference', () => {
     const base = validStartGame();
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [createSkill()] }).success).toBe(true);
+    const draft = createSkill();
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [{ ...draft, definition: { ...draft.definition, status: 'draft' as const } }] }).success).toBe(false);
     const reuse = { definition: { mode: 'reuse', scope: 'world', code: 'quiet-step', contentType: 'skill' }, protagonistLink: createSkill().protagonistLink };
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [reuse] }).success).toBe(true);
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [{ ...reuse, definition: { ...reuse.definition, name: 'Forbidden' } }] }).success).toBe(false);
@@ -147,10 +159,19 @@ describe('GPT API schemas', () => {
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [skill, skill] }).success).toBe(false);
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [{ ...skill, protagonistLink: { ...skill.protagonistLink, quantity: 0 } }] }).success).toBe(false);
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [{ ...skill, protagonistLink: { ...skill.protagonistLink, equipped: true } }] }).success).toBe(true);
-    const passive = { ...skill, definition: { ...skill.definition, mechanics: { equipBehavior: 'none', passive: true } }, protagonistLink: { ...skill.protagonistLink, equipped: true } };
+    const passive = { ...skill, definition: {
+      ...skill.definition,
+      profile: { ...skill.definition.profile, activation: { type: 'passive' as const }, cost: { type: 'none' as const }, actionProfile: undefined },
+    }, protagonistLink: { ...skill.protagonistLink, equipped: true } };
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [passive] }).success).toBe(false);
-    const dependent = createSkill('dependent');
-    dependent.definition.requirements = { requiredContent: [{ contentType: 'skill', code: 'missing' }], minimumAttributes: { intelligence: 6 } };
+    const baseDependent = createSkill('dependent');
+    const dependent = { ...baseDependent, definition: {
+      ...baseDependent.definition,
+      profile: { ...baseDependent.definition.profile, requirements: {
+        requiredContent: [{ contentKind: 'skill' as const, code: 'missing' }],
+        minimumPrimaryAttributes: { intelligence: 6 },
+      } },
+    } };
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [dependent] }).success).toBe(false);
   });
 
@@ -168,7 +189,7 @@ describe('GPT API schemas', () => {
     expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, metadata: tooManyKeys } }).success).toBe(false);
     expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, metadata: { a: { b: { c: { d: { e: { f: 1 } } } } } } } }).success).toBe(false);
     const skill = createSkill();
-    const huge = { ...skill, definition: { ...skill.definition, mechanics: { text: 'x'.repeat(82_000) } } };
+    const huge = { ...skill, definition: { ...skill.definition, profile: { ...skill.definition.profile, lore: 'x'.repeat(82_000) } } };
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [huge] }).success).toBe(false);
   });
 
@@ -181,8 +202,15 @@ describe('GPT API schemas', () => {
     expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, appearance: { distinctiveFeatures: features } } }).success).toBe(false);
     expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, personality: { traits: features } } }).success).toBe(false);
     const skill = createSkill();
-    const multibytePayload = { ...skill, definition: { ...skill.definition, mechanics: { text: '😀'.repeat(20_500) } } };
-    const result = startGameSchema.safeParse({ ...base, initialContentPackages: [multibytePayload] });
+    const multibytePayload = Array.from({ length: 24 }, (_, index) => {
+      const code = `multibyte-${String(index).padStart(2, '0')}`;
+      const name = `Multibyte ${index}`;
+      return { ...skill, definition: {
+        ...skill.definition, code, name,
+        profile: { ...skill.definition.profile, code, name, lore: '😀'.repeat(900) },
+      } };
+    });
+    const result = startGameSchema.safeParse({ ...base, initialContentPackages: multibytePayload });
     expect(result.success).toBe(false);
     if (!result.success) {
       const sizeIssue = result.error.issues.find((issue) => issue.path.length === 0);
@@ -219,10 +247,10 @@ describe('GPT API schemas', () => {
       expect(patchActorSchema.safeParse({ ...scope, idempotencyKey: `reject-${field}-001`, [field]: field === 'primaryAttributes' ? primaryAttributes : 10 }).success).toBe(false);
     }
     expect(patchActorSchema.safeParse({ ...scope, idempotencyKey: 'actor-patch-002', campaignId: 'forbidden' }).success).toBe(false);
-    const content = { ...scope, idempotencyKey: 'content-schema-001', contentType: 'skill', code: 'quiet-step', name: 'Passo Silencioso', description: 'Movimento discreto.', mechanics: {}, requirements: {}, presentation: {}, tags: [], schemaVersion: 1, status: 'active' };
+    const content = { ...scope, idempotencyKey: 'content-schema-001', ...skillPublicationInput() };
     expect(upsertContentSchema.safeParse(content).success).toBe(true);
-    const { mechanics: _mechanics, ...incomplete } = content;
-    void _mechanics;
+    const { profile: _profile, ...incomplete } = content;
+    void _profile;
     expect(upsertContentSchema.safeParse(incomplete).success).toBe(false);
   });
 
