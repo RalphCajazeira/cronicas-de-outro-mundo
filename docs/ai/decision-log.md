@@ -1,5 +1,24 @@
 # Decision Log
 
+## 2026-07-13 — Fase 1B de timeline e economia de ações pura
+
+Decisão:
+- implementar a economia de ações `core-v1 numerical RC1.1` em um módulo puro, determinístico e sem banco;
+- representar todo tick como `bigint`, com timeline contínua que salta ao próximo evento e processa eventos do mesmo tick sequencialmente;
+- ordenar eventos por prioridade, iniciativa e desempates injetados, revalidando os eventos posteriores após cada resolução;
+- modelar perfis temporais, velocidades física/mágica/híbrida, iniciativa, slots, casting, movimento por zonas, reações de profundidade máxima 2, combos atômicos, planos limitados e threat temporal;
+- manter reserva/consumo de Mana, custo de SP, progressão temporal e demais recursos como deltas ou custos conceituais;
+- limitar planos a cinco ações primárias, 32 eventos e 5000 ticks por processamento, sem continuation token nesta fase;
+- manter persistência, repositories, Prisma, HTTP, OpenAPI e resolução completa de combate para a Fase 1C ou posterior;
+- preservar números calibráveis por revisão e exigir nova versão e telemetria futura para recalibração.
+
+Impacto:
+- serviços autoritativos futuros podem compor a timeline sem duplicar fórmulas ou depender de infraestrutura;
+- eventos equivalentes permanecem reproduzíveis quando o chamador fornece o desempate RNG persistível;
+- nenhuma migration, dependência, mudança de ambiente ou contrato público HTTP é necessária.
+
+Status: implementada e validada na Fase 1B; revisão e integração rastreadas pelo PR correspondente
+
 ## 2026-07-13 — `core-v1 numerical RC1.1` e Fase 1A numérica pura
 
 Decisão:
