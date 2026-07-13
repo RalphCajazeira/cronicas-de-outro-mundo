@@ -141,3 +141,20 @@ Decisão:
 - não expor reset destrutivo como Action do GPT.
 
 Status: preparado localmente; limpeza e validação online pendentes
+
+## 2026-07-12 — Leituras GPT determinísticas por Player, World e Campaign
+
+Decisão:
+- exigir `playerRef`, `worldRef` e `campaignRef` explícitos em operações que leem ou alteram estado de campanha, removendo defaults que poderiam selecionar outro save;
+- resolver atores somente pela chave composta da campanha e exigir `contentType` na leitura de ContentDefinition;
+- para conteúdo, priorizar a definição específica da Campaign e permitir fallback apenas para a definição global do mesmo World, tipo e code;
+- adicionar `listPlayerWorlds` e `listWorldCampaigns`, com ordenação por ref e DTOs sem UUIDs;
+- não manter ponte de compatibilidade, fallback para save único, busca por UUID interno ou seleção implícita de escopo;
+- não inferir “último save” sem critério persistido.
+
+Impacto:
+- clientes antigos que omitem refs recebem `400 INVALID_INPUT` e precisam seguir o fluxo de descoberta;
+- o contrato passa a suportar mundos/campanhas com codes repetidos em escopos distintos sem leitura cruzada;
+- nenhuma migration ou alteração de dados é necessária.
+
+Status: implementada localmente; deploy e atualização da Action pendentes

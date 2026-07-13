@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import process from 'node:process';
 import request from 'supertest';
 import { afterAll, describe, expect, it } from 'vitest';
+import { ActorContentState, ActorType, CampaignStatus, ContentStatus, ContentType } from '../../src/generated/prisma/client.js';
 import { createApp } from '../../src/app.js';
 import { parseConfig } from '../../src/config/env.js';
 import { prismaActorRepository } from '../../src/modules/actors/actors.repository.js';
@@ -15,6 +16,8 @@ const config = parseConfig(process.env);
 const dependencies = { actorRepository: prismaActorRepository, contentRepository: prismaContentRepository, gptRepository: prismaGptRepository, readiness: prismaReadinessCheck };
 const app = createApp(config, dependencies);
 const authenticated = (path: string) => request(app).get(path).set('x-rpg-key', config.RPG_API_KEY);
+const seedScope = { playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' };
+const seedScopeQuery = 'playerRef=ralph&worldRef=elarion&campaignRef=main-campaign';
 
 afterAll(async () => {
   await disconnectPrisma();
@@ -149,36 +152,36 @@ describe('complete API with real repositories', () => {
     expect(JSON.stringify([absent.body, wrong.body])).not.toContain(config.RPG_API_KEY);
   });
 
-  it('returns Ralph by code and UUID as a normalized character', async () => {
-    const byCode = await authenticated('/api/v1/characters/ralph');
-    const id = (await prisma.actor.findFirstOrThrow({ where: { code: 'ralph' }, select: { id: true } })).id;
-    const byId = await authenticated(`/api/v1/characters/${id}`);
+  it('returns Ralph by code and rejects an internal UUID reference', async () => {
+    const byCode = await authenticated(`/api/v1/characters/ralph?${seedScopeQuery}`);
+    const byId = await authenticated(`/api/v1/characters/11111111-1111-4111-8111-111111111111?${seedScopeQuery}`);
     expect(byCode.status).toBe(200);
-    expect(byId.status).toBe(200);
+    expect(byId.status).toBe(400);
     expect(byCode.body).toMatchObject({ code: 'ralph', actorType: 'character', status: 'active' });
-    expect(byId.body).toEqual(byCode.body);
     expect(byCode.body).not.toHaveProperty('id');
   });
 
   it('returns Ralph content with the database enum normalized', async () => {
-    const response = await authenticated('/api/v1/characters/ralph/content');
+    const response = await authenticated(`/api/v1/characters/ralph/content?${seedScopeQuery}`);
     expect(response.status).toBe(200);
     expect(response.body).toEqual([expect.objectContaining({ code: 'wind_breeze_step', state: 'learning', rank: 1, progress: 10, mastery: 0, notes: 'Treino inicial com Lyra' })]);
     expect(JSON.stringify(response.body)).not.toContain('contentDefinition');
   });
 
   it('returns Lyra and Passo da Brisa through real queries', async () => {
-    const lyra = await authenticated('/api/v1/actors/lyra');
-    const content = await authenticated('/api/v1/content/wind_breeze_step');
+    const lyra = await authenticated(`/api/v1/actors/lyra?${seedScopeQuery}`);
+    const content = await authenticated(`/api/v1/content/wind_breeze_step?${seedScopeQuery}&contentType=skill`);
     expect(lyra.body).toMatchObject({ code: 'lyra', actorType: 'spirit', status: 'active' });
     expect(content.body).toMatchObject({ code: 'wind_breeze_step', name: 'Passo da Brisa', contentType: 'skill', status: 'active' });
     expect(content.body).not.toHaveProperty('worldId');
   });
 
-  it('distinguishes invalid and valid missing references', async () => {
-    const invalid = await authenticated('/api/v1/actors/not%20valid');
-    const missing = await authenticated('/api/v1/actors/11111111-1111-4111-8111-111111111111');
+  it('distinguishes invalid, internal UUID and valid missing code references', async () => {
+    const invalid = await authenticated(`/api/v1/actors/not%20valid?${seedScopeQuery}`);
+    const internalUuid = await authenticated(`/api/v1/actors/11111111-1111-4111-8111-111111111111?${seedScopeQuery}`);
+    const missing = await authenticated(`/api/v1/actors/missing-actor?${seedScopeQuery}`);
     expect(invalid.status).toBe(400);
+    expect(internalUuid.status).toBe(400);
     expect(missing.status).toBe(404);
   });
 
@@ -191,7 +194,7 @@ describe('complete API with real repositories', () => {
       listContent: () => Promise.resolve([]),
     };
     const failingApp = createApp(config, { ...dependencies, actorRepository: failingRepository });
-    const response = await request(failingApp).get('/api/v1/actors/ralph').set('x-rpg-key', config.RPG_API_KEY);
+    const response = await request(failingApp).get(`/api/v1/actors/ralph?${seedScopeQuery}`).set('x-rpg-key', config.RPG_API_KEY);
     const serialized = JSON.stringify(response.body);
     expect(response.status).toBe(500);
     expect(response.body).toEqual({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
@@ -200,8 +203,16 @@ describe('complete API with real repositories', () => {
 });
 
 describe('GPT v1 persistence with real transactions', () => {
-  const post = (path: string, body: object) => request(app).post(path).set('x-rpg-key', config.RPG_API_KEY).send(body);
-  const patch = (path: string, body: object) => request(app).patch(path).set('x-rpg-key', config.RPG_API_KEY).send(body);
+  const post = (path: string, body: object) => request(app).post(path).set('x-rpg-key', config.RPG_API_KEY).send({ ...seedScope, ...body });
+  const patch = (path: string, body: object) => request(app).patch(path).set('x-rpg-key', config.RPG_API_KEY).send({ ...seedScope, ...body });
+
+  it('does not infer the only persisted save when scope refs are absent', async () => {
+    const response = await request(app).post('/api/v1/game/load').set('x-rpg-key', config.RPG_API_KEY).send({});
+    expect(response.status).toBe(400);
+    const body = response.body as { error: { code: string; issues: Array<{ path: string }> } };
+    expect(body.error.code).toBe('INVALID_INPUT');
+    expect(body.error.issues.map((issue) => issue.path)).toEqual(expect.arrayContaining(['playerRef', 'worldRef', 'campaignRef']));
+  });
 
   it('loads normalized state with protagonist, actors, linked content and limited events', async () => {
     const response = await post('/api/v1/game/load', {});
@@ -252,7 +263,7 @@ describe('GPT v1 persistence with real transactions', () => {
   });
 
   it('lists campaign actors with normalized enums', async () => {
-    const response = await authenticated('/api/v1/campaigns/main-campaign/actors');
+    const response = await authenticated('/api/v1/campaigns/main-campaign/actors?playerRef=ralph&worldRef=elarion');
     expect(response.status).toBe(200);
     expect(response.body).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'ralph', actorType: 'character', status: 'active' }),
@@ -337,5 +348,114 @@ describe('GPT v1 persistence with real transactions', () => {
     expect(retry.body).toEqual(first.body);
     expect(first.body).toMatchObject({ campaignRef: 'main-campaign', actorRef: 'ralph', eventType: 'quiet-step-trained' });
     await expect(prisma.gameEvent.count({ where: { idempotencyKey: body.idempotencyKey } })).resolves.toBe(1);
+  });
+
+  it('isolates repeated world, campaign, actor and content codes across every public read', async () => {
+    const player = await prisma.player.create({ data: { slug: 'scope-player', displayName: 'Scope Player' } });
+    const otherPlayer = await prisma.player.create({ data: { slug: 'other-player', displayName: 'Other Player' } });
+    const [worldOne, worldTwo] = await Promise.all([
+      prisma.world.create({ data: { playerId: player.id, code: 'world-one', name: 'World One', description: 'Primeiro mundo' } }),
+      prisma.world.create({ data: { playerId: player.id, code: 'world-two', name: 'World Two', description: 'Segundo mundo' } }),
+      prisma.world.create({ data: { playerId: otherPlayer.id, code: 'foreign-world', name: 'Foreign World' } }),
+    ]);
+    const [campaignOne, campaignTwo] = await Promise.all([
+      prisma.campaign.create({ data: { worldId: worldOne.id, code: 'shared-campaign', name: 'Campaign One', status: CampaignStatus.ACTIVE } }),
+      prisma.campaign.create({ data: { worldId: worldTwo.id, code: 'shared-campaign', name: 'Campaign Two', status: CampaignStatus.PAUSED } }),
+      prisma.campaign.create({ data: { worldId: worldOne.id, code: 'global-campaign', name: 'Global Fallback', status: CampaignStatus.DRAFT } }),
+    ]);
+    const [actorOne, actorTwo] = await Promise.all([
+      prisma.actor.create({ data: { campaignId: campaignOne.id, code: 'shared-hero', name: 'Hero One', actorType: ActorType.CHARACTER, health: 10, maxHealth: 10, mana: 2, maxMana: 2 } }),
+      prisma.actor.create({ data: { campaignId: campaignTwo.id, code: 'shared-hero', name: 'Hero Two', actorType: ActorType.CHARACTER, health: 20, maxHealth: 20, mana: 4, maxMana: 4 } }),
+    ]);
+    const [globalSkill, campaignSkill, campaignSpell, foreignSkill] = await Promise.all([
+      prisma.contentDefinition.create({ data: { worldId: worldOne.id, campaignId: null, code: 'shared-power', name: 'Global Skill', contentType: ContentType.SKILL, status: ContentStatus.ACTIVE } }),
+      prisma.contentDefinition.create({ data: { worldId: worldOne.id, campaignId: campaignOne.id, code: 'shared-power', name: 'Campaign Skill', contentType: ContentType.SKILL, status: ContentStatus.ACTIVE } }),
+      prisma.contentDefinition.create({ data: { worldId: worldOne.id, campaignId: campaignOne.id, code: 'shared-power', name: 'Campaign Spell', contentType: ContentType.SPELL, status: ContentStatus.ACTIVE } }),
+      prisma.contentDefinition.create({ data: { worldId: worldTwo.id, campaignId: campaignTwo.id, code: 'shared-power', name: 'Foreign Skill', contentType: ContentType.SKILL, status: ContentStatus.ACTIVE } }),
+    ]);
+    await Promise.all([
+      prisma.actorContent.create({ data: { actorId: actorOne.id, contentDefinitionId: campaignSkill.id, state: ActorContentState.KNOWN } }),
+      prisma.actorContent.create({ data: { actorId: actorTwo.id, contentDefinitionId: foreignSkill.id, state: ActorContentState.MASTERED } }),
+    ]);
+
+    const [missingLoadScope, missingActorScope] = await Promise.all([
+      request(app).post('/api/v1/game/load').set('x-rpg-key', config.RPG_API_KEY).send({}),
+      authenticated('/api/v1/actors/shared-hero'),
+    ]);
+    expect(missingLoadScope.status).toBe(400);
+    expect(missingActorScope.status).toBe(400);
+    expect(missingLoadScope.body).toMatchObject({ error: { code: 'INVALID_INPUT' } });
+    expect(missingActorScope.body).toMatchObject({ error: { code: 'INVALID_INPUT' } });
+
+    const oneQuery = 'playerRef=scope-player&worldRef=world-one&campaignRef=shared-campaign';
+    const twoQuery = 'playerRef=scope-player&worldRef=world-two&campaignRef=shared-campaign';
+    const [actorFromOne, characterFromTwo, contentFromOne, contentFromTwo] = await Promise.all([
+      authenticated(`/api/v1/actors/shared-hero?${oneQuery}`),
+      authenticated(`/api/v1/characters/shared-hero?${twoQuery}`),
+      authenticated(`/api/v1/characters/shared-hero/content?${oneQuery}`),
+      authenticated(`/api/v1/characters/shared-hero/content?${twoQuery}`),
+    ]);
+    expect(actorFromOne.body).toMatchObject({ code: 'shared-hero', name: 'Hero One', health: 10 });
+    expect(characterFromTwo.body).toMatchObject({ code: 'shared-hero', name: 'Hero Two', health: 20 });
+    expect(contentFromOne.body).toEqual([expect.objectContaining({ code: 'shared-power', name: 'Campaign Skill', state: 'known' })]);
+    expect(contentFromTwo.body).toEqual([expect.objectContaining({ code: 'shared-power', name: 'Foreign Skill', state: 'mastered' })]);
+
+    const [specific, globalFallback, typedSpell, foreign] = await Promise.all([
+      authenticated(`/api/v1/content/shared-power?${oneQuery}&contentType=skill`),
+      authenticated('/api/v1/content/shared-power?playerRef=scope-player&worldRef=world-one&campaignRef=global-campaign&contentType=skill'),
+      authenticated(`/api/v1/content/shared-power?${oneQuery}&contentType=spell`),
+      authenticated(`/api/v1/content/shared-power?${twoQuery}&contentType=skill`),
+    ]);
+    expect(specific.body).toMatchObject({ name: 'Campaign Skill', contentType: 'skill' });
+    expect(globalFallback.body).toMatchObject({ name: 'Global Skill', contentType: 'skill' });
+    expect(typedSpell.body).toMatchObject({ name: 'Campaign Spell', contentType: 'spell' });
+    expect(foreign.body).toMatchObject({ name: 'Foreign Skill', contentType: 'skill' });
+    expect(globalSkill.id).not.toBe(campaignSkill.id);
+    expect(campaignSpell.id).not.toBe(campaignSkill.id);
+
+    const [worlds, campaigns] = await Promise.all([
+      authenticated('/api/v1/players/scope-player/worlds'),
+      authenticated('/api/v1/players/scope-player/worlds/world-one/campaigns'),
+    ]);
+    expect(worlds.body).toEqual([
+      { ref: 'world-one', name: 'World One', description: 'Primeiro mundo' },
+      { ref: 'world-two', name: 'World Two', description: 'Segundo mundo' },
+    ]);
+    expect(campaigns.body).toEqual([
+      { ref: 'global-campaign', name: 'Global Fallback', status: 'draft', currentTime: null, hasProtagonist: false },
+      { ref: 'shared-campaign', name: 'Campaign One', status: 'active', currentTime: null, hasProtagonist: false },
+    ]);
+
+    const missingResponses = await Promise.all([
+      authenticated('/api/v1/players/missing-player/worlds'),
+      authenticated('/api/v1/players/scope-player/worlds/missing-world/campaigns'),
+      authenticated('/api/v1/actors/shared-hero?playerRef=scope-player&worldRef=world-one&campaignRef=missing-campaign'),
+      authenticated(`/api/v1/actors/missing-actor?${oneQuery}`),
+      authenticated(`/api/v1/content/missing-content?${oneQuery}&contentType=skill`),
+    ]);
+    expect(missingResponses.map((response) => response.status)).toEqual([404, 404, 404, 404, 404]);
+    const missingMessages = missingResponses.map((response) => (response.body as { error?: { message?: string } }).error?.message);
+    expect(missingMessages).toEqual([
+      'Player not found', 'World not found', 'Campaign not found', 'Actor not found', 'Content not found',
+    ]);
+    expect(JSON.stringify([
+      actorFromOne.body, characterFromTwo.body, contentFromOne.body, contentFromTwo.body,
+      specific.body, globalFallback.body, typedSpell.body, foreign.body, worlds.body, campaigns.body,
+    ])).not.toMatch(/"id"|playerId|worldId|campaignId|actorId|contentDefinitionId/);
+  });
+
+  it('keeps the current Mundo Cardinal refs loadable with explicit scope', async () => {
+    const player = await prisma.player.findUniqueOrThrow({ where: { slug: 'ralph' } });
+    const world = await prisma.world.create({ data: { playerId: player.id, code: 'mundo-cardinal', name: 'Mundo Cardinal' } });
+    const campaign = await prisma.campaign.create({ data: { worldId: world.id, code: 'harem-perfeito', name: 'Harém Perfeito', status: CampaignStatus.ACTIVE } });
+    await prisma.actor.create({ data: { campaignId: campaign.id, code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER, health: 30, maxHealth: 30, mana: 15, maxMana: 15 } });
+
+    const response = await post('/api/v1/game/load', { playerRef: 'ralph', worldRef: 'mundo-cardinal', campaignRef: 'harem-perfeito' });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      player: { ref: 'ralph' }, world: { ref: 'mundo-cardinal' }, campaign: { ref: 'harem-perfeito' },
+      protagonist: { code: 'ralph', actorType: 'character' },
+    });
+    expect(JSON.stringify(response.body)).not.toMatch(/"id"|playerId|worldId|campaignId|actorId/);
   });
 });

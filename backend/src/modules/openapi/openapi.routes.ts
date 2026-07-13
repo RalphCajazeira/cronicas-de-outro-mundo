@@ -12,6 +12,8 @@ export const ACTIVE_API_ROUTES = [
   'GET /openapi.json',
   'POST /api/v1/game/load',
   'POST /api/v1/game/start',
+  'GET /api/v1/players/:playerRef/worlds',
+  'GET /api/v1/players/:playerRef/worlds/:worldRef/campaigns',
   'GET /api/v1/campaigns/:campaignRef/actors',
   'GET /api/v1/characters/:characterRef',
   'GET /api/v1/characters/:characterRef/content',

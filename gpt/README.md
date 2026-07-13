@@ -42,7 +42,7 @@ Os arquivos em `legacy/supabase-gpt-v1/` são somente referência histórica e n
 3. configurar API key no header `x-rpg-key`, sem copiar o valor para arquivos;
 4. colar integralmente `instructions.md`;
 5. enviar somente os nove arquivos oficiais de Knowledge;
-6. testar health, readiness, carga de estado e leituras antes de qualquer escrita;
+6. testar health, readiness, descoberta de mundos/campanhas, carga de estado com refs explícitas e demais leituras antes de qualquer escrita;
 7. em staging vazio, validar `loadGame` ausente, configuração e `startGame` antes de criar NPCs ou conteúdo;
 8. provocar um `INVALID_INPUT` sem persistência e confirmar uma única correção guiada.
 

@@ -1,25 +1,25 @@
 import { z } from 'zod';
-import { actorRefSchema } from '../actors/actors.schemas.js';
+import { codeSchema } from '../actors/actors.schemas.js';
+import { contentTypeSchema } from '../content/content.schemas.js';
 
-const codeSchema = actorRefSchema;
 const idempotencyKeySchema = z.string().trim().min(8).max(200);
 const jsonObjectSchema = z.record(z.string(), z.json());
 const scopeFields = {
-  playerRef: codeSchema.default('ralph'),
-  worldRef: codeSchema.default('elarion'),
-  campaignRef: codeSchema.default('main-campaign'),
+  playerRef: codeSchema,
+  worldRef: codeSchema,
+  campaignRef: codeSchema,
 };
 
 export const actorTypeSchema = z.enum(['character', 'npc', 'creature', 'companion', 'spirit']);
 export const actorStatusSchema = z.enum(['active', 'inactive', 'defeated', 'dead', 'archived']);
-export const contentTypeSchema = z.enum([
-  'skill', 'spell', 'weapon', 'armor', 'shield', 'item', 'talent', 'material', 'class', 'race',
-  'location', 'faction', 'quest_template', 'status_effect', 'recipe', 'creature_template', 'other',
-]);
 export const contentStatusSchema = z.enum(['draft', 'active', 'inactive', 'archived']);
 export const actorContentStateSchema = z.enum(['locked', 'learning', 'known', 'mastered']);
 
 export const loadGameSchema = z.strictObject(scopeFields);
+
+export const listPlayerWorldsSchema = z.strictObject({ playerRef: codeSchema });
+
+export const listWorldCampaignsSchema = z.strictObject({ playerRef: codeSchema, worldRef: codeSchema });
 
 export const listCampaignActorsSchema = z.strictObject({
   playerRef: scopeFields.playerRef,
@@ -55,13 +55,13 @@ const initialProtagonistSchema = z.strictObject({
 
 export const startGameSchema = z.strictObject({
   idempotencyKey: idempotencyKeySchema,
-  playerRef: codeSchema.default('ralph'),
+  playerRef: codeSchema,
   playerDisplayName: z.string().trim().min(1).max(200),
-  worldRef: codeSchema.default('elarion'),
+  worldRef: codeSchema,
   worldName: z.string().trim().min(1).max(200),
   worldDescription: z.string().trim().min(1).max(5_000).nullable().optional(),
   worldMetadata: jsonObjectSchema.default({}),
-  campaignRef: codeSchema.default('main-campaign'),
+  campaignRef: codeSchema,
   campaignName: z.string().trim().min(1).max(200),
   campaignMetadata: jsonObjectSchema.default({}),
   protagonist: initialProtagonistSchema,
@@ -92,7 +92,7 @@ export const patchActorSchema = z.strictObject({
 
 export const upsertContentSchema = z.strictObject({
   ...scopeFields,
-  campaignRef: codeSchema.nullable().default('main-campaign'),
+  campaignRef: codeSchema.nullable(),
   idempotencyKey: idempotencyKeySchema,
   contentType: contentTypeSchema,
   code: codeSchema,
@@ -147,6 +147,8 @@ export const createEventSchema = z.strictObject({
 });
 
 export type LoadGameInput = z.infer<typeof loadGameSchema>;
+export type ListPlayerWorldsInput = z.infer<typeof listPlayerWorldsSchema>;
+export type ListWorldCampaignsInput = z.infer<typeof listWorldCampaignsSchema>;
 export type StartGameInput = z.infer<typeof startGameSchema>;
 export type ListCampaignActorsInput = z.infer<typeof listCampaignActorsSchema>;
 export type UpsertActorInput = z.infer<typeof upsertActorSchema>;

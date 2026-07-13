@@ -1,4 +1,5 @@
 import type { ActorStatus, ActorType, Prisma } from '../../generated/prisma/client.js';
+import type { CampaignReference } from '../../shared/database/game-scope.js';
 
 export interface ActorRecord {
   id: string; code: string; name: string; actorType: ActorType; species: string | null;
@@ -8,8 +9,8 @@ export interface ActorRecord {
 }
 
 export interface ActorRepository {
-  findByReference(reference: string): Promise<ActorRecord | null>;
-  listContent(reference: string): Promise<ActorContentRecord[] | null>;
+  findByReference(scope: CampaignReference, reference: string): Promise<ActorRecord | null>;
+  listContent(scope: CampaignReference, reference: string): Promise<ActorContentRecord[] | null>;
 }
 
 export interface ActorContentRecord {
