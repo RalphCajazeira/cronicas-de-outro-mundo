@@ -185,3 +185,17 @@ A projeção mecânica carrega entradas e slots, valida o estado puro, soma peso
 O contrato público expõe refs, versão otimista, resumo de inventário, slots, peso e encumbrance, nunca UUIDs ou hashes internos. Uso de consumíveis, aplicação de efeitos, durabilidade, munição, loot automático e combate permanecem fora do escopo.
 
 Status: implementada e validada na Fase 1H; revisão e integração rastreadas pelo PR correspondente
+
+### Fase 1I — resolução pura de efeitos, recursos e estados ativos
+
+`core-v1-effects-v1` é uma identidade interna, schema 1, que orquestra definições canônicas sem alterar os manifestos publicados de ruleset, conteúdo ou inventário. A resolução valida toda a entrada, planeja e verifica o custo, executa efeitos em ordem sobre cópias e só retorna o novo estado e relatório após sucesso completo.
+
+Custos reutilizam `CoreV1Cost` e sua validação, aplicam modificadores tipados de Mana/SP/HP em BPS e preservam ao menos 1 HP. Rolls de hit e crítico são injetados; dano reutiliza precisão, crítico, dano bruto e mitigação da Fase 1A, incluindo defesa plana, block, resistências, imunidades e dano mínimo. Restauração reporta aplicado e desperdiçado sem alterar máximos ou `Actor.status`.
+
+Estados ativos fixam a versão pública exata da origem/status e usam ticks `bigint`, actions explícitas e scopes scene/encounter/permanent. Stacking implementa none, refresh, intensidade, duração e replace; modificadores ativos são coletados com origem `status` e ordem por `effectRef`, sem recalcular snapshots. Não há pulso periódico automático, upkeep executado, timeline, RNG ou persistência.
+
+Sequências aplicam custo uma vez e carregam o estado entre efeitos; miss mantém custos e efeitos self, mas bloqueia dano/status ofensivo dependente de hit. O uso puro de consumível reutiliza validação/remoção da Fase 1G, consome uma unidade somente depois do sucesso e exige orquestrador futuro para multi-target/area.
+
+Prisma, migrations, repositories, HTTP, OpenAPI, banco remoto, deploy e GPT ao vivo permanecem inalterados. A Fase 1J deverá decidir persistência autoritativa, transações, produção/persistência de rolls e integração com inventário/combate.
+
+Status: implementada e validada na Fase 1I; revisão e integração rastreadas pelo PR correspondente

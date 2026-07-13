@@ -1,5 +1,22 @@
 # Decision Log
 
+## 2026-07-13 — Fase 1I de resolução pura de efeitos, recursos e estados ativos
+
+Decisão:
+- criar `core-v1-effects-v1`, schema 1, como identidade interna pura sem modificar RC1/RC1.1 ou hashes publicados;
+- reutilizar custos, precisão, crítico, dano, mitigação, ticks, conteúdo canônico e operações puras de inventário existentes;
+- modelar projeções defensivas de recursos/atores, rolls injetados, relatórios de custo/dano/restauração e eventos conceituais allowlisted;
+- representar estados ativos versionados com duração por ticks/actions/scopes, stacking completo, expiração explícita e coleta determinística de modificadores;
+- executar sequências sobre cópias, com custo único e falha atômica, e planejar uso de consumível de alvo único com consumo posterior ao sucesso;
+- manter periodicidade, upkeep executado, timeline, RNG gerado, `Actor.status`, persistência, Prisma, HTTP/OpenAPI, deploy e GPT ao vivo fora do escopo.
+
+Impacto:
+- serviços autoritativos futuros podem reproduzir a mesma resolução a partir de projeções e rolls persistíveis, sem duplicar fórmulas;
+- o GPT continua enviando intenção e conteúdo proposto, nunca hit, crítico, dano final, recursos ou estados como autoridade;
+- a Fase 1J deverá integrar persistência/transações e a composição multi-target sem alterar retroativamente esta identidade.
+
+Status: implementada e validada na Fase 1I; revisão e integração rastreadas pelo PR correspondente
+
 ## 2026-07-13 — Fase 1H de inventário e equipamento persistentes
 
 Decisão:

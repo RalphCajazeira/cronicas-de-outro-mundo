@@ -8,11 +8,13 @@ export * from './core-v1.content.js';
 export * from './core-v1.content-mechanics.js';
 export * from './core-v1.inventory.js';
 export * from './core-v1.equipment.js';
+export * from './core-v1.effects.js';
 export * from './core-v1.damage.js';
 export * from './core-v1.progression.js';
 export type * from './core-v1.action-economy.types.js';
 export type * from './core-v1.content-mechanics.types.js';
 export type * from './core-v1.inventory.types.js';
+export type * from './core-v1.effects.types.js';
 export type * from './core-v1.types.js';
 export { CORE_V1_ACTION_ECONOMY_REVISION } from './core-v1.action-economy.config.js';
 export {
