@@ -18,7 +18,7 @@ Impacto:
 - o contrato GPT atual não é ampliado e os dados funcionais existentes não são convertidos;
 - nenhuma migration, dependência ou alteração de ambiente faz parte da Fase 1A.
 
-Status: implementada localmente na branch de feature; validação e aprovação de commit pendentes
+Status: implementada e validada na Fase 1A; revisão e integração rastreadas pelo PR #9
 
 ## 2026-07-12 — Criação estruturada, segura e sem migration
 
