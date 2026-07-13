@@ -6,12 +6,14 @@ O backend persiste mundos, campanhas, atores, os nove atributos primários, HP/M
 
 O validador puro de fichas canônicas está ligado ao contrato e à persistência versionada. Ele reconhece tier, raridade, dano físico/mágico separado, custos explícitos, perfis temporais, targeting, duração, efeitos, stacking, modificadores e requisitos. Uma resposta bem-sucedida de publicação confirma validação estrutural e cria ou reutiliza uma versão; ela não aplica efeitos ao ator, resolve combate ou gasta recursos.
 
+Existe também um núcleo puro interno para validar e planejar inventário, peso, carga e equipamento. Ele não possui endpoint, não grava estado e não autoriza o GPT a declarar obtenção, remoção, consumo ou equipamento como confirmado.
+
 ## O que permanece adiado
 
 Não existem de forma estruturada nesta fase:
 
 - resolução/aplicação de combate, dano, cura, gasto de recursos ou efeitos temporários;
-- inventário físico por instância, durabilidade, equipamento por slot ou loot;
+- persistência e operações HTTP de inventário físico por instância, durabilidade, equipamento por slot ou loot;
 - economia, comércio, lojas, estoque ou transações;
 - missões e relacionamentos especializados;
 - memórias de atores ou Codex especializado;

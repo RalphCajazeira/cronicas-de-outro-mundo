@@ -16,6 +16,8 @@ Uma espécie nominal usa `species`. Conteúdo `race` só é criado quando houver
 
 O backend calcula máximos, poderes do ator, defesas, precisão, evasão, velocidades, crítico, movimento, capacidade, resistências e regenerações pelo `core-v1`. O GPT nunca envia esses resultados como autoridade. Modificadores de um `ContentVersion.profile` são validados e persistidos, mas ainda não são aplicados ao snapshot do ator nesta fase.
 
+O núcleo interno consegue coletar modificadores passivos de um loadout puro com origem tipada de equipamento, sem aplicá-los. Como loadout e inventário ainda não são persistidos nem expostos por operação pública, isso apenas prepara uma recomputação autoritativa futura.
+
 ## Coerência
 
 Interprete valores confirmados de modo coerente com espécie, classe, experiência, condição e contexto. Campos omitidos preservam o estado apenas conforme o contrato da operação; nunca substitua ficha conhecida por padrão genérico.

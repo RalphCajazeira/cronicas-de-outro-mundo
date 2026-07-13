@@ -85,6 +85,20 @@ O OpenAPI ativo aceita perfil estruturado para os 13 tipos canônicos e `profile
 
 Status: implementada e validada na Fase 1F; revisão e integração rastreadas pelo PR correspondente
 
+### Fase 1G — núcleo puro de inventário, carga e equipamento
+
+`core-v1-inventory-v1` adiciona uma fronteira pura, determinística e sem infraestrutura para posse física futura. `ActorContent` permanece um vínculo conceitual com conteúdo conhecido ou concedido; seus campos genéricos `quantity` e `equipped` não são reinterpretados como inventário. Entradas físicas usam referências públicas de escopo, tipo, code e `versionNumber`, de modo que publicar v2 nunca altera ou funde automaticamente uma posse fixada em v1.
+
+O `CoreV1InventorySpec` separado contém peso e política `unique|stackable` e pode declarar slots/handedness físicos quando esses dados não cabem no perfil publicado da Fase 1E, sem alterar `core-v1-content-v1` ou seu hash. Instâncias possuem estado fechado; stacks são homogêneos, nunca vazios e limitados a 999 unidades. Operações processam no máximo 256 entradas e o loadout no máximo 32 instâncias, rejeitando refs duplicadas, objetos abertos, arrays esparsos, mutação e overflow.
+
+Peso usa a mesma unidade abstrata de `carryingCapacity`; equipamento conta uma vez e estados consumidos/destruídos não contam. Os thresholds delegam à economia de ações RC1.1: normal até 70%, encumbered até 100%, heavily encumbered até 125% e overloaded acima disso. Comparações inteiras evitam ponto flutuante e overflow.
+
+O loadout possui mãos, seis slots corporais e dois acessórios. Armas one-handed ocupam uma mão explícita; two-handed ocupam as duas; versatile exige modo explícito. Itens multisslot são planejados e alterados atomicamente, conflitos nunca são substituídos em silêncio e requisitos usam apenas projeções públicas do ator. Modificadores passivos equipados recebem origem tipada `equipment`, são apenas coletados/agregados e não recomputam o snapshot.
+
+Não há Prisma, migration, repository, HTTP, OpenAPI, persistência de `ItemInstance`, uso de consumível, aplicação de efeito ou acesso remoto. A Fase 1H deverá decidir o modelo persistido, transações, integração com a ficha e recomputação autoritativa.
+
+Status: implementada e validada na Fase 1G; revisão e integração rastreadas pelo PR correspondente
+
 ## Arquitetura de testes
 
 ```text
