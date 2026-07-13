@@ -27,7 +27,7 @@ export type AuditLogWriter = (record: HttpAuditRecord) => void;
 
 const allowedStringFields = [
   'actorRef', 'actorType', 'campaignRef', 'code', 'contentRef', 'contentType', 'eventType',
-  'operation', 'playerRef', 'state', 'status', 'worldRef',
+  'operation', 'playerMode', 'playerRef', 'preset', 'state', 'status', 'worldMode', 'worldRef',
 ] as const;
 const allowedNumberFields = ['equipped', 'level', 'mastery', 'progress', 'quantity', 'rank', 'removed'] as const;
 const sensitiveKeyPattern = /authorization|cookie|key|password|secret|token/i;
@@ -93,6 +93,32 @@ function summarizeRequest(request: Request): Record<string, AuditValue> {
     const protagonist: Record<string, AuditValue> = { keys: safeKeys(request.body.protagonist) };
     addAllowedScalars(request.body.protagonist, protagonist);
     body.protagonist = protagonist;
+  }
+  if (Array.isArray(request.body.initialContentPackages)) {
+    const contentTypes: Record<string, number> = {};
+    let linkCount = 0;
+    let equippedCount = 0;
+    for (const item of request.body.initialContentPackages) {
+      if (!isRecord(item)) continue;
+      if (isRecord(item.definition)) {
+        const contentType = safeString(item.definition.contentType);
+        if (contentType !== undefined) contentTypes[contentType] = (contentTypes[contentType] ?? 0) + 1;
+      }
+      if (isRecord(item.protagonistLink)) {
+        linkCount += 1;
+        if (item.protagonistLink.equipped === true) equippedCount += 1;
+      }
+    }
+    body.initialContent = {
+      packageCount: request.body.initialContentPackages.length,
+      linkCount,
+      equippedCount,
+      contentTypes,
+    };
+  }
+  if (isRecord(request.body.campaignConfiguration) && isRecord(request.body.campaignConfiguration.difficulty)) {
+    const preset = safeString(request.body.campaignConfiguration.difficulty.preset);
+    if (preset !== undefined) body.difficultyPreset = preset;
   }
   if (isRecord(request.body.metadata)) body.metadataKeys = safeKeys(request.body.metadata);
   if (isRecord(request.body.payload)) body.payloadKeys = safeKeys(request.body.payload);

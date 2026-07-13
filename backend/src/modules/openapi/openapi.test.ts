@@ -4,6 +4,7 @@ import { ACTIVE_API_ROUTES, getOfficialContract } from './openapi.routes.js';
 interface Operation { operationId?: string; security?: unknown; parameters?: Array<Schema & { name?: string; in?: string; required?: boolean }>; requestBody?: { content?: { 'application/json'?: { schema?: Schema } } }; description?: string; responses?: Record<string, unknown> }
 interface Schema {
   $ref?: string;
+  description?: string;
   required?: string[];
   properties?: Record<string, Schema>;
   items?: Schema;
@@ -11,6 +12,8 @@ interface Schema {
   additionalProperties?: boolean;
   enum?: unknown[];
   format?: string;
+  maxItems?: number;
+  maxLength?: number;
   if?: Schema;
   then?: Schema;
   not?: Schema;
@@ -35,6 +38,24 @@ function operations() {
 function resolveSchema(schema: Schema | undefined): Schema {
   if (schema?.$ref === undefined) return schema ?? {};
   return contract.components.schemas[schema.$ref.split('/').at(-1) ?? ''] ?? {};
+}
+
+function reachableSchemas(schemaName: string, seen = new Set<string>()): Record<string, Schema> {
+  if (seen.has(schemaName)) return {};
+  seen.add(schemaName);
+  const schema = contract.components.schemas[schemaName];
+  if (schema === undefined) return {};
+  const result: Record<string, Schema> = { [schemaName]: schema };
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) value.forEach(visit);
+    else if (value !== null && typeof value === 'object') {
+      const reference = (value as { $ref?: unknown }).$ref;
+      if (typeof reference === 'string') Object.assign(result, reachableSchemas(reference.split('/').at(-1) ?? '', seen));
+      Object.values(value).forEach(visit);
+    }
+  };
+  visit(schema);
+  return result;
 }
 
 function collectEnums(value: unknown, result: unknown[][] = []): unknown[][] {
@@ -156,6 +177,36 @@ describe('official OpenAPI contract', () => {
     expect(requestSchemas.every((schema) => schema.additionalProperties === false)).toBe(true);
     const enumStrings = collectEnums(contract).flat().filter((value): value is string => typeof value === 'string');
     expect(enumStrings.every((value) => value === value.toLowerCase())).toBe(true);
+  });
+
+  it('documents structured startGame without request unions and with reusable closed objects', () => {
+    const start = contract.components.schemas.StartGameInput;
+    if (start === undefined) throw new Error('StartGameInput schema is required');
+    expect(start.required).toEqual(expect.arrayContaining([
+      'idempotencyKey', 'playerMode', 'playerRef', 'worldMode', 'worldRef', 'campaignRef', 'campaignName',
+      'campaignConfiguration', 'protagonist', 'initialContentPackages', 'initialPremise',
+    ]));
+    expect(start.additionalProperties).toBe(false);
+    const reachable = reachableSchemas('StartGameInput');
+    expect(JSON.stringify(reachable)).not.toMatch(/"oneOf"|"anyOf"|effectiveProfile/);
+    for (const schemaName of ['WorldConfiguration', 'CampaignConfiguration', 'Appearance', 'Personality', 'Origin', 'InitialContentDefinition', 'InitialActorContentLink', 'InitialContentPackage']) {
+      expect(contract.components.schemas[schemaName]?.additionalProperties, schemaName).toBe(false);
+      expect(contract.components.schemas[schemaName]?.properties, schemaName).toBeDefined();
+    }
+    expect(contract.components.schemas.InitialContentDefinition?.description).toContain('reuse aceita somente');
+    expect(contract.components.schemas.InitialActorContentLink?.properties).not.toHaveProperty('actorRef');
+    expect(start.description).toContain('81920 bytes UTF-8');
+    expect(start.properties?.initialContentPackages?.maxItems).toBe(24);
+    expect(start.properties?.initialPremise?.maxLength).toBe(1000);
+  });
+
+  it('exposes appearance, personality and an explicit linkedContent DTO', () => {
+    expect(contract.components.schemas.Actor?.required).toEqual(expect.arrayContaining(['appearance', 'personality']));
+    expect(contract.components.schemas.Actor?.properties).toMatchObject({
+      appearance: { $ref: '#/components/schemas/Appearance' }, personality: { $ref: '#/components/schemas/Personality' },
+    });
+    expect(contract.components.schemas.GameState?.properties?.linkedContent?.items).toEqual({ $ref: '#/components/schemas/LinkedActorContent' });
+    expect(contract.components.schemas.LinkedActorContent).toBeDefined();
   });
 
   it('contains neither legacy endpoints nor sensitive infrastructure', () => {

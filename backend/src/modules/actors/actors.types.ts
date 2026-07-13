@@ -5,7 +5,8 @@ export interface ActorRecord {
   id: string; code: string; name: string; actorType: ActorType; species: string | null;
   className: string | null; level: number; xp: number; gold: number; health: number;
   maxHealth: number; mana: number; maxMana: number; attributes: Prisma.JsonValue;
-  resistances: Prisma.JsonValue; affinities: Prisma.JsonValue; status: ActorStatus;
+  resistances: Prisma.JsonValue; affinities: Prisma.JsonValue; appearance: Prisma.JsonValue;
+  personality: Prisma.JsonValue; status: ActorStatus;
 }
 
 export interface ActorRepository {

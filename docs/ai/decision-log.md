@@ -1,5 +1,26 @@
 # Decision Log
 
+## 2026-07-12 — Criação estruturada, segura e sem migration
+
+Decisão:
+- ampliar `startGame` sem alterar o schema Prisma, usando `World.metadata.worldConfig` e `Campaign.metadata.campaignConfig` com `schemaVersion: 1`;
+- exigir modos `create|reuse` para Player e World, validando reutilizados sem atualização silenciosa, e sempre criar Campaign nova;
+- criar protagonista com aparência, personalidade e origem, definições globais/específicas, vínculos e um evento técnico `campaign-started` na mesma transação idempotente;
+- usar dificuldade por preset com overrides parciais e perfil efetivo calculado; `custom` exige as seis dimensões;
+- interpretar `equipped` como conteúdo selecionado/preparado/em uso, sem inventário por instância ou slots;
+- limitar `startGame` a 80 KB, 24 pacotes e JSON controlado;
+- tratar como retry idempotente somente colisão `P2002` comprovada por metadata estruturada de `IdempotencyRecord.key`.
+- exigir que `className` coincida exatamente com o nome público da classe mecânica inicial, inclusive ao reutilizar definição persistida;
+- montar `campaign-started` por DTO allowlisted de até 8 KB UTF-8 e manter seu `idempotencyKey` nulo, deixando a idempotência exclusivamente no registro da operação;
+- nunca reproduzir resposta idempotente ausente ou vazia como sucesso.
+
+Impacto:
+- não há migration nem dependência nova;
+- conteúdos `reuse` enviam somente mode, escopo global, tipo e code;
+- checkpoint, inventário físico, combate e demais subsistemas especializados continuam adiados.
+
+Status: implementado na branch de feature; validação e merge pendentes
+
 ## 2026-07-11 — Reinicialização da plataforma Node
 
 Contexto:

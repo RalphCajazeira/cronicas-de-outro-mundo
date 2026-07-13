@@ -18,4 +18,6 @@ Uma definição de conteúdo exige descrição, `mechanics`, `requirements`, `pr
 
 Criar conteúdo não o concede ao ator. Aprendizado, concessão, atualização, equipamento, remoção e demais mudanças só existem após resposta bem-sucedida do backend.
 
+Na criação inicial confirmada, `startGame` pode criar definições globais ou específicas da Campaign e seus vínculos com o protagonista na mesma transação. Uma definição reutilizada deve ser consultada antes e referenciada sem reenviar ou atualizar sua ficha. `equipped` significa selecionado, preparado ou em uso ativo; raça, classe, condição permanente e conteúdo passivo permanecem normalmente com `equipped: false`. Quantidade e equipamento continuam genéricos, sem instâncias ou slots físicos.
+
 Metadados permitem contexto genérico, mas não devem simular campo, tabela, vínculo ou regra automática inexistente. Use evento para fatos duradouros somente quando o contrato de eventos representar a intenção com clareza.

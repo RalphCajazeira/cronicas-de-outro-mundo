@@ -5,7 +5,8 @@ import type { ActorRepository } from './actors.types.js';
 
 const actorSelect = { id: true, code: true, name: true, actorType: true, species: true, className: true,
   level: true, xp: true, gold: true, health: true, maxHealth: true, mana: true, maxMana: true,
-  attributes: true, resistances: true, affinities: true, status: true } satisfies Prisma.ActorSelect;
+  attributes: true, resistances: true, affinities: true, appearance: true, personality: true,
+  status: true } satisfies Prisma.ActorSelect;
 
 export function scopedActorKey(campaignId: string, code: string): Prisma.ActorWhereUniqueInput {
   return { campaignId_code: { campaignId, code } };

@@ -15,7 +15,7 @@ Projeto de RPG narrativo reiniciado como nova versão, com o sistema anterior ar
 
 ## Implementação atual
 
-- API GPT v1 com criação transacional de novo jogo, carga de estado, leitura e persistência de atores, conteúdo, progressão e eventos.
+- API GPT v1 com criação estruturada e transacional de novo jogo, carga de estado, leitura e persistência de atores, conteúdo, progressão e eventos. `startGame` cria ou valida Player/World explicitamente, sempre cria Campaign nova e persiste configurações versionadas, protagonista completo, conteúdos, vínculos e `campaign-started` sem migration.
 - Descoberta somente leitura de mundos/campanhas e refs explícitas em todas as operações escopadas, sem defaults de save ou inferência de “última campanha”.
 - Chave interna temporária `x-rpg-key` em `/api/v1`.
 - OpenAPI 3.1 ativo em `gpt/openapi.json` e `/openapi.json`; artefatos atuais do GPT separados do legado.
