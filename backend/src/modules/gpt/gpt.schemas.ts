@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { codeSchema } from '../actors/actors.schemas.js';
 import {
-  contentPresentationSchema, contentTagsSchema, contentTypeSchema, coreV1ContentProfileSchema,
+  contentPresentationSchema, contentTagsSchema, contentTypeSchema, coreV1ContentProfileSchema, inventorySpecSchema,
   validateContentPublicationShape,
 } from '../content/content.schemas.js';
 import { validateInitialPrimaryAttributes, type PrimaryAttributes } from '../rules/core-v1/index.js';
@@ -177,7 +177,6 @@ const initialProtagonistSchema = z.strictObject({
 const initialLinkSchema = z.strictObject({
   state: actorContentStateSchema,
   rank: z.number().int().min(0), progress: z.number().int().min(0), mastery: z.number().int().min(0),
-  equipped: z.boolean(), quantity: z.number().int().min(1).max(999),
   notes: z.string().trim().max(2_000).nullable().optional(), metadata: limitedJsonObject().optional(),
 });
 
@@ -189,6 +188,7 @@ const initialDefinitionSchema = z.strictObject({
   name: z.string().trim().min(1).max(200).optional(),
   description: z.string().trim().min(1).max(2_000).optional(),
   profile: coreV1ContentProfileSchema.nullable().optional(), presentation: contentPresentationSchema.optional(),
+  inventorySpec: inventorySpecSchema.nullable().optional(),
   tags: contentTagsSchema.optional(),
   status: contentStatusSchema.optional(), metadata: limitedJsonObject().optional(), overridesWorldDefinition: z.boolean().optional(),
 }).superRefine((value, context) => {
@@ -212,7 +212,7 @@ const initialDefinitionSchema = z.strictObject({
     }
   } else {
     if (value.scope !== 'world') context.addIssue({ code: 'custom', path: ['scope'], message: 'Reused content must have world scope' });
-    [...createFields, 'profile', 'metadata', 'overridesWorldDefinition'].forEach((field) => {
+    [...createFields, 'profile', 'inventorySpec', 'metadata', 'overridesWorldDefinition'].forEach((field) => {
       if (value[field as keyof typeof value] !== undefined) context.addIssue({ code: 'custom', path: [field], message: 'Not allowed when mode is reuse' });
     });
   }
@@ -231,8 +231,8 @@ function validateStartingClassLink(
   value: z.infer<typeof initialContentPackageSchema> | undefined, context: z.RefinementCtx,
 ) {
   const link = value?.protagonistLink;
-  if (link !== undefined && (!isInitiallyKnown(link.state) || link.equipped)) {
-    context.addIssue({ code: 'custom', path: ['initialContentPackages'], message: 'Starting class must be known or mastered and not equipped' });
+  if (link !== undefined && !isInitiallyKnown(link.state)) {
+    context.addIssue({ code: 'custom', path: ['initialContentPackages'], message: 'Starting class must be known or mastered' });
   }
 }
 
@@ -270,17 +270,18 @@ function validateKnownRequirements(
   }
 }
 
-function validateEquipped(value: z.infer<typeof initialContentPackageSchema>, index: number, context: z.RefinementCtx) {
-  if (value.protagonistLink?.equipped !== true || value.definition.mode !== 'create') return;
-  const profile = value.definition.profile;
-  const type = value.definition.contentType;
-  const path = ['initialContentPackages', index, 'protagonistLink', 'equipped'];
-  const directlySelectable = ['weapon', 'armor', 'shield', 'clothing'].includes(type);
-  const activatable = profile?.profileMode === 'mechanical'
-    && ['spell', 'skill', 'talent', 'item', 'consumable'].includes(type)
-    && profile.activation.type !== 'passive';
-  if (!directlySelectable && !activatable) context.addIssue({ code: 'custom', path, message: 'This canonical profile cannot be selected, prepared or equipped' });
-}
+const initialInventoryItemSchema = z.strictObject({
+  scope: z.enum(['world', 'campaign']),
+  contentType: z.enum(['weapon', 'armor', 'shield', 'clothing', 'item', 'consumable', 'material', 'other']),
+  code: codeSchema,
+  quantity: z.number().int().positive(),
+  entryRefs: z.array(codeSchema).min(1).max(256),
+  customName: z.string().trim().min(1).max(200).optional(),
+  equip: z.strictObject({
+    targetSlotRef: z.enum(['main_hand', 'off_hand', 'head', 'chest', 'hands', 'legs', 'feet', 'body', 'accessory_1', 'accessory_2']).optional(),
+    versatileMode: z.enum(['one_handed', 'two_handed']).optional(),
+  }).optional(),
+});
 
 export const startGameSchema = z.strictObject({
   idempotencyKey: idempotencyKeySchema,
@@ -290,6 +291,7 @@ export const startGameSchema = z.strictObject({
   campaignRef: codeSchema, campaignName: z.string().trim().min(1).max(200), campaignConfiguration: campaignConfigurationSchema,
   protagonist: initialProtagonistSchema,
   initialContentPackages: z.array(initialContentPackageSchema).max(24),
+  initialInventory: z.array(initialInventoryItemSchema).max(256).optional(),
   initialPremise: z.string().trim().min(1).max(1_000),
 }).superRefine((value, context) => {
   if (jsonByteSize(value) > START_GAME_MAX_BYTES) context.addIssue({ code: 'custom', message: 'Serialized startGame payload must be at most 81920 bytes' });
@@ -318,8 +320,18 @@ export const startGameSchema = z.strictObject({
     if (classModel.mode === 'none' && definition.contentType === 'class' && item.protagonistLink !== undefined) {
       context.addIssue({ code: 'custom', path: ['initialContentPackages', index, 'protagonistLink'], message: 'Class content cannot be linked when classModel.mode is none' });
     }
-    validateEquipped(item, index, context);
     if (isInitiallyKnown(item.protagonistLink?.state)) validateKnownRequirements(item, index, linkedKnown, value.protagonist.primaryAttributes, context);
+  });
+
+  const inventoryRefs = new Set<string>();
+  value.initialInventory?.forEach((item, index) => {
+    const exists = value.initialContentPackages.some((candidate) => candidate.definition.scope === item.scope
+      && candidate.definition.contentType === item.contentType && candidate.definition.code === item.code);
+    if (!exists) context.addIssue({ code: 'custom', path: ['initialInventory', index, 'code'], message: 'Initial inventory content must be resolved by initialContentPackages' });
+    item.entryRefs.forEach((entryRef, refIndex) => {
+      if (inventoryRefs.has(entryRef)) context.addIssue({ code: 'custom', path: ['initialInventory', index, 'entryRefs', refIndex], message: 'Initial inventory entry refs must be globally unique' });
+      inventoryRefs.add(entryRef);
+    });
   });
 
   if (classModel.mode === 'mechanical' && classModel.startingClass === 'required') {
@@ -378,23 +390,76 @@ export const upsertContentSchema = z.strictObject({
   ...scopeFields, campaignRef: codeSchema.nullable(), idempotencyKey: idempotencyKeySchema, contentType: contentTypeSchema,
   code: codeSchema, name: z.string().trim().min(1).max(200), description: z.string().trim().min(1).max(10_000),
   profile: coreV1ContentProfileSchema.nullable().optional(), presentation: contentPresentationSchema,
+  inventorySpec: inventorySpecSchema.nullable().optional(),
   tags: contentTagsSchema,
   status: contentStatusSchema, metadata: limitedJsonObject().optional(),
 }).superRefine((value, context) => validateContentPublicationShape(value, context));
 
 const actorContentChangesSchema = z.strictObject({
   state: actorContentStateSchema.optional(), rank: z.number().int().min(0).optional(), progress: z.number().int().min(0).optional(),
-  mastery: z.number().int().min(0).optional(), equipped: z.boolean().optional(), quantity: z.number().int().min(0).optional(),
+  mastery: z.number().int().min(0).optional(),
   notes: z.string().trim().max(2_000).nullable().optional(), metadata: limitedJsonObject().optional(),
 }).optional();
 
 export const manageActorContentSchema = z.strictObject({
-  ...scopeFields, operation: z.enum(['get', 'list', 'learn', 'grant', 'update', 'equip', 'unequip', 'remove']),
+  ...scopeFields, operation: z.enum(['get', 'list', 'learn', 'grant', 'update', 'remove']),
   contentRef: codeSchema.optional(), contentType: contentTypeSchema.optional(), idempotencyKey: idempotencyKeySchema.optional(), changes: actorContentChangesSchema,
 }).superRefine((value, context) => {
   if (value.operation !== 'list' && (value.contentRef === undefined || value.contentType === undefined)) context.addIssue({ code: 'custom', path: ['contentRef'], message: 'contentRef and contentType are required' });
   if (!['get', 'list'].includes(value.operation) && value.idempotencyKey === undefined) context.addIssue({ code: 'custom', path: ['idempotencyKey'], message: 'Required for write operations' });
   if (value.operation === 'update' && value.changes === undefined) context.addIssue({ code: 'custom', path: ['changes'], message: 'Required for update' });
+});
+
+const inventoryContentReferenceSchema = z.strictObject({
+  scope: z.enum(['world', 'campaign']),
+  contentType: z.enum(['weapon', 'armor', 'shield', 'clothing', 'item', 'consumable', 'material', 'other']),
+  code: codeSchema,
+  versionNumber: z.number().int().positive(),
+});
+
+const inventoryOperationSchema = z.enum(['get', 'grant', 'remove', 'split', 'merge', 'reserve', 'release', 'destroy', 'equip', 'unequip']);
+
+export const manageActorInventorySchema = z.strictObject({
+  ...scopeFields,
+  operation: inventoryOperationSchema,
+  idempotencyKey: idempotencyKeySchema.optional(),
+  expectedInventoryStateVersion: z.number().int().positive().optional(),
+  contentRef: inventoryContentReferenceSchema.optional(),
+  quantity: z.number().int().positive().optional(),
+  entryRefs: z.array(codeSchema).max(256).optional(),
+  customName: z.string().trim().min(1).max(200).optional(),
+  entryRef: codeSchema.optional(),
+  newEntryRef: codeSchema.optional(),
+  sourceEntryRef: codeSchema.optional(),
+  targetEntryRef: codeSchema.optional(),
+  targetSlotRef: z.enum(['main_hand', 'off_hand', 'head', 'chest', 'hands', 'legs', 'feet', 'body', 'accessory_1', 'accessory_2']).optional(),
+  versatileMode: z.enum(['one_handed', 'two_handed']).optional(),
+}).superRefine((value, context) => {
+  const write = value.operation !== 'get';
+  if (write && value.idempotencyKey === undefined) context.addIssue({ code: 'custom', path: ['idempotencyKey'], message: 'Required for write operations' });
+  if (write && value.expectedInventoryStateVersion === undefined) context.addIssue({ code: 'custom', path: ['expectedInventoryStateVersion'], message: 'Required for write operations' });
+  const requiredByOperation: Record<z.infer<typeof inventoryOperationSchema>, readonly string[]> = {
+    get: [], grant: ['contentRef', 'quantity', 'entryRefs'], remove: ['entryRef', 'quantity'],
+    split: ['entryRef', 'quantity', 'newEntryRef'], merge: ['sourceEntryRef', 'targetEntryRef'],
+    reserve: ['entryRef'], release: ['entryRef'], destroy: ['entryRef'], equip: ['entryRef'], unequip: ['entryRef'],
+  };
+  const common = new Set(['playerRef', 'worldRef', 'campaignRef', 'operation', ...(write ? ['idempotencyKey', 'expectedInventoryStateVersion'] : [])]);
+  const optionalByOperation: Record<z.infer<typeof inventoryOperationSchema>, readonly string[]> = {
+    get: [], grant: ['contentRef', 'quantity', 'entryRefs', 'customName'], remove: ['entryRef', 'quantity'],
+    split: ['entryRef', 'quantity', 'newEntryRef'], merge: ['sourceEntryRef', 'targetEntryRef'],
+    reserve: ['entryRef'], release: ['entryRef'], destroy: ['entryRef'],
+    equip: ['entryRef', 'targetSlotRef', 'versatileMode'], unequip: ['entryRef'],
+  };
+  requiredByOperation[value.operation].forEach((field) => {
+    if (value[field as keyof typeof value] === undefined) context.addIssue({ code: 'custom', path: [field], message: `Required for ${value.operation}` });
+  });
+  const allowed = new Set([...common, ...optionalByOperation[value.operation]]);
+  Object.keys(value).forEach((field) => {
+    if (!allowed.has(field)) context.addIssue({ code: 'custom', path: [field], message: `Not allowed for ${value.operation}` });
+  });
+  if (value.entryRefs !== undefined && new Set(value.entryRefs).size !== value.entryRefs.length) {
+    context.addIssue({ code: 'custom', path: ['entryRefs'], message: 'Entry refs must be unique' });
+  }
 });
 
 export const createEventSchema = z.strictObject({
@@ -411,4 +476,5 @@ export type UpsertActorInput = z.infer<typeof upsertActorSchema>;
 export type PatchActorInput = z.infer<typeof patchActorSchema>;
 export type UpsertContentInput = z.infer<typeof upsertContentSchema>;
 export type ManageActorContentInput = z.infer<typeof manageActorContentSchema>;
+export type ManageActorInventoryInput = z.infer<typeof manageActorInventorySchema>;
 export type CreateEventInput = z.infer<typeof createEventSchema>;

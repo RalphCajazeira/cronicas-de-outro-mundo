@@ -1,5 +1,23 @@
 # Decision Log
 
+## 2026-07-13 — Fase 1H de inventário e equipamento persistentes
+
+Decisão:
+- separar definitivamente `ActorContent` (conhecimento/progressão) de posse física, removendo `equipped` e `quantity` sem copiar dados;
+- publicar `InventoryRulesVersion(core-v1-inventory-v1)` como manifesto imutável com hash e fixar `inventorySpec` a cada `ContentVersion` física;
+- persistir instâncias/stacks em `InventoryEntry` e derivar equipamento apenas de `ActorEquipmentSlot`, inclusive para itens multisslot;
+- centralizar todas as mutações em uma orquestração com lock do Actor, versão otimista, idempotência e recomputação mecânica atômica;
+- aplicar peso, encumbrance e modificadores de equipamento na ficha autoritativa, com hash sem IDs/timestamps;
+- usar migration clean-slate, constraints/triggers/RLS e nenhum backfill, delete, truncate ou acesso remoto;
+- manter consumo/aplicação de efeitos, combate, durabilidade, lojas, deploy e atualização do GPT ao vivo fora do escopo.
+
+Impacto:
+- `manageActorInventory` passa a ser a única fronteira pública para posse/equipamento e `startGame` reutiliza o mesmo service;
+- clientes devem enviar `expectedInventoryStateVersion` em toda escrita e resolver conflitos recarregando o inventário;
+- conteúdo físico exige spec versionado e a resposta pública usa apenas refs estáveis, slots derivados e resumos de carga.
+
+Status: implementada e validada na Fase 1H; revisão e integração rastreadas pelo PR correspondente
+
 ## 2026-07-13 — Fase 1G de inventário, carga e equipamento puros
 
 Decisão:

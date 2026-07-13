@@ -8,6 +8,7 @@ import {
   CORE_V1_VERSION_CODE,
 } from '../rules/core-v1/core-v1.manifest.js';
 import {
+  calculateEffectiveAttributes,
   calculateResourceMaximums,
   calculateSecondaryAttributes,
   getInitialAttributePreset,
@@ -49,13 +50,14 @@ function mechanicalRecord() {
     primaryAttributes,
     calculationInputs: {
       weaponFamilyRank: 0, magicSchoolRank: 0, accuracyRank: 0, evasionRank: 0,
-      encumbrancePenalty: 0, modifiers: {},
+      encumbrancePenaltyBps: 0, totalCarriedWeight: 0, equipment: [],
     },
   });
   return {
     id: actorId,
     level: 1,
     mechanicsStateVersion: 1,
+    inventoryStateVersion: 1,
     campaign: {
       rulesetVersionId,
       rulesetVersion: {
@@ -80,6 +82,7 @@ function mechanicalRecord() {
     derivedSnapshot: {
       id: '30000000-0000-0000-0000-000000000001', actorId, rulesetVersionId,
       mechanicsStateVersion: 1, ...maximums,
+      inventoryStateVersion: 1,
       actorPhysicalPower: secondary.actorPhysicalPower,
       actorMagicalPower: secondary.actorMagicalPower,
       physicalDefense: secondary.physicalDefense,
@@ -101,6 +104,19 @@ function mechanicalRecord() {
       inputHash,
       createdAt: now,
       updatedAt: now,
+    },
+    inventoryInputs: {
+      inventory: { entries: [] },
+      loadout: {
+        slots: [
+          ['main_hand', 'main_hand'], ['off_hand', 'off_hand'], ['head', 'head'], ['chest', 'chest'],
+          ['hands', 'hands'], ['legs', 'legs'], ['feet', 'feet'], ['body', 'body'],
+          ['accessory_1', 'accessory'], ['accessory_2', 'accessory'],
+        ].map(([slotRef, slotType]) => ({ slotRef, slotType, entryRef: null })),
+      },
+      totalCarriedWeight: 0,
+      modifiers: [],
+      equipmentHashInput: [],
     },
   };
 }
@@ -136,13 +152,50 @@ describe('actor mechanical state', () => {
       primaryAttributes: sheet.primaryAttributes,
       calculationInputs: {
         weaponFamilyRank: 0 as const, magicSchoolRank: 0 as const, accuracyRank: 0 as const,
-        evasionRank: 0 as const, encumbrancePenalty: 0 as const, modifiers: {},
+        evasionRank: 0 as const, encumbrancePenaltyBps: 0, totalCarriedWeight: 0, equipment: [],
       },
     };
     const hash = createActorMechanicsInputHash(input);
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
     expect(createActorMechanicsInputHash({ ...input, primaryAttributes: { ...input.primaryAttributes } })).toBe(hash);
     expect(createActorMechanicsInputHash({ ...input, level: 2 })).not.toBe(hash);
+  });
+
+  it('applies equipped primary modifiers without leaking target metadata into numeric helpers', () => {
+    const record = mechanicalRecord();
+    const source = { type: 'equipment' as const, ref: 'strength-harness' };
+    record.inventoryInputs.modifiers = [{ target: 'strength', source, value: 1 }] as never;
+    record.inventoryInputs.equipmentHashInput = [{
+      entryRef: 'strength-harness', contentType: 'item', code: 'strength-harness', versionNumber: 1,
+      inventorySpecHash: 'a'.repeat(64), passiveModifiers: [{ target: 'strength', amount: 1, sourceRule: 'equipped_content' }],
+    }] as never;
+    const base = getInitialAttributePreset('balanced');
+    const effective = calculateEffectiveAttributes(base, { strength: [{ source, value: 1 }] });
+    const maximums = calculateResourceMaximums(effective, 1);
+    const secondary = calculateSecondaryAttributes({
+      attributes: effective, weaponFamilyRank: 0, magicSchoolRank: 0, accuracyRank: 0, evasionRank: 0,
+      encumbrancePenalty: 0,
+    });
+    Object.assign(record.derivedSnapshot, maximums, {
+      actorPhysicalPower: secondary.actorPhysicalPower, actorMagicalPower: secondary.actorMagicalPower,
+      physicalDefense: secondary.physicalDefense, magicalDefense: secondary.magicalDefense,
+      accuracy: secondary.accuracy, evasion: secondary.evasion,
+      baseAttackSpeedBps: secondary.baseAttackSpeedBps, baseCastingSpeedBps: secondary.baseCastingSpeedBps,
+      criticalChanceBps: secondary.criticalChanceBps, criticalDamageBps: secondary.criticalDamageBps,
+      movementSpeed: secondary.movementSpeed, carryingCapacity: secondary.carryingCapacity,
+      physicalResistanceBps: secondary.physicalResistanceBps, magicalResistanceBps: secondary.magicalResistanceBps,
+      elementalResistanceSnapshot: { default: secondary.elementalResistanceBps },
+      hpRegen: secondary.hpRegen, manaRegen: secondary.manaRegen, spRegen: secondary.spRegen,
+      inputHash: createActorMechanicsInputHash({
+        ruleset: { code: CORE_V1_VERSION_CODE, revision: CORE_V1_REVISION, configHash: CORE_V1_CONFIG_HASH },
+        level: 1, primaryAttributes: effective,
+        calculationInputs: {
+          weaponFamilyRank: 0, magicSchoolRank: 0, accuracyRank: 0, evasionRank: 0,
+          encumbrancePenaltyBps: 0, totalCarriedWeight: 0, equipment: record.inventoryInputs.equipmentHashInput,
+        },
+      }),
+    });
+    expect(project(record).primaryAttributes.strength).toBe(base.strength + 1);
   });
 
   it('rejects missing and duplicate attributes or resources', () => {

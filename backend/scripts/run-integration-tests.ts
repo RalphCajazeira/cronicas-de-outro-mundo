@@ -6,6 +6,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import { ensureCoreV1ContentProfileVersion } from '../src/modules/rules/content-profile.registry.js';
+import { ensureCoreV1InventoryRulesVersion } from '../src/modules/rules/inventory-rules.registry.js';
 import { ensureCoreV1RulesetVersion } from '../src/modules/rules/ruleset.registry.js';
 import { createAdminUrl, resolveTestDatabaseConfig } from '../tests/support/test-database.js';
 
@@ -170,6 +171,50 @@ async function verifyContentCleanSlatePrecondition(databaseUrl: URL, adminUrl: U
   console.info('Phase 1F clean-slate precondition verified safely');
 }
 
+async function verifyInventoryCleanSlatePrecondition(databaseUrl: URL, adminUrl: URL): Promise<void> {
+  await recreateTestDatabase(adminUrl);
+  const client = new Client({ connectionString: databaseUrl.toString() });
+  await client.connect();
+  try {
+    await client.query(migrationSql('20260711183000_init'));
+    await client.query(migrationSql('20260711223000_production_gpt_security'));
+    await client.query(migrationSql('20260713174337_engine_v1_ruleset_persistence'));
+    await client.query(migrationSql('20260713190000_engine_v1_actor_mechanics'));
+    await client.query(migrationSql('20260713230000_engine_v1_content_versioning'));
+    await client.query(`
+      INSERT INTO "Ruleset" ("id", "code", "name")
+      VALUES ('30000000-0000-0000-0000-000000000001', 'inventory-precondition', 'Inventory Precondition');
+      INSERT INTO "RulesetVersion" ("id", "rulesetId", "code", "revision", "schemaVersion", "configHash", "configSnapshot")
+      VALUES ('30000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000001', 'inventory-precondition-v1', 'test', 1, repeat('0', 64), '{}');
+      INSERT INTO "Player" ("id", "slug", "displayName", "updatedAt")
+      VALUES ('30000000-0000-0000-0000-000000000003', 'inventory-precondition-player', 'Inventory Precondition Player', CURRENT_TIMESTAMP);
+      INSERT INTO "World" ("id", "playerId", "defaultRulesetVersionId", "code", "name", "updatedAt")
+      VALUES ('30000000-0000-0000-0000-000000000004', '30000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000002', 'inventory-precondition-world', 'Inventory Precondition World', CURRENT_TIMESTAMP);
+      INSERT INTO "ContentDefinition" ("id", "worldId", "code", "contentType", "status", "updatedAt")
+      VALUES ('30000000-0000-0000-0000-000000000005', '30000000-0000-0000-0000-000000000004', 'inventory-precondition-item', 'ITEM', 'ACTIVE', CURRENT_TIMESTAMP);
+    `);
+
+    let rejected = false;
+    try {
+      await client.query(migrationSql('20260714010000_engine_v1_inventory_persistence'));
+    } catch (error) {
+      rejected = error instanceof Error
+        && error.message.includes('Phase 1H migration requires empty ActorContent, ContentDefinition and ContentVersion tables; clear functional data before rollout');
+    }
+    if (!rejected) throw new Error('Phase 1H clean-slate precondition was not enforced');
+    const persisted = await client.query<{ definitions: number; inventory_table: string | null }>(`
+      SELECT count(*)::int AS definitions, to_regclass('public."InventoryEntry"')::text AS inventory_table
+      FROM "ContentDefinition"
+    `);
+    if (persisted.rows[0]?.definitions !== 1 || persisted.rows[0]?.inventory_table !== null) {
+      throw new Error('Phase 1H clean-slate precondition changed functional content data or partially applied schema');
+    }
+  } finally {
+    await client.end();
+  }
+  console.info('Phase 1H clean-slate precondition verified safely');
+}
+
 async function verifyRulesetRegistryTransactions(databaseUrl: URL): Promise<void> {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl.toString(), max: 5 }) });
   try {
@@ -232,12 +277,42 @@ async function verifyContentProfileRegistryTransactions(databaseUrl: URL): Promi
   console.info('Phase 1F profile registry rollback and concurrency verified safely');
 }
 
+async function verifyInventoryRulesRegistryTransactions(databaseUrl: URL): Promise<void> {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl.toString(), max: 5 }) });
+  try {
+    let rolledBack = false;
+    try {
+      await prisma.$transaction(async (transaction) => {
+        await ensureCoreV1InventoryRulesVersion(transaction);
+        throw new Error('intentional inventory rules registry rollback');
+      });
+    } catch (error) {
+      rolledBack = error instanceof Error && error.message === 'intentional inventory rules registry rollback';
+    }
+    if (!rolledBack || await prisma.inventoryRulesVersion.count() !== 0) {
+      throw new Error('Inventory rules registry transaction did not roll back completely');
+    }
+    const versions = await Promise.all([
+      prisma.$transaction((transaction) => ensureCoreV1InventoryRulesVersion(transaction)),
+      prisma.$transaction((transaction) => ensureCoreV1InventoryRulesVersion(transaction)),
+    ]);
+    const persistedVersions = await prisma.inventoryRulesVersion.count({ where: { code: 'core-v1-inventory-v1' } });
+    if (persistedVersions !== 1 || versions[0].id !== versions[1].id) {
+      throw new Error('Concurrent inventory rules registry creation was not idempotent');
+    }
+  } finally {
+    await prisma.$disconnect();
+  }
+  console.info('Phase 1H inventory registry rollback and concurrency verified safely');
+}
+
 async function main(): Promise<void> {
   const config = resolveTestDatabaseConfig(process.env);
   const adminUrl = createAdminUrl(config.directUrl);
   await verifyCleanSlatePrecondition(config.directUrl, adminUrl);
   await verifyActorCleanSlatePrecondition(config.directUrl, adminUrl);
   await verifyContentCleanSlatePrecondition(config.directUrl, adminUrl);
+  await verifyInventoryCleanSlatePrecondition(config.directUrl, adminUrl);
   await recreateTestDatabase(adminUrl);
   console.info('Local test database recreated safely');
 
@@ -257,6 +332,7 @@ async function main(): Promise<void> {
   ], environment);
   await verifyRulesetRegistryTransactions(config.databaseUrl);
   await verifyContentProfileRegistryTransactions(config.databaseUrl);
+  await verifyInventoryRulesRegistryTransactions(config.databaseUrl);
   runNpm(['run', 'prisma:seed'], environment);
   runNpm(['exec', '--', 'vitest', 'run', '--config', 'vitest.integration.config.ts'], environment);
 }

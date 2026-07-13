@@ -8,14 +8,23 @@ import {
   CORE_V1_ATTRIBUTE_HARD_CAP,
   CORE_V1_PRIMARY_ATTRIBUTES,
   calculateEffectiveAttributes,
+  calculateInventoryEncumbrance,
   calculateResourceMaximums,
   calculateSecondaryAttributes,
   validateInitialPrimaryAttributes,
   type PrimaryAttributeCode,
   type PrimaryAttributes,
   type ResourceMaximums,
+  type AuthorizedNumericModifier,
+  type ResourceModifierSet,
+  type SecondaryAttributeModifiers,
   type SecondaryAttributes,
 } from '../rules/core-v1/index.js';
+import {
+  loadActorInventoryMechanicalInputs,
+  type ActorInventoryMechanicalInputs,
+  type InventoryMechanicalInputsClient,
+} from '../inventory/inventory-mechanical-inputs.js';
 import { validateCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
 
 const attributeCodeToDatabase = {
@@ -40,6 +49,7 @@ interface MechanicalStateRecord {
   id: string;
   level: number;
   mechanicsStateVersion: number;
+  inventoryStateVersion: number;
   campaign: {
     rulesetVersionId: string;
     rulesetVersion: {
@@ -56,12 +66,13 @@ interface MechanicalStateRecord {
   attributes: Array<{ code: ActorAttributeCode; baseValue: number; earnedValue: number; xp: number }>;
   resources: Array<{ id: string; type: ActorResourceType; current: number; stateVersion: number }>;
   derivedSnapshot: Prisma.ActorDerivedSnapshotGetPayload<Record<string, never>> | null;
+  inventoryInputs: ActorInventoryMechanicalInputs;
 }
 
 export type ActorMechanicsClient = Pick<
   Prisma.TransactionClient,
   'actor' | 'actorAttribute' | 'actorResource' | 'actorDerivedSnapshot' | 'campaign' | 'rulesetVersion' | 'ruleset'
->;
+> & InventoryMechanicalInputsClient;
 
 export interface ActorMechanicalSheet {
   primaryAttributes: PrimaryAttributes;
@@ -74,6 +85,7 @@ export interface ActorMechanicalSheet {
     elementalResistanceBps: Readonly<Record<string, number>>;
   };
   mechanicsStateVersion: number;
+  inventoryStateVersion: number;
   ruleset: { code: string; revision: string };
 }
 
@@ -94,8 +106,9 @@ export interface ActorMechanicsHashInput {
     magicSchoolRank: 0;
     accuracyRank: 0;
     evasionRank: 0;
-    encumbrancePenalty: 0;
-    modifiers: Record<string, never>;
+    encumbrancePenaltyBps: number;
+    totalCarriedWeight: number;
+    equipment: ActorInventoryMechanicalInputs['equipmentHashInput'];
   };
 }
 
@@ -107,7 +120,10 @@ export function createActorMechanicsInputHash(input: ActorMechanicsHashInput): s
   return createHash('sha256').update(canonicalJson(input)).digest('hex');
 }
 
-function mapEffectiveAttributes(record: MechanicalStateRecord): PrimaryAttributes {
+function mapEffectiveAttributes(
+  record: MechanicalStateRecord,
+  modifiers: Partial<Record<PrimaryAttributeCode, readonly AuthorizedNumericModifier[]>>,
+): PrimaryAttributes {
   if (record.attributes.length !== CORE_V1_PRIMARY_ATTRIBUTES.length) throw integrityError();
   const mapped = new Map<PrimaryAttributeCode, number>();
   for (const attribute of record.attributes) {
@@ -121,28 +137,74 @@ function mapEffectiveAttributes(record: MechanicalStateRecord): PrimaryAttribute
     mapped.set(code, attribute.baseValue + attribute.earnedValue);
   }
   if (CORE_V1_PRIMARY_ATTRIBUTES.some((code) => !mapped.has(code))) throw integrityError();
-  return calculateEffectiveAttributes(Object.fromEntries(mapped) as PrimaryAttributes);
+  return calculateEffectiveAttributes(Object.fromEntries(mapped) as PrimaryAttributes, modifiers);
+}
+
+function groupEquipmentModifiers(modifiers: ActorInventoryMechanicalInputs['modifiers']) {
+  const primary: Partial<Record<PrimaryAttributeCode, AuthorizedNumericModifier[]>> = {};
+  const resources: Partial<Record<'maxHp' | 'maxMana' | 'maxSp', AuthorizedNumericModifier[]>> = {};
+  const secondary: Partial<Record<keyof SecondaryAttributeModifiers, AuthorizedNumericModifier[]>> = {};
+  const primaryTargets = new Set<string>(CORE_V1_PRIMARY_ATTRIBUTES);
+  const secondaryTargets: Record<string, keyof SecondaryAttributeModifiers> = {
+    actorPhysicalPower: 'physicalPower', actorMagicalPower: 'magicalPower',
+    physicalDefense: 'physicalFlatDefense', magicalDefense: 'magicalFlatDefense',
+    accuracy: 'accuracy', evasion: 'evasion', attackSpeedBps: 'attackSpeedBps', castingSpeedBps: 'castingSpeedBps',
+    criticalChanceBps: 'criticalChanceBps', criticalDamageBps: 'criticalDamageBps', movementSpeed: 'movementSpeed',
+    carryingCapacity: 'carryingCapacity', physicalResistanceBps: 'physicalResistanceBps',
+    magicalResistanceBps: 'magicalResistanceBps', elementalResistanceBps: 'elementalResistanceBps',
+    hpRegen: 'hpRegen', manaRegen: 'manaRegen', spRegen: 'spRegen',
+  };
+  for (const modifier of modifiers) {
+    const numericModifier = { source: modifier.source, value: modifier.value };
+    if (primaryTargets.has(modifier.target)) {
+      const target = modifier.target as PrimaryAttributeCode;
+      (primary[target] ??= []).push(numericModifier);
+      continue;
+    }
+    if (modifier.target === 'maxHp' || modifier.target === 'maxMana' || modifier.target === 'maxSp') {
+      const target = modifier.target;
+      (resources[target] ??= []).push(numericModifier);
+      continue;
+    }
+    const target = secondaryTargets[modifier.target];
+    if (target !== undefined) (secondary[target] ??= []).push(numericModifier);
+  }
+  return { primary, resources: resources as ResourceModifierSet, secondary: secondary as SecondaryAttributeModifiers };
 }
 
 function calculateMechanicalState(record: MechanicalStateRecord): MechanicalCalculation {
   const ruleset = validateCoreV1RulesetVersion(record.campaign.rulesetVersion);
-  const effectiveAttributes = mapEffectiveAttributes(record);
+  const equipmentModifiers = groupEquipmentModifiers(record.inventoryInputs.modifiers);
+  const effectiveAttributes = mapEffectiveAttributes(record, equipmentModifiers.primary);
   const calculationInputs = {
     weaponFamilyRank: 0,
     magicSchoolRank: 0,
     accuracyRank: 0,
     evasionRank: 0,
-    encumbrancePenalty: 0,
-    modifiers: {},
   } as const;
-  const maximums = calculateResourceMaximums(effectiveAttributes, record.level);
-  const secondary = calculateSecondaryAttributes({ attributes: effectiveAttributes, ...calculationInputs });
+  const maximums = calculateResourceMaximums(effectiveAttributes, record.level, equipmentModifiers.resources);
+  const unencumbered = calculateSecondaryAttributes({
+    attributes: effectiveAttributes, ...calculationInputs, encumbrancePenalty: 0, modifiers: equipmentModifiers.secondary,
+  });
+  const encumbrance = calculateInventoryEncumbrance(record.inventoryInputs.totalCarriedWeight, unencumbered.carryingCapacity);
+  if (!encumbrance.ok || encumbrance.value.penaltyBps % 100 !== 0) throw integrityError();
+  const secondary = calculateSecondaryAttributes({
+    attributes: effectiveAttributes,
+    ...calculationInputs,
+    encumbrancePenalty: encumbrance.value.penaltyBps / 100,
+    modifiers: equipmentModifiers.secondary,
+  });
   const elementalResistanceSnapshot = Object.freeze({ default: secondary.elementalResistanceBps });
   const inputHash = createActorMechanicsInputHash({
     ruleset: { code: ruleset.code, revision: ruleset.revision, configHash: ruleset.configHash },
     level: record.level,
     primaryAttributes: effectiveAttributes,
-    calculationInputs,
+    calculationInputs: {
+      ...calculationInputs,
+      encumbrancePenaltyBps: encumbrance.value.penaltyBps,
+      totalCarriedWeight: record.inventoryInputs.totalCarriedWeight,
+      equipment: record.inventoryInputs.equipmentHashInput,
+    },
   });
   return { effectiveAttributes, maximums, secondary, elementalResistanceSnapshot, inputHash };
 }
@@ -173,6 +235,7 @@ function snapshotMatches(
   const secondary = calculation.secondary;
   const scalarMatches = snapshot.rulesetVersionId === record.campaign.rulesetVersionId
     && snapshot.mechanicsStateVersion === record.mechanicsStateVersion
+    && snapshot.inventoryStateVersion === record.inventoryStateVersion
     && snapshot.inputHash === calculation.inputHash
     && snapshot.maxHp === calculation.maximums.maxHp
     && snapshot.maxMana === calculation.maximums.maxMana
@@ -205,7 +268,7 @@ function snapshotMatches(
 async function readMechanicalState(client: ActorMechanicsClient, actorId: string): Promise<MechanicalStateRecord> {
   const actor = await client.actor.findUnique({
     where: { id: actorId },
-    select: { id: true, campaignId: true, level: true, mechanicsStateVersion: true },
+    select: { id: true, campaignId: true, level: true, mechanicsStateVersion: true, inventoryStateVersion: true },
   });
   if (actor === null) throw new NotFoundError('Actor');
   const campaign = await client.campaign.findUnique({
@@ -230,14 +293,17 @@ async function readMechanicalState(client: ActorMechanicsClient, actorId: string
     where: { actorId }, select: { id: true, type: true, current: true, stateVersion: true }, orderBy: { type: 'asc' },
   });
   const derivedSnapshot = await client.actorDerivedSnapshot.findUnique({ where: { actorId } });
+  const inventoryInputs = await loadActorInventoryMechanicalInputs(client, actorId);
   return {
     id: actor.id,
     level: actor.level,
     mechanicsStateVersion: actor.mechanicsStateVersion,
+    inventoryStateVersion: actor.inventoryStateVersion,
     campaign: { rulesetVersionId: campaign.rulesetVersionId, rulesetVersion: { ...rulesetVersion, ruleset } },
     attributes,
     resources,
     derivedSnapshot,
+    inventoryInputs,
   };
 }
 
@@ -283,6 +349,7 @@ export function projectActorMechanicalSheet(record: MechanicalStateRecord): Acto
       spRegen: snapshot.spRegen,
     },
     mechanicsStateVersion: record.mechanicsStateVersion,
+    inventoryStateVersion: record.inventoryStateVersion,
     ruleset: { code: record.campaign.rulesetVersion.code, revision: record.campaign.rulesetVersion.revision },
   };
 }
@@ -300,6 +367,7 @@ export async function recomputeActorDerivedSnapshot(
   const snapshotData = {
     rulesetVersionId: record.campaign.rulesetVersionId,
     mechanicsStateVersion: record.mechanicsStateVersion,
+    inventoryStateVersion: record.inventoryStateVersion,
     ...calculation.maximums,
     actorPhysicalPower: secondary.actorPhysicalPower,
     actorMagicalPower: secondary.actorMagicalPower,

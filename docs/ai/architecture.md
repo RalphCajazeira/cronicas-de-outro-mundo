@@ -172,4 +172,16 @@ Cadastrar secrets e o secret file no Render, executar o gate manual a partir do 
 
 ## Fases futuras
 
-Frontend, escrita, combate, inventário físico, comércio e demais sistemas narrativos/mecânicos permanecem fora do escopo atual.
+Frontend, combate, uso de consumíveis, comércio e demais sistemas narrativos/mecânicos permanecem fora do escopo atual.
+
+### Fase 1H — inventário e equipamento persistentes
+
+`ActorContent` registra somente conhecimento e progressão; `equipped` e `quantity` foram removidos. Posse física é `InventoryEntry`, fixada a uma `ContentVersion` que contém `inventorySpec` canônico e referência à publicação imutável `InventoryRulesVersion(core-v1-inventory-v1)`. Instâncias possuem lifecycle; stacks possuem quantidade homogênea. O estado equipado é derivado exclusivamente de `ActorEquipmentSlot`, permitindo um item multisslot sem estado físico duplicado.
+
+`manageActorInventory` resolve o escopo, bloqueia a linha do Actor, valida `expectedInventoryStateVersion`, delega às funções puras da Fase 1G, persiste o diff, incrementa uma vez as versões de inventário e mecânica e recompõe o snapshot na mesma transação idempotente. O fluxo cobre leitura, grant, remove, split, merge, reserve, release, destroy, equip e unequip. `startGame` chama a mesma orquestração e equipa somente depois de conceder todas as entradas.
+
+A projeção mecânica carrega entradas e slots, valida o estado puro, soma peso e aplica somente modificadores de itens efetivamente equipados. Capacidade modificada precede encumbrance; penalidade de carga e modificadores de atributos, máximos, defesas, velocidades, resistências e regenerações entram no hash canônico sem IDs ou timestamps. Um item multisslot é contado uma vez.
+
+O contrato público expõe refs, versão otimista, resumo de inventário, slots, peso e encumbrance, nunca UUIDs ou hashes internos. Uso de consumíveis, aplicação de efeitos, durabilidade, munição, loot automático e combate permanecem fora do escopo.
+
+Status: implementada e validada na Fase 1H; revisão e integração rastreadas pelo PR correspondente

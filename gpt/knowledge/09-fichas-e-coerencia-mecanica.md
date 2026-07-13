@@ -10,13 +10,13 @@ O GPT envia somente `primaryAttributes` na criação. Cada valor deve ser inteir
 
 ## Conteúdo e valores derivados
 
-Habilidades, magias, equipamentos narrativos e outros conceitos podem existir como `ContentDefinition` e vínculo `ActorContent`. `equipped` e `quantity` no vínculo são dados genéricos, não um inventário físico completo nem equipamento por slot.
+Habilidades, magias e outros conceitos podem existir como `ContentDefinition` e vínculo `ActorContent`. Posse física usa inventário separado; `equipped` é derivado dos slots ocupados e nunca pertence ao vínculo conceitual.
 
 Uma espécie nominal usa `species`. Conteúdo `race` só é criado quando houver regra mecânica real. Condições canônicas usam `status_effect` e duração/stacking allowlisted no perfil; elas não são estado ativo aplicado ao ator nesta fase e permanecem normalmente não equipadas.
 
-O backend calcula máximos, poderes do ator, defesas, precisão, evasão, velocidades, crítico, movimento, capacidade, resistências e regenerações pelo `core-v1`. O GPT nunca envia esses resultados como autoridade. Modificadores de um `ContentVersion.profile` são validados e persistidos, mas ainda não são aplicados ao snapshot do ator nesta fase.
+O backend calcula máximos, poderes do ator, defesas, precisão, evasão, velocidades, crítico, movimento, capacidade, resistências e regenerações pelo `core-v1`. O GPT nunca envia esses resultados como autoridade. Modificadores de um item são aplicados ao snapshot somente enquanto sua instância estiver equipada; itens apenas carregados, reservados, consumidos ou destruídos não contribuem.
 
-O núcleo interno consegue coletar modificadores passivos de um loadout puro com origem tipada de equipamento, sem aplicá-los. Como loadout e inventário ainda não são persistidos nem expostos por operação pública, isso apenas prepara uma recomputação autoritativa futura.
+Peso e equipamento alteram `mechanicsStateVersion`, recompõem o snapshot e podem mudar encumbrance. Itens multisslot contam uma vez; remover ou mudar lifecycle de uma entrada equipada é rejeitado até o unequip explícito.
 
 ## Coerência
 

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { actorRefSchema } from '../actors/actors.schemas.js';
 import {
-  createEventSchema, listCampaignActorsSchema, listPlayerWorldsSchema, listWorldCampaignsSchema, loadGameSchema, manageActorContentSchema, startGameSchema,
+  createEventSchema, listCampaignActorsSchema, listPlayerWorldsSchema, listWorldCampaignsSchema, loadGameSchema, manageActorContentSchema, manageActorInventorySchema, startGameSchema,
   patchActorSchema, upsertActorSchema, upsertContentSchema,
 } from './gpt.schemas.js';
 import { createGptService } from './gpt.service.js';
@@ -42,6 +42,11 @@ export function createGptRouter(repository: GptRepository) {
   router.post('/actors/:actorRef/content/manage', async (request, response, next) => {
     try {
       response.json(await service.manageActorContent(actorRefSchema.parse(request.params.actorRef), manageActorContentSchema.parse(request.body)));
+    } catch (error) { next(error); }
+  });
+  router.post('/actors/:actorRef/inventory/manage', async (request, response, next) => {
+    try {
+      response.json(await service.manageActorInventory(actorRefSchema.parse(request.params.actorRef), manageActorInventorySchema.parse(request.body)));
     } catch (error) { next(error); }
   });
   router.post('/events', async (request, response, next) => {

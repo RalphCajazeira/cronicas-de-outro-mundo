@@ -15,8 +15,8 @@ export interface ActorRepository {
 }
 
 export interface ActorContentRecord {
-  state: string; rank: number; progress: number; mastery: number; equipped: boolean;
-  quantity: number; notes: string | null; metadata: Prisma.JsonValue;
+  state: string; rank: number; progress: number; mastery: number;
+  notes: string | null; metadata: Prisma.JsonValue;
   contentDefinition: {
     code: string; contentType: ContentType; status: ContentStatus;
   };
@@ -25,6 +25,7 @@ export interface ActorContentRecord {
     versionNumber: number; schemaVersion: number; profileMode: ContentProfileMode; name: string;
     description: string | null; profile: Prisma.JsonValue | null; presentation: Prisma.JsonValue;
     tags: Prisma.JsonValue; metadata: Prisma.JsonValue; contentHash: string; createdAt: Date;
+    inventoryRulesVersionId: string | null; inventorySpec: Prisma.JsonValue | null; inventorySpecHash: string | null;
     rulesetVersion: { code: string; revision: string };
     contentProfileVersion: { code: string; schemaVersion: number };
   };

@@ -9,6 +9,7 @@ import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import { scopedActorKey } from '../actors/actors.repository.js';
 import { createActorMechanicalState, loadActorMechanicalSheet } from '../actors/actor-mechanics.service.js';
 import { findScopedContent } from '../content/content.repository.js';
+import { loadActorInventorySummary, manageActorInventory } from '../inventory/inventory.service.js';
 import {
   contentVersionPublicInclude,
   publicContentDto,
@@ -20,7 +21,7 @@ import {
 } from '../content/content-publication.service.js';
 import { ensureCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
 import type {
-  CreateEventInput, ListCampaignActorsInput, LoadGameInput, ManageActorContentInput,
+  CreateEventInput, ListCampaignActorsInput, LoadGameInput, ManageActorContentInput, ManageActorInventoryInput,
   ListPlayerWorldsInput, ListWorldCampaignsInput, PatchActorInput, StartGameInput, UpsertActorInput, UpsertContentInput,
 } from './gpt.schemas.js';
 import type { ApiResult, GptRepository } from './gpt.types.js';
@@ -78,11 +79,12 @@ async function executeIdempotent(
 
 async function actorDto(client: DbClient, actor: Record<string, unknown>) {
   const mechanicalSheet = await loadActorMechanicalSheet(client, actor.id as string);
+  const inventorySummary = await loadActorInventorySummary(client, actor.id as string);
   return {
     code: actor.code, name: actor.name, actorType: normalizeEnum(actor.actorType as string), species: actor.species,
     className: actor.className, role: actor.role, description: actor.description, level: actor.level, xp: actor.xp,
     gold: actor.gold, metadata: actor.metadata, appearance: actor.appearance, personality: actor.personality,
-    status: normalizeEnum(actor.status as string), ...mechanicalSheet,
+    status: normalizeEnum(actor.status as string), ...mechanicalSheet, inventorySummary,
   };
 }
 
@@ -93,7 +95,7 @@ function actorContentDto(link: Record<string, unknown> & {
   return {
     ...publicContentVersionDto(link.contentDefinition as Pick<PublishedContent, 'code' | 'contentType' | 'status'>, link.contentVersion),
     state: normalizeEnum(link.state as string), rank: link.rank,
-    progress: link.progress, mastery: link.mastery, equipped: link.equipped, quantity: link.quantity,
+    progress: link.progress, mastery: link.mastery,
     notes: link.notes, linkMetadata: link.metadata,
   };
 }
@@ -143,8 +145,6 @@ function linkUpdateData(input: ManageActorContentInput): Prisma.ActorContentUpda
   if (changes?.rank !== undefined) data.rank = changes.rank;
   if (changes?.progress !== undefined) data.progress = changes.progress;
   if (changes?.mastery !== undefined) data.mastery = changes.mastery;
-  if (changes?.equipped !== undefined) data.equipped = changes.equipped;
-  if (changes?.quantity !== undefined) data.quantity = changes.quantity;
   if (changes?.notes !== undefined) data.notes = changes.notes;
   if (changes?.metadata !== undefined) data.metadata = inputJson(changes.metadata);
   return data;
@@ -171,20 +171,6 @@ async function loadGameState(client: DbClient, input: LoadGameInput) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function assertInitialEquipment(
-  definition: { contentType: ContentType; version: PublicContentVersion },
-  link: StartGameInput['initialContentPackages'][number]['protagonistLink'],
-) {
-  if (link?.equipped !== true) return;
-  const type = normalizeEnum(definition.contentType);
-  const profile = isRecord(definition.version.profile) ? definition.version.profile : null;
-  const directlySelectable = ['weapon', 'armor', 'shield', 'clothing'].includes(type);
-  const activation = profile !== null && isRecord(profile.activation) ? profile.activation.type : null;
-  const activatable = ['spell', 'skill', 'talent', 'item', 'consumable'].includes(type)
-    && profile?.profileMode === 'mechanical' && activation !== 'passive';
-  if (!directlySelectable && !activatable) throw new ConflictError('Initial equipment is incompatible with the content profile');
 }
 
 function assertPersistedRequirements(
@@ -355,7 +341,8 @@ export const prismaGptRepository: GptRepository = {
         const definition = await publishContentVersion(transaction, {
           worldId: world.id, campaignId, code: definitionInput.code, contentType: type,
           name: definitionInput.name ?? '', description: definitionInput.description ?? null,
-          profile: definitionInput.profile, presentation: definitionInput.presentation ?? {},
+          profile: definitionInput.profile, inventorySpec: definitionInput.inventorySpec,
+          presentation: definitionInput.presentation ?? {},
           tags: definitionInput.tags ?? [], status: ContentStatus.ACTIVE,
           metadata: definitionInput.metadata ?? {},
         });
@@ -377,16 +364,48 @@ export const prismaGptRepository: GptRepository = {
         if (item.link === undefined) continue;
         const version = item.definition.versions[0];
         if (version === undefined) throw new ConflictError('Content definition has no published version');
-        assertInitialEquipment({ contentType: item.definition.contentType, version }, item.link);
         assertPersistedRequirements(version, item.link, linkedKnown, attributes);
         await transaction.actorContent.create({
           data: {
             actorId: protagonist.id, contentDefinitionId: item.definition.id, contentVersionId: version.id,
             state: item.link.state.toUpperCase() as ActorContentState, rank: item.link.rank, progress: item.link.progress,
-            mastery: item.link.mastery, equipped: item.link.equipped, quantity: item.link.quantity,
+            mastery: item.link.mastery,
             ...(item.link.notes === undefined ? {} : { notes: item.link.notes }), metadata: inputJson(item.link.metadata ?? {}),
           },
         });
+      }
+
+      let expectedInventoryStateVersion = 1;
+      const initialInventoryResults: Array<{ item: NonNullable<StartGameInput['initialInventory']>[number]; versionNumber: number }> = [];
+      for (const inventoryItem of input.initialInventory ?? []) {
+        const resolved = resolvedPackages.find((item) => item.scope === inventoryItem.scope
+          && normalizeEnum(item.definition.contentType) === inventoryItem.contentType && item.definition.code === inventoryItem.code);
+        const version = resolved?.definition.versions[0];
+        if (resolved === undefined || version === undefined) throw new ConflictError('Initial inventory content was not resolved');
+        const result = await manageActorInventory(transaction, protagonist.code, {
+          playerRef: input.playerRef, worldRef: input.worldRef, campaignRef: input.campaignRef,
+          operation: 'grant', idempotencyKey: `${input.idempotencyKey}:inventory:grant:${inventoryItem.code}`,
+          expectedInventoryStateVersion,
+          contentRef: {
+            scope: inventoryItem.scope, contentType: inventoryItem.contentType,
+            code: inventoryItem.code, versionNumber: version.versionNumber,
+          },
+          quantity: inventoryItem.quantity, entryRefs: inventoryItem.entryRefs,
+          ...(inventoryItem.customName === undefined ? {} : { customName: inventoryItem.customName }),
+        });
+        expectedInventoryStateVersion = result.inventoryStateVersion;
+        initialInventoryResults.push({ item: inventoryItem, versionNumber: version.versionNumber });
+      }
+      for (const { item } of initialInventoryResults) {
+        if (item.equip === undefined) continue;
+        if (item.entryRefs.length !== 1) throw new ConflictError('Initial equipped item must resolve to one entry ref');
+        const result = await manageActorInventory(transaction, protagonist.code, {
+          playerRef: input.playerRef, worldRef: input.worldRef, campaignRef: input.campaignRef,
+          operation: 'equip', idempotencyKey: `${input.idempotencyKey}:inventory:equip:${item.entryRefs[0]}`,
+          expectedInventoryStateVersion, entryRef: item.entryRefs[0],
+          ...item.equip,
+        });
+        expectedInventoryStateVersion = result.inventoryStateVersion;
       }
 
       const effectiveWorldConfig = input.worldConfiguration ?? worldConfiguration(world.metadata);
@@ -411,7 +430,7 @@ export const prismaGptRepository: GptRepository = {
         },
         initialContent: resolvedPackages.map((item) => ({
           scope: item.scope, contentType: normalizeEnum(item.definition.contentType), code: item.definition.code,
-          quantity: item.link?.quantity ?? 0, equipped: item.link?.equipped ?? false,
+          linkedToProtagonist: item.link !== undefined,
         })),
         initialPremise: input.initialPremise,
       };
@@ -477,6 +496,7 @@ export const prismaGptRepository: GptRepository = {
       const content = await publishContentVersion(transaction, {
         worldId: world.id, campaignId, contentType: type, code: input.code,
         name: input.name, description: input.description, profile: input.profile,
+        inventorySpec: input.inventorySpec,
         presentation: input.presentation, tags: input.tags,
         status: input.status.toUpperCase() as ContentStatus, metadata: input.metadata ?? {},
       });
@@ -518,7 +538,7 @@ export const prismaGptRepository: GptRepository = {
         if (link === null) throw new NotFoundError('Actor content');
         return actorContentDto(link);
       }
-      if (['update', 'equip', 'unequip', 'remove'].includes(input.operation)) {
+      if (['update', 'remove'].includes(input.operation)) {
         if (link === null) throw new NotFoundError('Actor content');
         return { actor, definition: link.contentDefinition, link };
       }
@@ -542,11 +562,9 @@ export const prismaGptRepository: GptRepository = {
         await transaction.actorContent.delete({ where: { id: link.id } });
         return { actorRef: actor.code, contentRef: definition.code, removed: true };
       }
-      if (['update', 'equip', 'unequip'].includes(input.operation) && link === null) throw new NotFoundError('Actor content');
+      if (input.operation === 'update' && link === null) throw new NotFoundError('Actor content');
       const changes = linkUpdateData(input);
-      if (input.operation === 'equip') changes.equipped = true;
-      if (input.operation === 'unequip') changes.equipped = false;
-      if (['update', 'equip', 'unequip'].includes(input.operation)) {
+      if (input.operation === 'update') {
         if (link === null) throw new NotFoundError('Actor content');
         await transaction.actorContent.update({ where: { id: link.id }, data: changes });
         const updated = await transaction.actorContent.findUniqueOrThrow({ where: { id: link.id }, include: contentInclude });
@@ -559,8 +577,7 @@ export const prismaGptRepository: GptRepository = {
         actorId: actor.id, contentDefinitionId: definition.id, contentVersionId: currentVersion.id,
         state: input.changes?.state?.toUpperCase() as ActorContentState | undefined ?? defaultState,
         rank: input.changes?.rank ?? (input.operation === 'grant' ? 1 : 0), progress: input.changes?.progress ?? 0,
-        mastery: input.changes?.mastery ?? 0, equipped: input.changes?.equipped ?? false,
-        quantity: input.changes?.quantity ?? 1, metadata: inputJson(input.changes?.metadata ?? {}),
+        mastery: input.changes?.mastery ?? 0, metadata: inputJson(input.changes?.metadata ?? {}),
       };
       if (input.changes?.notes !== undefined) createData.notes = input.changes.notes;
       const updatedReference = await transaction.actorContent.upsert({
@@ -572,6 +589,12 @@ export const prismaGptRepository: GptRepository = {
       const updated = await transaction.actorContent.findUniqueOrThrow({ where: { id: updatedReference.id }, include: contentInclude });
       return actorContentDto(updated);
     });
+  },
+
+  async manageActorInventory(actorRef: string, input: ManageActorInventoryInput) {
+    if (input.operation === 'get') return manageActorInventory(prisma, actorRef, input);
+    return executeIdempotent(input.idempotencyKey ?? '', `actorInventory.${input.operation}`, { actorRef, ...input },
+      (transaction) => manageActorInventory(transaction, actorRef, input));
   },
 
   async createEvent(input: CreateEventInput) {

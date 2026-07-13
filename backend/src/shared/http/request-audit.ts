@@ -27,9 +27,12 @@ export type AuditLogWriter = (record: HttpAuditRecord) => void;
 
 const allowedStringFields = [
   'actorRef', 'actorType', 'campaignRef', 'code', 'contentRef', 'contentType', 'eventType',
-  'operation', 'playerMode', 'playerRef', 'preset', 'state', 'status', 'worldMode', 'worldRef',
+  'encumbranceState', 'entryKind', 'entryRef', 'operation', 'playerMode', 'playerRef', 'preset', 'state', 'status', 'worldMode', 'worldRef',
 ] as const;
-const allowedNumberFields = ['equipped', 'mastery', 'mechanicsStateVersion', 'progress', 'quantity', 'rank', 'removed'] as const;
+const allowedNumberFields = [
+  'entryCount', 'equippedCount', 'expectedInventoryStateVersion', 'inventoryStateVersion',
+  'mastery', 'mechanicsStateVersion', 'progress', 'rank', 'removed',
+] as const;
 const sensitiveKeyPattern = /authorization|cookie|key|password|secret|token/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -91,6 +94,22 @@ function summarizeRequest(request: Request): Record<string, AuditValue> {
   const body: Record<string, AuditValue> = { keys: safeKeys(request.body) };
   addAllowedScalars(request.body, body);
   addMechanicalSummary(request.body, body);
+  const inventoryActor = request.path.match(/^\/api\/v1\/actors\/([a-z0-9_-]+)\/inventory\/manage$/i)?.[1];
+  if (inventoryActor !== undefined) body.actorRef = inventoryActor;
+  if (typeof request.body.expectedInventoryStateVersion === 'number') {
+    body.inventoryStateVersionBefore = request.body.expectedInventoryStateVersion;
+  }
+  if (isRecord(request.body.contentRef)) {
+    const contentRef: Record<string, AuditValue> = {};
+    const contentType = safeString(request.body.contentRef.contentType);
+    const contentCode = safeString(request.body.contentRef.code);
+    if (contentType !== undefined) contentRef.contentType = contentType;
+    if (contentCode !== undefined) contentRef.contentCode = contentCode;
+    if (typeof request.body.contentRef.versionNumber === 'number' && Number.isFinite(request.body.contentRef.versionNumber)) {
+      contentRef.versionNumber = request.body.contentRef.versionNumber;
+    }
+    if (Object.keys(contentRef).length > 0) body.content = contentRef;
+  }
 
   const idempotency = fingerprint(request.body.idempotencyKey);
   if (idempotency !== undefined) body.idempotency = idempotency;
@@ -111,7 +130,6 @@ function summarizeRequest(request: Request): Record<string, AuditValue> {
   if (Array.isArray(request.body.initialContentPackages)) {
     const contentTypes: Record<string, number> = {};
     let linkCount = 0;
-    let equippedCount = 0;
     for (const item of request.body.initialContentPackages) {
       if (!isRecord(item)) continue;
       if (isRecord(item.definition)) {
@@ -120,16 +138,16 @@ function summarizeRequest(request: Request): Record<string, AuditValue> {
       }
       if (isRecord(item.protagonistLink)) {
         linkCount += 1;
-        if (item.protagonistLink.equipped === true) equippedCount += 1;
       }
     }
     body.initialContent = {
       packageCount: request.body.initialContentPackages.length,
       linkCount,
-      equippedCount,
       contentTypes,
     };
   }
+  if (Array.isArray(request.body.entryRefs)) body.entryRefCount = request.body.entryRefs.length;
+  if (Array.isArray(request.body.initialInventory)) body.initialInventoryCount = request.body.initialInventory.length;
   if (isRecord(request.body.campaignConfiguration) && isRecord(request.body.campaignConfiguration.difficulty)) {
     const preset = safeString(request.body.campaignConfiguration.difficulty.preset);
     if (preset !== undefined) body.difficultyPreset = preset;
@@ -147,6 +165,16 @@ function summarizeResponse(body: unknown): Record<string, AuditValue> {
   const summary: Record<string, AuditValue> = { kind: 'object', keys: safeKeys(body) };
   addAllowedScalars(body, summary);
   addMechanicalSummary(body, summary);
+  if (typeof body.inventoryStateVersion === 'number') summary.inventoryStateVersionAfter = body.inventoryStateVersion;
+  if (Array.isArray(body.entries)) {
+    summary.entryCount = body.entries.length;
+    summary.equippedCount = body.entries.filter((entry) => isRecord(entry)
+      && Array.isArray(entry.equippedSlots) && entry.equippedSlots.length > 0).length;
+  }
+  if (isRecord(body.encumbrance)) {
+    const encumbranceState = safeString(body.encumbrance.state);
+    if (encumbranceState !== undefined) summary.encumbranceState = encumbranceState;
+  }
   if (isRecord(body.protagonist)) addMechanicalSummary(body.protagonist, summary);
   if (Array.isArray(body.mainActors)) summary.mainActorCount = body.mainActors.length;
   if (Array.isArray(body.linkedContent)) summary.linkedContentCount = body.linkedContent.length;

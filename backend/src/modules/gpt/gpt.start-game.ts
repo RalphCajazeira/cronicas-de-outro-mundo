@@ -97,8 +97,7 @@ export interface CampaignStartedPayload {
     scope: 'world' | 'campaign';
     contentType: string;
     code: string;
-    quantity: number;
-    equipped: boolean;
+    linkedToProtagonist: boolean;
   }>;
   initialPremise: string;
 }

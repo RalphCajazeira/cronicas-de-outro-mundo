@@ -66,3 +66,21 @@ Triggers bloqueiam `UPDATE`/`DELETE` em `ContentProfileVersion` e `ContentVersio
 O rollout remoto exige limpeza funcional separada e autorizada antes da migration. Nenhum staging, Supabase remoto, deploy ou GPT ao vivo foi alterado nesta fase.
 
 Status: implementada e validada na Fase 1F; revisão e integração rastreadas pelo PR correspondente
+
+## Fase 1H — inventário físico e equipamento
+
+Models:
+
+- `InventoryRulesVersion`: publicação imutável `core-v1-inventory-v1`, ligada à `RulesetVersion`;
+- `ContentVersion.inventoryRulesVersionId|inventorySpec|inventorySpecHash`: trio opcional e imutável que fixa as regras físicas à versão;
+- `InventoryEntry`: instância ou stack pertencente a um Actor e a uma versão física exata;
+- `ActorEquipmentSlot`: ocupação física por slot; a FK composta garante que slot e entrada pertencem ao mesmo Actor;
+- `Actor.inventoryStateVersion` e `ActorDerivedSnapshot.inventoryStateVersion`: versão otimista autoritativa e versão observada pelo snapshot.
+
+A migration `20260714010000_engine_v1_inventory_persistence` exige `ActorContent`, `ContentDefinition` e `ContentVersion` vazios antes de qualquer DDL. Ela remove `ActorContent.equipped|quantity`, cria enums, checks, índices parciais de deduplicação, FKs, RLS e triggers. Não contém `DELETE`, `TRUNCATE`, conversão ou cópia dos campos conceituais antigos. Rollback estrutural requer migration corretiva; publicações e dados físicos nunca são apagados silenciosamente.
+
+Triggers tornam `InventoryRulesVersion` imutável e impedem entrada sem spec, ruleset incompatível, kind/stacking incoerente, quantidade acima de `maxStack`, slot para stack/entrada indisponível/outro Actor, mudança de lifecycle enquanto equipada e remoção equipada. Regras completas de handedness, requisitos e multisslot permanecem no domínio puro e no service transacional, evitando duplicação no banco.
+
+`inventorySpecHash` usa SHA-256 do spec canônico separadamente de `contentHash`; versões sem spec deduplicam por definição+contentHash e versões com spec por definição+contentHash+inventorySpecHash. Nenhum rollout remoto foi executado.
+
+Status: implementada e validada na Fase 1H; revisão e integração rastreadas pelo PR correspondente

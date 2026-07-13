@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getContentSchema } from '../content/content.schemas.js';
 import {
-  createEventSchema, listCampaignActorsSchema, loadGameSchema, manageActorContentSchema, patchActorSchema,
+  createEventSchema, listCampaignActorsSchema, loadGameSchema, manageActorContentSchema, manageActorInventorySchema, patchActorSchema,
   startGameSchema, upsertActorSchema, upsertContentSchema,
 } from './gpt.schemas.js';
 import { jsonByteSize, jsonDepth, jsonKeyCount } from './gpt.start-game.js';
@@ -41,7 +41,7 @@ function createSkill(code = 'quiet-step') {
     definition: {
       mode: 'create' as const, scope: 'world' as const, ...publication, metadata: {},
     },
-    protagonistLink: { state: 'known' as const, rank: 1, progress: 0, mastery: 0, equipped: false, quantity: 1, metadata: {} },
+    protagonistLink: { state: 'known' as const, rank: 1, progress: 0, mastery: 0, metadata: {} },
   };
 }
 
@@ -153,12 +153,12 @@ describe('GPT API schemas', () => {
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [{ ...reuse, definition: { ...reuse.definition, scope: 'campaign' } }] }).success).toBe(false);
   });
 
-  it('rejects duplicate packages, invalid quantities, invalid equipment and unmet known requirements', () => {
+  it('rejects duplicate packages, obsolete physical link fields and unmet known requirements', () => {
     const base = validStartGame();
     const skill = createSkill();
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [skill, skill] }).success).toBe(false);
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [{ ...skill, protagonistLink: { ...skill.protagonistLink, quantity: 0 } }] }).success).toBe(false);
-    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [{ ...skill, protagonistLink: { ...skill.protagonistLink, equipped: true } }] }).success).toBe(true);
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [{ ...skill, protagonistLink: { ...skill.protagonistLink, equipped: true } }] }).success).toBe(false);
     const passive = { ...skill, definition: {
       ...skill.definition,
       profile: { ...skill.definition.profile, activation: { type: 'passive' as const }, cost: { type: 'none' as const }, actionProfile: undefined },
@@ -270,5 +270,20 @@ describe('GPT API schemas', () => {
     expect(manageActorContentSchema.safeParse({ ...scope, operation: 'list' }).success).toBe(true);
     expect(manageActorContentSchema.safeParse({ ...scope, operation: 'learn', contentRef: 'quiet-step', contentType: 'skill' }).success).toBe(false);
     expect(manageActorContentSchema.safeParse({ ...scope, operation: 'learn', contentRef: 'quiet-step', contentType: 'skill', idempotencyKey: 'learn-schema-001' }).success).toBe(true);
+  });
+
+  it('validates inventory operations with optimistic concurrency and operation-specific fields', () => {
+    expect(manageActorInventorySchema.safeParse({ ...scope, operation: 'get' }).success).toBe(true);
+    expect(manageActorInventorySchema.safeParse({ ...scope, operation: 'get', idempotencyKey: 'forbidden-get' }).success).toBe(false);
+    const grant = {
+      ...scope, operation: 'grant', idempotencyKey: 'inventory-grant-001', expectedInventoryStateVersion: 1,
+      contentRef: { scope: 'world', contentType: 'weapon', code: 'dagger', versionNumber: 1 },
+      quantity: 1, entryRefs: ['dagger-1'],
+    };
+    expect(manageActorInventorySchema.safeParse(grant).success).toBe(true);
+    expect(manageActorInventorySchema.safeParse({ ...grant, expectedInventoryStateVersion: undefined }).success).toBe(false);
+    expect(manageActorInventorySchema.safeParse({ ...grant, entryRefs: ['dagger-1', 'dagger-1'] }).success).toBe(false);
+    expect(manageActorInventorySchema.safeParse({ ...scope, operation: 'equip', idempotencyKey: 'inventory-equip-001', expectedInventoryStateVersion: 2, entryRef: 'dagger-1', quantity: 1 }).success).toBe(false);
+    expect(manageActorContentSchema.safeParse({ ...scope, operation: 'equip', contentRef: 'dagger', contentType: 'weapon', idempotencyKey: 'old-equip' }).success).toBe(false);
   });
 });

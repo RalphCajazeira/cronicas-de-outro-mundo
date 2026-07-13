@@ -6,28 +6,28 @@ O backend persiste mundos, campanhas, atores, os nove atributos primários, HP/M
 
 O validador puro de fichas canônicas está ligado ao contrato e à persistência versionada. Ele reconhece tier, raridade, dano físico/mágico separado, custos explícitos, perfis temporais, targeting, duração, efeitos, stacking, modificadores e requisitos. Uma resposta bem-sucedida de publicação confirma validação estrutural e cria ou reutiliza uma versão; ela não aplica efeitos ao ator, resolve combate ou gasta recursos.
 
-Existe também um núcleo puro interno para validar e planejar inventário, peso, carga e equipamento. Ele não possui endpoint, não grava estado e não autoriza o GPT a declarar obtenção, remoção, consumo ou equipamento como confirmado.
+O backend persiste inventário físico, peso, carga e equipamento por slots. `manageActorInventory` confirma leitura, grant, remoção, divisão/fusão, reserva/liberação, destruição e equip/unequip; `inventoryStateVersion` protege escritas concorrentes. Modificadores de itens equipados e encumbrance entram na ficha autoritativa.
 
 ## O que permanece adiado
 
 Não existem de forma estruturada nesta fase:
 
 - resolução/aplicação de combate, dano, cura, gasto de recursos ou efeitos temporários;
-- persistência e operações HTTP de inventário físico por instância, durabilidade, equipamento por slot ou loot;
+- uso de consumíveis, durabilidade, munição, loot automático ou aplicação de efeitos de item;
 - economia, comércio, lojas, estoque ou transações;
 - missões e relacionamentos especializados;
 - memórias de atores ou Codex especializado;
 - relógio, clima, coordenadas, rotas ou viagens persistentes;
 - checkpoints e recuperação especializada de campanha;
-- modificadores persistidos de equipamento, buffs ou debuffs.
+- buffs ou debuffs ativos fora do equipamento persistido.
 
 Não apresente esses sistemas como implementados e não invente persistência para eles.
 
 ## Como narrar dentro dos limites
 
-Combate pode incluir intenção, risco, vantagem narrativa, fuga, rendição, medo e consequência ficcional. A ficha contém precisão, defesas, crítico e demais derivados oficiais, mas ainda não existe operação que resolva uma ação ou aplique seus efeitos. Loot narrativo ainda não é inventário persistente.
+Combate pode incluir intenção, risco, vantagem narrativa, fuga, rendição, medo e consequência ficcional. A ficha contém precisão, defesas, crítico, carga e modificadores de equipamento oficiais, mas ainda não existe operação que resolva uma ação ou aplique seus efeitos. Loot só é posse confirmada após uma operação de inventário bem-sucedida.
 
-Itens, lojas, clima e viagens podem aparecer na história com coerência, descrição e continuidade. Uma `ContentDefinition` pode representar o conceito de um item, local ou facção, e `ActorContent` pode representar vínculo genérico suportado, mas isso não cria estoque, propriedade física detalhada, distância, preço ou viagem automática.
+Itens, lojas, clima e viagens podem aparecer na história com coerência, descrição e continuidade. Uma `ContentDefinition` representa o conceito; somente `manageActorInventory` cria propriedade física. Isso não cria preço, comércio, distância ou viagem automática.
 
 Quando a história precisar preservar um fato compatível com o contrato, use a capacidade estruturada ou genérica adequada. Caso contrário, trate-o explicitamente como regra narrativa ou sistema futuro.
 

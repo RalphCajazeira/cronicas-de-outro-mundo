@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CORE_V1_CONTENT_PROFILE_HASH } from '../rules/core-v1/core-v1.content-profile.manifest.js';
 import { activeSkillProfile, publishedContentFixture } from '../../../tests/support/content-fixture.js';
-import { calculateContentHash, publicContentDto } from './content-publication.service.js';
+import { calculateContentHash, calculateInventorySpecHash, publicContentDto } from './content-publication.service.js';
 
 function hashInput() {
   const profile = activeSkillProfile();
@@ -26,6 +26,15 @@ describe('versioned content publication primitives', () => {
     expect(JSON.stringify(hashInput())).not.toMatch(/contentDefinitionId|contentVersionId|status|createdAt/);
     const lifecycleOnly = { ...hashInput(), status: 'archived' };
     expect(calculateContentHash(hashInput())).toBe(calculateContentHash(lifecycleOnly));
+  });
+
+  it('hashes the canonical inventory spec separately from public content', () => {
+    const spec = {
+      schemaVersion: 1 as const, rulesetCode: 'core-v1' as const, inventoryRulesCode: 'core-v1-inventory-v1' as const,
+      unitWeight: 10, stacking: { mode: 'unique' as const }, equipmentSlots: ['main_hand' as const], handedness: 'one_handed' as const,
+    };
+    expect(calculateInventorySpecHash(spec)).toBe('49c5bb0da0c7f5522ad354e1d4564a83fc77c0225eadb273e1f193d023f39b4e');
+    expect(calculateInventorySpecHash({ ...spec, unitWeight: 11 })).not.toBe(calculateInventorySpecHash(spec));
   });
 
   it.each(['name', 'description', 'profile', 'presentation', 'tags', 'metadata'] as const)(

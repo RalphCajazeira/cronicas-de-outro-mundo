@@ -5,6 +5,8 @@ import { createActorMechanicalState, loadActorMechanicalSheet } from '../src/mod
 import { getInitialAttributePreset } from '../src/modules/rules/core-v1/index.js';
 import { ensureCoreV1RulesetVersion } from '../src/modules/rules/ruleset.registry.js';
 import { publishContentVersion } from '../src/modules/content/content-publication.service.js';
+import { ensureCoreV1InventoryRulesVersion } from '../src/modules/rules/inventory-rules.registry.js';
+import { manageActorInventory } from '../src/modules/inventory/inventory.service.js';
 
 const connectionString = process.env.DATABASE_URL;
 if (connectionString === undefined || connectionString.length === 0) throw new Error('Invalid application configuration');
@@ -13,6 +15,7 @@ const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) })
 async function main() {
   await prisma.$transaction(async (transaction) => {
     const rulesetVersion = await ensureCoreV1RulesetVersion(transaction);
+    await ensureCoreV1InventoryRulesVersion(transaction);
     const player = await transaction.player.upsert({ where: { slug: 'ralph' }, update: { displayName: 'Ralph' }, create: { slug: 'ralph', displayName: 'Ralph' } });
     const world = await transaction.world.upsert({
       where: { playerId_code: { playerId: player.id, code: 'elarion' } },
@@ -85,6 +88,42 @@ async function main() {
       update: { state: ActorContentState.LEARNING, rank: 1, progress: 10, mastery: 0, notes: 'Treino inicial com Lyra' },
       create: { actorId: ralph.id, contentDefinitionId: breezeStep.id, contentVersionId: breezeVersion.id, state: ActorContentState.LEARNING, rank: 1, progress: 10, mastery: 0, notes: 'Treino inicial com Lyra' },
     });
+
+    const daggerDescription = 'Uma adaga simples, leve e confiável.';
+    const dagger = await publishContentVersion(transaction, {
+      worldId: world.id,
+      campaignId: campaign.id,
+      code: 'starter-dagger',
+      contentType: ContentType.WEAPON,
+      name: 'Adaga Inicial',
+      description: daggerDescription,
+      profile: {
+        schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical', contentKind: 'weapon',
+        code: 'starter-dagger', name: 'Adaga Inicial', description: daggerDescription,
+        presentation: {}, tags: ['weapon', 'dagger'], tier: 1, rarity: 'common',
+        activation: { type: 'active' }, cost: { type: 'none' }, actionProfile: 'dagger',
+        targeting: { type: 'single_target', rangeBand: 'engaged', maxTargets: 1 },
+        damageComponents: [{ id: 'blade', channel: 'physical', element: null, baseDamage: 3, scaling: 'full', canCrit: true }],
+        handedness: 'one_handed', weaponTags: ['dagger'],
+      },
+      inventorySpec: {
+        schemaVersion: 1, rulesetCode: 'core-v1', inventoryRulesCode: 'core-v1-inventory-v1',
+        unitWeight: 10, stacking: { mode: 'unique' }, equipmentSlots: ['main_hand'], handedness: 'one_handed',
+      },
+      presentation: {}, tags: ['weapon', 'dagger'], status: ContentStatus.ACTIVE, metadata: {},
+    });
+    if (await transaction.inventoryEntry.count({ where: { actorId: ralph.id, entryRef: 'starter-dagger-1' } }) === 0) {
+      const daggerVersion = dagger.versions[0];
+      if (daggerVersion === undefined) throw new Error('Seed inventory publication is incomplete');
+      const currentActor = await transaction.actor.findUniqueOrThrow({ where: { id: ralph.id }, select: { inventoryStateVersion: true } });
+      await manageActorInventory(transaction, ralph.code, {
+        playerRef: player.slug, worldRef: world.code, campaignRef: campaign.code,
+        operation: 'grant', idempotencyKey: 'seed-starter-dagger',
+        expectedInventoryStateVersion: currentActor.inventoryStateVersion,
+        contentRef: { scope: 'campaign', contentType: 'weapon', code: dagger.code, versionNumber: daggerVersion.versionNumber },
+        quantity: 1, entryRefs: ['starter-dagger-1'],
+      });
+    }
   });
 }
 
