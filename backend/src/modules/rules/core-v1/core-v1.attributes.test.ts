@@ -91,6 +91,8 @@ describe('core-v1 initial primary attributes', () => {
     }).toThrow(TypeError);
     expect(getInitialAttributePreset('balanced').strength).toBe(10);
     expect(() => getInitialAttributePreset('invalid' as never)).toThrow('preset is invalid');
+    expect(() => getInitialAttributePreset('__proto__' as never)).toThrow('preset is invalid');
+    expect(() => getInitialAttributePreset('constructor' as never)).toThrow('preset is invalid');
   });
 
   it('rejects missing, unknown, non-integer and out-of-range attributes', () => {

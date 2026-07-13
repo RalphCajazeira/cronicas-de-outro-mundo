@@ -82,8 +82,10 @@ export function validateInitialPrimaryAttributes(input: unknown): ValidationResu
 }
 
 export function getInitialAttributePreset(preset: PrimaryAttributePreset): PrimaryAttributes {
+  if (!Object.hasOwn(CORE_V1_ATTRIBUTE_PRESETS, preset)) {
+    throw new TypeError('initial attribute preset is invalid');
+  }
   const attributes = CORE_V1_ATTRIBUTE_PRESETS[preset];
-  if (attributes === undefined) throw new TypeError('initial attribute preset is invalid');
   return { ...attributes };
 }
 
