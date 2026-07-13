@@ -27,6 +27,18 @@ HTTP -> routes/controller -> service -> repository -> Prisma -> PostgreSQL
 - escritas usam `IdempotencyRecord`: constraint única, hash de operação/payload e resposta persistida na mesma transação Prisma.
 - `/health/ready` executa consulta curta com timeout e resposta binária segura; `/openapi.json` substitui o servidor por `PUBLIC_BASE_URL`.
 
+## Game Engine `core-v1`
+
+O pacote `core-v1 numerical RC1.1` é a base oficial da implementação incremental. A Fase 1A mantém em `backend/src/modules/rules/core-v1/` somente regras numéricas puras, determinísticas, versionadas e independentes de Prisma, repositories, HTTP, OpenAPI, GPT e ambientes. O backend é a autoridade para atributos, recursos, derivados, precisão, crítico, dano, mitigação, custos, progressão e threat base; o GPT futuramente envia apenas intenções e propostas, nunca resultados derivados.
+
+O `core-v1` fixa nove atributos primários e usa configuração versionada para presets, caps, envelopes, custos e papéis de NPC. Modificadores internos exigem origem tipada. A separação entre poder do ator, dano-base de arma/magia, defesa plana e resistência impede contagem dupla. Não existe `legacy-v0`: o rollout futuro parte de dados funcionais vazios, preservando a infraestrutura e o histórico oficial de migrations.
+
+As tabelas internas da versão são imutáveis em runtime e a API pública expõe valores escalares estáveis ou cópias defensivas. Entradas mecânicas e resultados intermediários permanecem em inteiros seguros; qualquer overflow é rejeitado em vez de sofrer arredondamento implícito. Os limites de inventário por papel de NPC são defaults provisórios para futura telemetria e não implementam inventário na Fase 1A.
+
+A economia de ações aprovada no RC1.1 pertence à Fase 1B e ainda não está implementada. Ela usará timeline autoritativa e processará eventos do mesmo tick sequencialmente por prioridade, initiative score, Agilidade, Percepção, Sorte, RNG persistido e referência estável; depois de cada evento, os eventos posteriores revalidam o estado e podem ser cancelados. A cadeia de reações terá profundidade máxima 2: ação originadora em 0, no máximo uma reação defensiva em 1 e, quando explicitamente permitido, um contra-ataque terminal em 2. O evento de profundidade 2 não gera nova reação nem reinicia a cadeia.
+
+Os coeficientes calibráveis permanecem associados à identidade `core-v1`/futura `RulesetVersion` e exigirão telemetria antes de nova versão. Nenhum número publicado deve ser alterado retroativamente para replays existentes.
+
 ## Arquitetura de testes
 
 ```text
