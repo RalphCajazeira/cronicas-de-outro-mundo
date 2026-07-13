@@ -57,6 +57,18 @@ Os coeficientes calibráveis permanecem associados à identidade `core-v1`/futur
 
 A migration da Fase 1D exige `Actor` vazio antes de qualquer DDL incompatível, não apaga nem converte dados, remove `health`, `maxHealth`, `mana`, `maxMana`, `attributes`, `resistances` e `affinities`, instala constraints/FKs/RLS e mantém rollout remoto e GPT ao vivo pendentes.
 
+### Fase 1E — conteúdo mecânico canônico puro
+
+`core-v1` possui uma fronteira interna, pura e determinística para validar definições canônicas de `weapon`, `armor`, `shield`, `clothing`, `spell`, `skill`, `talent`, `item`, `consumable`, `status_effect`, `race`, `class` e `creature_template`. Todo perfil declara `schemaVersion: 1`, `rulesetCode: core-v1`, modo narrativo ou mecânico e um `contentKind` fechado. O GPT permanece proponente; somente o backend valida a definição e nunca aceita dano final, mitigação, recurso gasto, duração restante ou estado aplicado como resultado oficial.
+
+O validador reutiliza componentes e envelopes de dano, bandas de custo, caps de área, papéis e orçamento de NPC, perfis temporais, targeting RC1.1, reações e helpers de inteiros seguros. Elementos são códigos fechados da versão (`fire`, `ice`, `lightning`, `earth`, `wind`, `water`, `light`, `shadow`, `poison`, `arcane`); canais físico/mágico permanecem separados, imunidade não é representada como resistência de 100% e consumíveis exigem efeitos numéricos completos.
+
+Entradas runtime são objetos fechados, sem protótipos inesperados, arrays esparsos, números não finitos ou caminhos arbitrários de modificador. Falhas esperadas retornam código, `retryable` e issues determinísticas com path/rule/message/expected/received, sem exceção genérica. Configurações de raridade, stacking e limites operacionais são imutáveis internamente e expostas somente por cópias defensivas.
+
+Esta fase não altera o manifesto persistido da Fase 1C, Prisma, migrations, repositories, HTTP, OpenAPI, inventário, equipamento, aplicação de efeitos, recursos ou combate. A Fase 1F deverá integrar deliberadamente essa fronteira ao fluxo de definição/versionamento persistido, com contrato e rollout próprios.
+
+Status: implementada e validada na Fase 1E; revisão e integração rastreadas pelo PR correspondente
+
 ## Arquitetura de testes
 
 ```text

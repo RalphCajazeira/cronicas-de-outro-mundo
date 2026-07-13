@@ -1,5 +1,24 @@
 # Decision Log
 
+## 2026-07-13 — Fase 1E de conteúdo mecânico canônico puro
+
+Decisão:
+- criar uma fronteira interna `core-v1` para validar, sem infraestrutura, os 13 tipos canônicos de conteúdo mecânico e os perfis narrativos permitidos;
+- exigir identidade `schemaVersion: 1`/`rulesetCode: core-v1`, tier 1–10, raridade configurável, capacidade mecânica reconhecida e objetos runtime fechados;
+- manter elementos em catálogo versionado, canais físico/mágico separados, imunidades explícitas e componentes de dano dentro do envelope e do limite de seis componentes;
+- reutilizar integralmente custos RC1, targeting/multi-target RC1.1, perfis temporais, reações, papéis/orçamentos NPC e inteiros seguros existentes;
+- modelar defesa, activation, duration sem rodadas, efeitos discriminados, stacking, modificadores, requisitos e creature templates sem aplicar resultado mecânico;
+- retornar erros estruturados e retryable para entrada esperadamente inválida, preservando determinismo, ausência de mutação e cópias defensivas da configuração;
+- manter manifesto persistido, Prisma, migrations, HTTP, OpenAPI, banco, inventário, equipamento, combate, deploy e GPT ao vivo inalterados;
+- reservar persistência e integração do contrato para a Fase 1F.
+
+Impacto:
+- o GPT pode propor fichas completas, mas o núcleo do backend define a validade canônica e rejeita conteúdo incompleto ou fora do tier;
+- consumíveis passam a ter representação mecânica numérica validável, sem cura/gasto aplicado;
+- nenhuma definição é persistida ou publicada por endpoint nesta fase.
+
+Status: implementada e validada na Fase 1E; revisão e integração rastreadas pelo PR correspondente
+
 ## 2026-07-13 — Fase 1D de persistência autoritativa da ficha de atores
 
 Decisão:
