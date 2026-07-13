@@ -1,5 +1,25 @@
 # Decision Log
 
+## 2026-07-13 — `core-v1 numerical RC1.1` e Fase 1A numérica pura
+
+Decisão:
+- aprovar `core-v1 numerical RC1.1` como base oficial do Game Engine incremental, com nove atributos fixos, backend autoritativo, clean slate e ausência de `legacy-v0`;
+- implementar na Fase 1A apenas matemática pura e versionada para atributos, recursos, derivados, precisão, crítico, componentes de dano, mitigação, envelopes, custos, progressão e papéis/threat base de NPC;
+- manter Prisma, migrations, repositories, HTTP, OpenAPI, GPT, RNG, inventário e estado persistido de combate fora desta fase;
+- reservar timeline, action time, initiative scheduling, action plans, economia temporal e reações em runtime para a Fase 1B;
+- processar futuramente eventos no mesmo tick em sequência determinística por prioridade do tipo, initiative score, Agilidade, Percepção, Sorte, RNG persistido e referência estável, revalidando o estado após cada evento;
+- limitar futuramente a cadeia a `reactionDepth` 0 para a ação originadora, 1 para no máximo uma reação defensiva e 2 para no máximo um contra-ataque terminal explicitamente permitido; profundidade 2 não gera nova reação ou contra-ataque;
+- manter coeficientes de balanceamento configuráveis por versão e exigir telemetria para recalibrações futuras;
+- manter tabelas internas imutáveis em runtime, expor cópias defensivas e rejeitar entradas ou intermediários fora de inteiros seguros;
+- tratar limites de inventário de NPC como configuração provisória para telemetria, sem runtime de inventário nesta fase.
+
+Impacto:
+- serviços autoritativos futuros poderão reutilizar o núcleo sem dependência de banco ou transporte;
+- o contrato GPT atual não é ampliado e os dados funcionais existentes não são convertidos;
+- nenhuma migration, dependência ou alteração de ambiente faz parte da Fase 1A.
+
+Status: implementada e validada na Fase 1A; revisão e integração rastreadas pelo PR #9
+
 ## 2026-07-12 — Criação estruturada, segura e sem migration
 
 Decisão:
