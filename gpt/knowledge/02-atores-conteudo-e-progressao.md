@@ -4,7 +4,7 @@
 
 `Actor` representa personagem ou figura individual relevante. Possui `code` estável, identidade básica, descrição, metadados, estado e ficha mecânica autoritativa calculada pelo backend. Os tipos atuais são `character`, `npc`, `creature`, `companion` e `spirit`.
 
-A ficha pública contém nove `primaryAttributes`, recursos atuais/máximos de HP, Mana e SP, `secondaryAttributes`, `mechanicsStateVersion` e ruleset. O GPT propõe os atributos iniciais e, para NPC/criatura, nível 1–20; não propõe máximos nem derivados. Recursos começam cheios e ainda não existe operação de gasto, cura ou dano.
+A ficha pública contém nove `primaryAttributes`, recursos atuais/máximos de HP, Mana e SP, `secondaryAttributes`, `mechanicsStateVersion` e ruleset. O GPT propõe os atributos iniciais e, para NPC/criatura, nível 1–20; não propõe máximos nem derivados. Recursos começam cheios. O backend já possui resolução conceitual pura de gasto, cura e dano, mas ainda não existe operação pública ou persistência desses resultados.
 
 `ContentDefinition` representa a identidade estável de conteúdo reutilizável no mundo ou em uma campanha. Nome, descrição, perfil, apresentação, tags e metadados pertencem a uma `ContentVersion` imutável. Os 13 tipos canônicos são arma, armadura, escudo, roupa, magia, habilidade, talento, item, consumível, efeito de estado, raça, classe e modelo de criatura. Material, localização, facção, modelo de missão, receita e outros continuam narrativos genéricos, sem perfil mecânico.
 

@@ -1,0 +1,13 @@
+export const CORE_V1_EFFECT_RULESET_CODE = 'core-v1' as const;
+export const CORE_V1_EFFECT_RULES_CODE = 'core-v1-effects-v1' as const;
+export const CORE_V1_EFFECT_SCHEMA_VERSION = 1 as const;
+
+export const CORE_V1_MAX_RESOLUTION_ACTORS = 16;
+export const CORE_V1_MAX_EFFECTS_PER_SEQUENCE = 16;
+export const CORE_V1_MAX_RESOLUTION_CHANGES = 64;
+export const CORE_V1_MAX_ACTIVE_EFFECTS_PER_ACTOR = 64;
+export const CORE_V1_MAX_ACTIVE_MODIFIERS_PER_ACTOR = 32;
+export const CORE_V1_MAX_RUNTIME_STATUS_STACKS = 10;
+export const CORE_V1_MIN_ROLL_BPS = 1;
+export const CORE_V1_MAX_ROLL_BPS = 10_000;
+export const CORE_V1_MAX_OPERATIONAL_MULTIPLIER_BPS = 20_000;

@@ -15,6 +15,6 @@ Uma ficha de poder canônica descreve no `profile` fechado e em `presentation`, 
 - requisitos e progressão;
 - aparência e efeitos sensoriais.
 
-O backend valida esses campos e publica uma versão imutável, mas eles não constituem um resolvedor. O GPT não calcula dano final, defesa final, precisão, crítico ou escalonamento não retornado pelo backend.
+O backend valida esses campos, publica uma versão imutável e possui um resolvedor puro interno para custos, rolls injetados, dano, restauração e estados ativos. Esse núcleo ainda não persiste a execução nem é uma operação do GPT. O GPT não calcula dano final, defesa final, precisão, crítico ou escalonamento como autoridade.
 
 Conhecer uma descrição não significa aprender ou dominar. Consulte o vínculo atual e respeite `locked`, `learning`, `known` e `mastered`, além de rank, progresso e maestria confirmados.
