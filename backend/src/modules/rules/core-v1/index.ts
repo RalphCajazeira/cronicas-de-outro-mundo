@@ -1,8 +1,15 @@
 export * from './core-v1.attributes.js';
+export * from './core-v1.action-economy.js';
+export * from './core-v1.action-mechanics.js';
+export * from './core-v1.temporal.js';
+export * from './core-v1.ticks.js';
+export * from './core-v1.timeline.js';
 export * from './core-v1.content.js';
 export * from './core-v1.damage.js';
 export * from './core-v1.progression.js';
+export type * from './core-v1.action-economy.types.js';
 export type * from './core-v1.types.js';
+export { CORE_V1_ACTION_ECONOMY_REVISION } from './core-v1.action-economy.config.js';
 export {
   CORE_V1_ATTRIBUTE_HARD_CAP,
   CORE_V1_ATTRIBUTE_SOFT_CAP,
