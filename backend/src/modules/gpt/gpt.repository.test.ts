@@ -1,6 +1,7 @@
 import { Prisma } from '../../generated/prisma/client.js';
 import { describe, expect, it } from 'vitest';
 import { inspectIdempotencyRecord, isIdempotencyKeyConflict } from './gpt.prisma-errors.js';
+import { IDEMPOTENT_TRANSACTION_OPTIONS } from './gpt.start-game.js';
 
 function uniqueError(modelName: string, target: string[]) {
   return new Prisma.PrismaClientKnownRequestError('unique conflict', {
@@ -39,6 +40,10 @@ function targetOnlyError(target: string[]) {
 }
 
 describe('GPT repository unique conflicts', () => {
+  it('allows bounded idempotent transactions to persist the complete structured game start', () => {
+    expect(IDEMPOTENT_TRANSACTION_OPTIONS).toEqual({ maxWait: 5_000, timeout: 30_000 });
+  });
+
   it('recognizes only the structured IdempotencyRecord.key target as an idempotent retry', () => {
     expect(isIdempotencyKeyConflict(uniqueError('IdempotencyRecord', ['key']))).toBe(true);
     expect(isIdempotencyKeyConflict(adapterUniqueError(['key']))).toBe(true);

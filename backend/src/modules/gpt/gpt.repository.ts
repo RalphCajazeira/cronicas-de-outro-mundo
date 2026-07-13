@@ -14,7 +14,7 @@ import type {
 } from './gpt.schemas.js';
 import type { ApiResult, GptRepository } from './gpt.types.js';
 import {
-  CAMPAIGN_STARTED_EVENT_MAX_BYTES, canonicalJsonEqual, canonicalize, jsonByteSize, resolveDifficulty,
+  CAMPAIGN_STARTED_EVENT_MAX_BYTES, IDEMPOTENT_TRANSACTION_OPTIONS, canonicalJsonEqual, canonicalize, jsonByteSize, resolveDifficulty,
   type CampaignStartedPayload,
 } from './gpt.start-game.js';
 import { inspectIdempotencyRecord, isIdempotencyKeyConflict, isUniqueConflict } from './gpt.prisma-errors.js';
@@ -49,7 +49,7 @@ async function executeIdempotent(
       const response = await work(transaction);
       await transaction.idempotencyRecord.update({ where: { key }, data: { response: inputJson(response) } });
       return response;
-    });
+    }, IDEMPOTENT_TRANSACTION_OPTIONS);
   } catch (error) {
     if (!isUniqueConflict(error)) throw error;
     if (!isIdempotencyKeyConflict(error)) throw new ConflictError('Resource already exists');
