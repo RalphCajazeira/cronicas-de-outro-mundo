@@ -1,5 +1,25 @@
 # Decision Log
 
+## 2026-07-13 — Fase 1G de inventário, carga e equipamento puros
+
+Decisão:
+- criar a identidade `core-v1-inventory-v1`, schema 1, separada do manifesto numérico RC1.1 e da publicação `core-v1-content-v1`;
+- manter `ActorContent` como vínculo conceitual e representar posse física futura por instâncias únicas ou stacks homogêneos fixados em uma versão pública exata;
+- manter peso, stacking e declarações físicas complementares em `CoreV1InventorySpec`, sem inferência por descrição e sem alterar retroativamente o perfil publicado da Fase 1E;
+- limitar operações a 256 entradas, stacks a 999 unidades e loadouts a 32 instâncias, rejeitando duplicidade, protótipos inesperados, arrays esparsos, mutação e overflow;
+- reutilizar capacidade derivada e thresholds RC1.1 de carga, com comparação inteira segura para 70%, 100% e 125%;
+- modelar catálogo fixo de slots, armas de uma/duas mãos e versáteis, multisslot atômico, planejamento sem substituição silenciosa e requisitos avaliados sobre projeções públicas;
+- coletar modificadores passivos equipados com origem tipada, sem aplicá-los ou recomputar o snapshot;
+- manter Prisma, migrations, `ItemInstance`, repositories, HTTP, OpenAPI, comércio, loot, uso de consumível, efeitos, combate, banco remoto, deploy e GPT ao vivo fora do escopo;
+- reservar persistência, transações e recomputação autoritativa para a Fase 1H.
+
+Impacto:
+- regras futuras de inventário e equipamento passam a ter comportamento reproduzível e testável antes da escolha do modelo persistido;
+- publicar conteúdo v2 não transforma nem funde automaticamente entradas v1;
+- o contrato ativo ainda não oferece operação de inventário ao GPT ou frontend.
+
+Status: implementada e validada na Fase 1G; revisão e integração rastreadas pelo PR correspondente
+
 ## 2026-07-13 — Fase 1E de conteúdo mecânico canônico puro
 
 Decisão:

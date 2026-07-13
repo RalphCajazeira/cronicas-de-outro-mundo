@@ -6,10 +6,13 @@ export * from './core-v1.ticks.js';
 export * from './core-v1.timeline.js';
 export * from './core-v1.content.js';
 export * from './core-v1.content-mechanics.js';
+export * from './core-v1.inventory.js';
+export * from './core-v1.equipment.js';
 export * from './core-v1.damage.js';
 export * from './core-v1.progression.js';
 export type * from './core-v1.action-economy.types.js';
 export type * from './core-v1.content-mechanics.types.js';
+export type * from './core-v1.inventory.types.js';
 export type * from './core-v1.types.js';
 export { CORE_V1_ACTION_ECONOMY_REVISION } from './core-v1.action-economy.config.js';
 export {
@@ -31,4 +34,12 @@ export {
   CORE_V1_CONTENT_SCHEMA_VERSION,
   CORE_V1_MAX_STATUS_STACKS,
 } from './core-v1.content-mechanics.config.js';
+export {
+  CORE_V1_INVENTORY_RULES_CODE,
+  CORE_V1_INVENTORY_RULESET_CODE,
+  CORE_V1_INVENTORY_SCHEMA_VERSION,
+  CORE_V1_MAX_EQUIPPED_ENTRIES,
+  CORE_V1_MAX_INVENTORY_ENTRIES_PER_OPERATION,
+  CORE_V1_MAX_STACK_QUANTITY,
+} from './core-v1.inventory.config.js';
 export { ceilDiv, clamp, roundHalfUp } from './core-v1.math.js';

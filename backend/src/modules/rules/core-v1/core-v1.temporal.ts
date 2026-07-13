@@ -108,14 +108,15 @@ export function calculateEncumbrance(
     }
     return { encumbranceState: 'overloaded', encumbrancePenaltyBps: 2500, canStartAttackOrMovement: false };
   }
-  const scaledWeight = safeIntegerMultiply(carriedWeightUnits, 100, 'encumbrance ratio');
-  if (scaledWeight <= safeIntegerMultiply(carryingCapacityUnits, 70, 'encumbrance 70% threshold')) {
+  const scaledWeight = BigInt(carriedWeightUnits) * 100n;
+  const scaledCapacity = BigInt(carryingCapacityUnits);
+  if (scaledWeight <= scaledCapacity * 70n) {
     return { encumbranceState: 'normal', encumbrancePenaltyBps: 0, canStartAttackOrMovement: true };
   }
-  if (scaledWeight <= safeIntegerMultiply(carryingCapacityUnits, 100, 'encumbrance 100% threshold')) {
+  if (scaledWeight <= scaledCapacity * 100n) {
     return { encumbranceState: 'encumbered', encumbrancePenaltyBps: 1000, canStartAttackOrMovement: true };
   }
-  if (scaledWeight <= safeIntegerMultiply(carryingCapacityUnits, 125, 'encumbrance 125% threshold')) {
+  if (scaledWeight <= scaledCapacity * 125n) {
     return { encumbranceState: 'heavily_encumbered', encumbrancePenaltyBps: 2500, canStartAttackOrMovement: true };
   }
   return { encumbranceState: 'overloaded', encumbrancePenaltyBps: 2500, canStartAttackOrMovement: false };

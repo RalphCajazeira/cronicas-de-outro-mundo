@@ -10,6 +10,8 @@ A ficha pública contém nove `primaryAttributes`, recursos atuais/máximos de H
 
 `ActorContent` liga uma definição e uma versão específica a um ator, além de registrar `state`, `rank`, `progress`, `mastery`, `equipped`, `quantity`, `notes` e metadados. Estados de progressão: `locked`, `learning`, `known` e `mastered`. Uma nova publicação não migra silenciosamente vínculos antigos.
 
+O backend possui regras puras preparatórias para um inventário físico futuro, também fixado em versões exatas, mas ainda não persiste instâncias, stacks ou loadouts. `ActorContent` não deve ser tratado como essa posse física, e seus campos genéricos continuam conceituais até a integração própria.
+
 `GameEvent` registra um fato narrativo da campanha, opcionalmente ligado a um ator. Um evento não cria automaticamente um subsistema de missão, memória, relacionamento ou inventário.
 
 ## Uso responsável
