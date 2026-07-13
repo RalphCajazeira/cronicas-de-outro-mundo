@@ -216,6 +216,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isInitiallyKnown(state: unknown): boolean {
+  return state === 'known' || state === 'mastered';
+}
+
+function validateStartingClassLink(
+  value: z.infer<typeof initialContentPackageSchema> | undefined, context: z.RefinementCtx,
+) {
+  const link = value?.protagonistLink;
+  if (link !== undefined && (!isInitiallyKnown(link.state) || link.equipped)) {
+    context.addIssue({ code: 'custom', path: ['initialContentPackages'], message: 'Starting class must be known or mastered and not equipped' });
+  }
+}
+
 function validateKnownRequirements(
   value: z.infer<typeof initialContentPackageSchema>, index: number, linkedKnown: Set<string>, attributes: Record<string, unknown>,
   context: z.RefinementCtx,
@@ -302,7 +315,7 @@ export const startGameSchema = z.strictObject({
   }
 
   const seen = new Set<string>();
-  const linkedKnown = new Set(value.initialContentPackages.filter((item) => ['known', 'mastered'].includes(item.protagonistLink?.state ?? ''))
+  const linkedKnown = new Set(value.initialContentPackages.filter((item) => isInitiallyKnown(item.protagonistLink?.state))
     .map((item) => `${item.definition.contentType}:${item.definition.code}`));
   const initialClasses = value.initialContentPackages.filter((item) => item.definition.contentType === 'class' && item.protagonistLink !== undefined);
   value.initialContentPackages.forEach((item, index) => {
@@ -326,20 +339,20 @@ export const startGameSchema = z.strictObject({
       if (condition !== permanent) context.addIssue({ code: 'custom', path: ['initialContentPackages', index, 'definition'], message: 'Permanent conditions require metadata.category=condition and mechanics.permanence=permanent' });
     }
     validateEquipped(item, index, context);
-    if (['known', 'mastered'].includes(item.protagonistLink?.state ?? '')) validateKnownRequirements(item, index, linkedKnown, value.protagonist.attributes ?? {}, context);
+    if (isInitiallyKnown(item.protagonistLink?.state)) validateKnownRequirements(item, index, linkedKnown, value.protagonist.attributes ?? {}, context);
   });
 
   if (classModel.mode === 'mechanical' && classModel.startingClass === 'required') {
     if (value.protagonist.className === undefined || value.protagonist.className === null) context.addIssue({ code: 'custom', path: ['protagonist', 'className'], message: 'Required for a required mechanical starting class' });
     if (initialClasses.length !== 1) context.addIssue({ code: 'custom', path: ['initialContentPackages'], message: 'Exactly one linked class package is required' });
-    const link = initialClasses[0]?.protagonistLink;
-    if (link !== undefined && (!['known', 'mastered'].includes(link.state) || link.equipped)) context.addIssue({ code: 'custom', path: ['initialContentPackages'], message: 'Starting class must be known or mastered and not equipped' });
+    validateStartingClassLink(initialClasses[0], context);
   }
   if (classModel.mode === 'mechanical' && classModel.startingClass === 'optional') {
     const hasClassName = value.protagonist.className !== undefined && value.protagonist.className !== null;
     if (hasClassName !== (initialClasses.length > 0) || initialClasses.length > 1) {
       context.addIssue({ code: 'custom', path: ['initialContentPackages'], message: 'Optional mechanical class requires className and exactly one linked class package together' });
     }
+    if (hasClassName && initialClasses.length === 1) validateStartingClassLink(initialClasses[0], context);
   }
   if (classModel.mode === 'mechanical' && classModel.startingClass === 'unassigned'
     && ((value.protagonist.className !== undefined && value.protagonist.className !== null) || initialClasses.length > 0)) {

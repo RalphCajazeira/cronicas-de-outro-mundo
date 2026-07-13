@@ -113,8 +113,21 @@ describe('GPT API schemas', () => {
 
     const optional = { ...base.campaignConfiguration, classModel: { ...mechanical.classModel, startingClass: 'optional' } };
     expect(startGameSchema.safeParse({ ...base, campaignConfiguration: optional, protagonist: { ...base.protagonist, className: null } }).success).toBe(true);
+    const optionalKnown = { ...base, campaignConfiguration: optional, protagonist: { ...base.protagonist, className: 'Arqueiro Arcano' }, initialContentPackages: [classPackage] };
+    expect(startGameSchema.safeParse(optionalKnown).success).toBe(true);
+    expect(startGameSchema.safeParse({ ...optionalKnown, initialContentPackages: [{ ...classPackage, protagonistLink: { ...classPackage.protagonistLink, state: 'mastered' } }] }).success).toBe(true);
+    expect(startGameSchema.safeParse({ ...optionalKnown, initialContentPackages: [{ ...classPackage, protagonistLink: { ...classPackage.protagonistLink, state: 'locked' } }] }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...optionalKnown, initialContentPackages: [{ ...classPackage, protagonistLink: { ...classPackage.protagonistLink, state: 'learning' } }] }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...optionalKnown, initialContentPackages: [{ ...classPackage, protagonistLink: { ...classPackage.protagonistLink, equipped: true } }] }).success).toBe(false);
     expect(startGameSchema.safeParse({ ...base, campaignConfiguration: optional, protagonist: { ...base.protagonist, className: 'Arqueiro Arcano' }, initialContentPackages: [] }).success).toBe(false);
     expect(startGameSchema.safeParse({ ...base, campaignConfiguration: optional, protagonist: { ...base.protagonist, className: null }, initialContentPackages: [classPackage] }).success).toBe(false);
+    const secondClass = { ...classPackage, definition: { ...classPackage.definition, code: 'arcane-mage', name: 'Mago Arcano' } };
+    expect(startGameSchema.safeParse({ ...optionalKnown, initialContentPackages: [classPackage, secondClass] }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...optionalKnown, protagonist: { ...optionalKnown.protagonist, className: 'Mago' } }).success).toBe(false);
+
+    const unassigned = { ...base.campaignConfiguration, classModel: { ...mechanical.classModel, startingClass: 'unassigned' } };
+    expect(startGameSchema.safeParse({ ...base, campaignConfiguration: unassigned, protagonist: { ...base.protagonist, className: null } }).success).toBe(true);
+    expect(startGameSchema.safeParse({ ...base, campaignConfiguration: unassigned, protagonist: { ...base.protagonist, className: null }, initialContentPackages: [classPackage] }).success).toBe(false);
   });
 
   it('accepts create packages and restricts reuse to a World reference', () => {
