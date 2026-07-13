@@ -2,8 +2,10 @@ import { z } from 'zod';
 import { actorRefSchema, gameScopeSchema } from '../actors/actors.schemas.js';
 import { canonicalJson } from '../../shared/json/canonical-json.js';
 import {
+  validateCoreV1InventorySpec,
   validateCoreV1ContentProfile,
   type CoreV1ContentProfile,
+  type CoreV1InventorySpec,
 } from '../rules/core-v1/index.js';
 import { CANONICAL_CONTENT_TYPES, GENERIC_CONTENT_TYPES } from './content-publication.service.js';
 
@@ -30,6 +32,16 @@ export const contentTagsSchema = z.array(z.string().trim().min(1).max(100)).max(
 
 export const coreV1ContentProfileSchema: z.ZodType<CoreV1ContentProfile> = z.unknown().transform((value, context) => {
   const validation = validateCoreV1ContentProfile(value);
+  if (validation.ok) return validation.value;
+  validation.issues.forEach((issue) => {
+    const path = issue.path === '$' ? [] : issue.path.split('.');
+    context.addIssue({ code: 'custom', path, message: issue.message });
+  });
+  return z.NEVER;
+});
+
+export const inventorySpecSchema: z.ZodType<CoreV1InventorySpec> = z.unknown().transform((value, context) => {
+  const validation = validateCoreV1InventorySpec(value);
   if (validation.ok) return validation.value;
   validation.issues.forEach((issue) => {
     const path = issue.path === '$' ? [] : issue.path.split('.');

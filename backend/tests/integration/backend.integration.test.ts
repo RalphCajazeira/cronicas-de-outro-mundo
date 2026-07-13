@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import process from 'node:process';
 import request from 'supertest';
 import { afterAll, describe, expect, it } from 'vitest';
-import { ActorContentState, ActorType, CampaignStatus, ContentStatus, ContentType, type Prisma } from '../../src/generated/prisma/client.js';
+import { ActorContentState, ActorEquipmentSlotRef, ActorType, CampaignStatus, ContentStatus, ContentType, InventoryEntryKind, InventoryInstanceLifecycle, Prisma } from '../../src/generated/prisma/client.js';
 import { createApp } from '../../src/app.js';
 import { parseConfig } from '../../src/config/env.js';
 import { prismaActorRepository } from '../../src/modules/actors/actors.repository.js';
@@ -34,6 +34,29 @@ function responseErrorMessage(response: { body: unknown }): unknown {
 const seedScope = { playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' };
 const seedScopeQuery = 'playerRef=ralph&worldRef=elarion&campaignRef=main-campaign';
 const balancedPrimaryAttributes = getInitialAttributePreset('balanced');
+
+const inventorySpecBase = {
+  schemaVersion: 1 as const,
+  rulesetCode: 'core-v1' as const,
+  inventoryRulesCode: 'core-v1-inventory-v1' as const,
+};
+
+function uniqueInventorySpec(unitWeight = 10, physical?: Record<string, unknown>) {
+  return { ...inventorySpecBase, unitWeight, stacking: { mode: 'unique' as const }, ...physical };
+}
+
+function stackInventorySpec(unitWeight = 1, maxStack = 20) {
+  return { ...inventorySpecBase, unitWeight, stacking: { mode: 'stackable' as const, maxStack } };
+}
+
+function canonicalInventorySpec(contentType: string): object | undefined {
+  if (contentType === 'weapon') return uniqueInventorySpec(10, { equipmentSlots: ['main_hand', 'off_hand'], handedness: 'two_handed' });
+  if (contentType === 'armor') return uniqueInventorySpec(20, { equipmentSlots: ['chest'] });
+  if (contentType === 'shield') return uniqueInventorySpec(15, { equipmentSlots: ['off_hand'] });
+  if (contentType === 'clothing') return uniqueInventorySpec(5);
+  if (contentType === 'consumable' || contentType === 'material') return stackInventorySpec();
+  return undefined;
+}
 
 async function createMechanicalActor(input: {
   campaignId: string;
@@ -111,12 +134,12 @@ function canonicalProfile(contentKind: string, code: string, name: string): unkn
 
 async function publishTestContent(input: {
   worldId: string; campaignId?: string | null; contentType: ContentType; code: string; name: string;
-  profile?: unknown; status?: ContentStatus;
+  description?: string | null; profile?: unknown; inventorySpec?: unknown; tags?: readonly string[]; status?: ContentStatus;
 }) {
   return prisma.$transaction((transaction) => publishContentVersion(transaction, {
     worldId: input.worldId, campaignId: input.campaignId ?? null, contentType: input.contentType,
-    code: input.code, name: input.name, description: null, profile: input.profile,
-    presentation: {}, tags: [], status: input.status ?? ContentStatus.ACTIVE, metadata: {},
+    code: input.code, name: input.name, description: input.description ?? null, profile: input.profile, inventorySpec: input.inventorySpec,
+    presentation: {}, tags: input.tags ?? [], status: input.status ?? ContentStatus.ACTIVE, metadata: {},
   }));
 }
 
@@ -145,9 +168,14 @@ function structuredStart(prefix: string, genre = 'fantasy') {
       definition: {
         mode: 'create', scope: 'world', contentType: 'weapon', code: cyberpunk ? 'smart-pistol' : 'longbow', name: cyberpunk ? 'Pistola Inteligente' : 'Arco Longo',
         description: 'Arma inicial.', profile: weaponProfile(cyberpunk ? 'smart-pistol' : 'longbow', cyberpunk ? 'Pistola Inteligente' : 'Arco Longo'),
+        inventorySpec: uniqueInventorySpec(10, { equipmentSlots: ['main_hand', 'off_hand'], handedness: 'two_handed' }),
         presentation: {}, tags: ['weapon'], status: 'active', metadata: {},
       },
-      protagonistLink: { state: 'known', rank: 0, progress: 0, mastery: 0, equipped: true, quantity: 1, metadata: { slotHint: 'hands' } },
+      protagonistLink: { state: 'known', rank: 0, progress: 0, mastery: 0, metadata: { slotHint: 'hands' } },
+    }],
+    initialInventory: [{
+      scope: 'world', contentType: 'weapon', code: cyberpunk ? 'smart-pistol' : 'longbow', quantity: 1,
+      entryRefs: [`${cyberpunk ? 'smart-pistol' : 'longbow'}-1`], equip: { targetSlotRef: 'main_hand' },
     }],
     initialPremise: cyberpunk ? 'Um sinal clandestino chega ao protagonista.' : 'Um dragão desperta além da fronteira.',
   };
@@ -158,7 +186,7 @@ function campaignInNewWorld(prefix: string, initialContentPackages: object[] = [
   return {
     ...body, playerMode: 'reuse', playerRef: 'new-player', playerDisplayName: undefined,
     worldMode: 'reuse', worldRef: 'new-world', worldName: undefined, worldDescription: undefined, worldConfiguration: undefined,
-    protagonist: { ...body.protagonist, code: 'new-player' }, initialContentPackages,
+    protagonist: { ...body.protagonist, code: 'new-player' }, initialContentPackages, initialInventory: [],
   };
 }
 
@@ -237,12 +265,20 @@ describe('migration and PostgreSQL schema', () => {
     expect(migration[0]?.finished_at).toBeInstanceOf(Date);
   });
 
+  it('records the Phase 1H inventory persistence migration as successfully applied', async () => {
+    const migration = await prisma.$queryRaw<Array<{ finished_at: Date | null }>>`
+      SELECT finished_at FROM "_prisma_migrations"
+      WHERE migration_name = '20260714010000_engine_v1_inventory_persistence' AND rolled_back_at IS NULL
+    `;
+    expect(migration[0]?.finished_at).toBeInstanceOf(Date);
+  });
+
   it('contains every principal table', async () => {
     const rows = await prisma.$queryRaw<Array<{ table_name: string }>>`
       SELECT table_name FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_name IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
+      WHERE table_schema = 'public' AND table_name IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'GameEvent', 'IdempotencyRecord')
     `;
-    expect(rows.map((row) => row.table_name).sort()).toEqual(['Actor', 'ActorAttribute', 'ActorContent', 'ActorDerivedSnapshot', 'ActorResource', 'Campaign', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'GameEvent', 'IdempotencyRecord', 'Player', 'Ruleset', 'RulesetVersion', 'World']);
+    expect(rows.map((row) => row.table_name).sort()).toEqual(['Actor', 'ActorAttribute', 'ActorContent', 'ActorDerivedSnapshot', 'ActorEquipmentSlot', 'ActorResource', 'Campaign', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'GameEvent', 'IdempotencyRecord', 'InventoryEntry', 'InventoryRulesVersion', 'Player', 'Ruleset', 'RulesetVersion', 'World']);
   });
 
   it('contains the principal foreign keys', async () => {
@@ -259,6 +295,9 @@ describe('migration and PostgreSQL schema', () => {
       'ContentProfileVersion_rulesetVersionId_fkey', 'ContentVersion_contentDefinitionId_fkey',
       'ContentVersion_rulesetVersionId_fkey', 'ContentVersion_contentProfileVersionId_fkey',
       'ActorContent_contentVersionId_contentDefinitionId_fkey',
+      'InventoryRulesVersion_rulesetVersionId_fkey', 'ContentVersion_inventoryRulesVersionId_fkey',
+      'InventoryEntry_actorId_fkey', 'InventoryEntry_contentVersionId_fkey', 'InventoryEntry_inventoryRulesVersionId_fkey',
+      'ActorEquipmentSlot_actorId_fkey', 'ActorEquipmentSlot_inventoryEntryId_actorId_fkey',
     ]));
   });
 
@@ -270,16 +309,26 @@ describe('migration and PostgreSQL schema', () => {
     expect(rows[0]?.indexdef).toContain('WHERE ("campaignId" IS NULL)');
   });
 
+  it('contains partial inventory-spec deduplication indexes', async () => {
+    const rows = await prisma.$queryRaw<Array<{ indexname: string; indexdef: string }>>`
+      SELECT indexname, indexdef FROM pg_indexes
+      WHERE schemaname = 'public' AND indexname IN ('ContentVersion_without_inventory_spec_key', 'ContentVersion_with_inventory_spec_key')
+    `;
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.indexname === 'ContentVersion_without_inventory_spec_key')?.indexdef).toContain('"inventorySpecHash" IS NULL');
+    expect(rows.find((row) => row.indexname === 'ContentVersion_with_inventory_spec_key')?.indexdef).toContain('"inventorySpecHash" IS NOT NULL');
+  });
+
   it('enables RLS without public policies on every Node platform table', async () => {
     const tables = await prisma.$queryRaw<Array<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>>`
       SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
+      WHERE n.nspname = 'public' AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'GameEvent', 'IdempotencyRecord')
     `;
-    expect(tables).toHaveLength(15);
+    expect(tables).toHaveLength(18);
     expect(tables.every((table) => table.relrowsecurity)).toBe(true);
     expect(tables.every((table) => !table.relforcerowsecurity)).toBe(true);
-    await expect(prisma.$queryRaw<Array<{ tablename: string }>>`SELECT tablename::text FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'GameEvent', 'IdempotencyRecord')`).resolves.toHaveLength(0);
+    await expect(prisma.$queryRaw<Array<{ tablename: string }>>`SELECT tablename::text FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'GameEvent', 'IdempotencyRecord')`).resolves.toHaveLength(0);
   });
 
   it('does not grant table privileges to PUBLIC', async () => {
@@ -289,7 +338,7 @@ describe('migration and PostgreSQL schema', () => {
       JOIN pg_namespace n ON n.oid = c.relnamespace
       CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) privilege
       WHERE n.nspname = 'public'
-        AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
+        AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'GameEvent', 'IdempotencyRecord')
         AND privilege.grantee = 0
     `;
     expect(rows[0]?.count).toBe(0);
@@ -321,17 +370,17 @@ describe('migration and PostgreSQL schema', () => {
 
 describe('idempotent seed', () => {
   async function counts() {
-    const [rulesets, rulesetVersions, contentProfileVersions, players, worlds, campaigns, actors, attributes, resources, snapshots, definitions, contentVersions, links] = await Promise.all([
-      prisma.ruleset.count(), prisma.rulesetVersion.count(), prisma.contentProfileVersion.count(),
+    const [rulesets, rulesetVersions, contentProfileVersions, inventoryRulesVersions, players, worlds, campaigns, actors, attributes, resources, snapshots, definitions, contentVersions, links, inventoryEntries] = await Promise.all([
+      prisma.ruleset.count(), prisma.rulesetVersion.count(), prisma.contentProfileVersion.count(), prisma.inventoryRulesVersion.count(),
       prisma.player.count(), prisma.world.count(), prisma.campaign.count(), prisma.actor.count(),
       prisma.actorAttribute.count(), prisma.actorResource.count(), prisma.actorDerivedSnapshot.count(),
-      prisma.contentDefinition.count(), prisma.contentVersion.count(), prisma.actorContent.count(),
+      prisma.contentDefinition.count(), prisma.contentVersion.count(), prisma.actorContent.count(), prisma.inventoryEntry.count(),
     ]);
-    return { rulesets, rulesetVersions, contentProfileVersions, players, worlds, campaigns, actors, attributes, resources, snapshots, definitions, contentVersions, links };
+    return { rulesets, rulesetVersions, contentProfileVersions, inventoryRulesVersions, players, worlds, campaigns, actors, attributes, resources, snapshots, definitions, contentVersions, links, inventoryEntries };
   }
 
   it('creates the expected initial records', async () => {
-    await expect(counts()).resolves.toEqual({ rulesets: 1, rulesetVersions: 1, contentProfileVersions: 1, players: 1, worlds: 1, campaigns: 1, actors: 2, attributes: 18, resources: 6, snapshots: 2, definitions: 1, contentVersions: 1, links: 1 });
+    await expect(counts()).resolves.toEqual({ rulesets: 1, rulesetVersions: 1, contentProfileVersions: 1, inventoryRulesVersions: 1, players: 1, worlds: 1, campaigns: 1, actors: 2, attributes: 18, resources: 6, snapshots: 2, definitions: 2, contentVersions: 2, links: 1, inventoryEntries: 1 });
   });
 
   it('keeps counts and the Ralph content link unchanged on a second seed', async () => {
@@ -473,7 +522,7 @@ describe('content publication and database immutability', () => {
     const ralphLink = await prisma.actorContent.create({ data: {
       actorId: ralph.id, contentDefinitionId: v2.id, contentVersionId: v2Version.id, state: ActorContentState.LEARNING,
     } });
-    await prisma.actorContent.update({ where: { id: lyraLink.id }, data: { equipped: true, rank: 2 } });
+    await prisma.actorContent.update({ where: { id: lyraLink.id }, data: { rank: 2 } });
     await expect(prisma.actorContent.findUniqueOrThrow({ where: { id: lyraLink.id } })).resolves.toMatchObject({ contentVersionId: v1Version.id });
     await expect(prisma.actorContent.findUniqueOrThrow({ where: { id: ralphLink.id } })).resolves.toMatchObject({ contentVersionId: v2Version.id });
     const [lyraGet, ralphGet] = await Promise.all([
@@ -482,10 +531,10 @@ describe('content publication and database immutability', () => {
     ]);
     expect(lyraGet.body).toMatchObject({ code, name: 'Pinned V1', versionNumber: 1 });
     expect(ralphGet.body).toMatchObject({ code, name: 'Pinned V2', versionNumber: 2 });
-    const unequipped = await post('/api/v1/actors/lyra/content/manage', {
-      operation: 'unequip', contentRef: code, contentType: 'skill', idempotencyKey: 'actor-pin-unequip-001',
+    const updated = await post('/api/v1/actors/lyra/content/manage', {
+      operation: 'update', contentRef: code, contentType: 'skill', idempotencyKey: 'actor-pin-update-001', changes: { progress: 1 },
     });
-    expect(unequipped.body).toMatchObject({ name: 'Pinned V1', versionNumber: 1, equipped: false });
+    expect(updated.body).toMatchObject({ name: 'Pinned V1', versionNumber: 1, progress: 1 });
     await expect(prisma.actorContent.findUniqueOrThrow({ where: { id: lyraLink.id } })).resolves.toMatchObject({ contentVersionId: v1Version.id });
 
     const foreign = await publishTestContent({
@@ -495,6 +544,24 @@ describe('content publication and database immutability', () => {
     await expect(prisma.actorContent.create({ data: {
       actorId: lyra.id, contentDefinitionId: foreign.id, contentVersionId: v2Version.id, state: ActorContentState.KNOWN,
     } })).rejects.toThrow();
+  });
+
+  it('deduplicates physical publication by content and inventory spec hashes independently', async () => {
+    const world = await prisma.world.findFirstOrThrow({ where: { code: 'elarion' } });
+    const input = {
+      worldId: world.id, contentType: ContentType.ITEM, code: 'spec-hash-item', name: 'Item com Spec',
+      profile: canonicalProfile('item', 'spec-hash-item', 'Item com Spec'), inventorySpec: uniqueInventorySpec(1),
+    };
+    const first = await publishTestContent(input);
+    const retry = await publishTestContent(input);
+    const changed = await publishTestContent({ ...input, inventorySpec: uniqueInventorySpec(2) });
+    expect(first.id).toBe(retry.id);
+    expect(changed.versions[0]?.versionNumber).toBe(2);
+    expect((changed.versions[0]?.inventorySpec as { unitWeight?: unknown } | null)?.unitWeight).toBe(2);
+    await expect(prisma.contentVersion.count({ where: { contentDefinitionId: first.id } })).resolves.toBe(2);
+    const hashes = await prisma.contentVersion.findMany({ where: { contentDefinitionId: first.id }, select: { contentHash: true, inventorySpecHash: true } });
+    expect(new Set(hashes.map((version) => version.contentHash)).size).toBe(1);
+    expect(new Set(hashes.map((version) => version.inventorySpecHash)).size).toBe(2);
   });
 });
 
@@ -581,6 +648,7 @@ describe('complete API with real repositories', () => {
       ...seedScope, campaignRef: null, idempotencyKey: `http-canonical-${contentType}-001`,
       contentType, code, name, description: 'Canonical test content.',
       profile: canonicalProfile(contentType, code, name), presentation: {},
+      inventorySpec: canonicalInventorySpec(contentType),
       tags: contentType === 'weapon' ? ['weapon'] : [], status: 'draft', metadata: {},
     });
     expect(response.status).toBe(200);
@@ -594,6 +662,7 @@ describe('complete API with real repositories', () => {
     const generic = await post('/api/v1/content/upsert', {
       ...seedScope, campaignRef: null, idempotencyKey: 'http-generic-material-001', contentType: 'material',
       code: 'http-iron', name: 'Ferro', description: 'Material narrativo.', profile: null,
+      inventorySpec: stackInventorySpec(),
       presentation: { appearance: 'Metal escuro.' }, tags: ['metal'], status: 'active', metadata: {},
     });
     expect(generic.status).toBe(200);
@@ -693,10 +762,10 @@ describe('GPT v1 persistence with real transactions', () => {
         code: 'new-player', actorType: 'character', level: 1, xp: 0,
         primaryAttributes: balancedPrimaryAttributes,
         resources: { hp: { current: 45, max: 45 }, mana: { current: 35, max: 35 }, sp: { current: 35, max: 35 } },
-        mechanicsStateVersion: 1, ruleset: { code: 'core-v1', revision: 'RC1.1' },
+        mechanicsStateVersion: 3, ruleset: { code: 'core-v1', revision: 'RC1.1' },
         appearance: { summary: 'Manto de viagem.' }, personality: { traits: ['curioso'] },
       },
-      mainActors: [], linkedContent: [expect.objectContaining({ actorRef: 'new-player', code: 'longbow', equipped: true, quantity: 1 })],
+      mainActors: [], linkedContent: [expect.objectContaining({ actorRef: 'new-player', code: 'longbow' })],
       recentEvents: [expect.objectContaining({ eventType: 'campaign-started', actorRef: 'new-player' })],
     });
     await expect(prisma.player.count({ where: { slug: 'new-player' } })).resolves.toBe(1);
@@ -705,6 +774,8 @@ describe('GPT v1 persistence with real transactions', () => {
     await expect(prisma.actorAttribute.count({ where: { actorId: createdActor.id } })).resolves.toBe(9);
     await expect(prisma.actorResource.count({ where: { actorId: createdActor.id } })).resolves.toBe(3);
     await expect(prisma.actorDerivedSnapshot.count({ where: { actorId: createdActor.id } })).resolves.toBe(1);
+    await expect(prisma.inventoryEntry.count({ where: { actorId: createdActor.id, entryRef: 'longbow-1' } })).resolves.toBe(1);
+    await expect(prisma.actorEquipmentSlot.count({ where: { actorId: createdActor.id, inventoryEntry: { entryRef: 'longbow-1' } } })).resolves.toBe(2);
     await expect(prisma.gameEvent.count({ where: { campaign: { code: body.campaignRef, world: { code: body.worldRef } }, eventType: 'campaign-started' } })).resolves.toBe(1);
     await expect(prisma.gameEvent.findFirstOrThrow({ where: { campaign: { code: body.campaignRef, world: { code: body.worldRef } }, eventType: 'campaign-started' } })).resolves.toMatchObject({ idempotencyKey: null });
     const persistedWorld = await prisma.world.findFirstOrThrow({
@@ -730,6 +801,60 @@ describe('GPT v1 persistence with real transactions', () => {
     });
     expect(arrayOrderConflict.status).toBe(409);
     expect(responseErrorMessage(arrayOrderConflict)).toBe('Idempotency key already used');
+  });
+
+  it('starts with one-handed weapon, shield and potion stacks without creating ActorContent ownership', async () => {
+    const body = structuredStart('inventory-start');
+    const dagger = {
+      ...weaponProfile('start-dagger', 'Adaga Inicial'), handedness: 'one_handed' as const, weaponTags: ['dagger'],
+    };
+    const packages = [
+      {
+        definition: {
+          mode: 'create', scope: 'world', contentType: 'weapon', code: 'start-dagger', name: 'Adaga Inicial',
+          description: 'Arma inicial.', profile: dagger,
+          inventorySpec: uniqueInventorySpec(5, { equipmentSlots: ['main_hand'], handedness: 'one_handed' }),
+          presentation: {}, tags: ['weapon'], status: 'active', metadata: {},
+        },
+      },
+      {
+        definition: {
+          mode: 'create', scope: 'world', contentType: 'shield', code: 'start-shield', name: 'Escudo Inicial',
+          description: 'Escudo inicial.', profile: canonicalProfile('shield', 'start-shield', 'Escudo Inicial'),
+          inventorySpec: uniqueInventorySpec(8, { equipmentSlots: ['off_hand'] }),
+          presentation: {}, tags: [], status: 'active', metadata: {},
+        },
+      },
+      {
+        definition: {
+          mode: 'create', scope: 'world', contentType: 'consumable', code: 'start-potion', name: 'Poção Inicial',
+          description: 'Poção inicial.', profile: canonicalProfile('consumable', 'start-potion', 'Poção Inicial'),
+          inventorySpec: stackInventorySpec(2, 10), presentation: {}, tags: [], status: 'active', metadata: {},
+        },
+      },
+    ];
+    const initialInventory = [
+      { scope: 'world', contentType: 'weapon', code: 'start-dagger', quantity: 1, entryRefs: ['start-dagger-1'], equip: { targetSlotRef: 'main_hand' } },
+      { scope: 'world', contentType: 'shield', code: 'start-shield', quantity: 1, entryRefs: ['start-shield-1'], equip: { targetSlotRef: 'off_hand' } },
+      { scope: 'world', contentType: 'consumable', code: 'start-potion', quantity: 15, entryRefs: ['start-potions-a', 'start-potions-b'] },
+    ];
+    const created = await post('/api/v1/game/start', { ...body, initialContentPackages: packages, initialInventory });
+    const replay = await post('/api/v1/game/start', { ...body, initialContentPackages: packages, initialInventory });
+    expect(created.status).toBe(200);
+    expect(replay.body).toEqual(created.body);
+    const inventory = await post(`/api/v1/actors/${body.playerRef}/inventory/manage`, {
+      playerRef: body.playerRef, worldRef: body.worldRef, campaignRef: body.campaignRef, operation: 'get',
+    });
+    expect(inventory.status).toBe(200);
+    expect(bodyRecord(inventory).entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entryRef: 'start-dagger-1', state: 'equipped', equippedSlots: ['main_hand'] }),
+      expect.objectContaining({ entryRef: 'start-shield-1', state: 'equipped', equippedSlots: ['off_hand'] }),
+      expect.objectContaining({ entryRef: 'start-potions-a', quantity: 10 }),
+      expect.objectContaining({ entryRef: 'start-potions-b', quantity: 5 }),
+    ]));
+    const actor = await prisma.actor.findFirstOrThrow({ where: { code: body.playerRef, campaign: { code: body.campaignRef } } });
+    await expect(prisma.actorContent.count({ where: { actorId: actor.id } })).resolves.toBe(0);
+    await expect(prisma.inventoryEntry.count({ where: { actorId: actor.id } })).resolves.toBe(4);
   });
 
   it('rejects invalid primary allocations, unknown attributes and client-derived mechanics', async () => {
@@ -804,12 +929,15 @@ describe('GPT v1 persistence with real transactions', () => {
     const beforeWorld = await prisma.world.findUniqueOrThrow({ where: { playerId_code: { playerId: beforePlayer.id, code: 'new-world' } } });
     const reusePackage = {
       definition: { mode: 'reuse', scope: 'world', code: 'longbow', contentType: 'weapon' },
-      protagonistLink: { state: 'known', rank: 0, progress: 0, mastery: 0, equipped: true, quantity: 1, metadata: {} },
+      protagonistLink: { state: 'known', rank: 0, progress: 0, mastery: 0, metadata: {} },
     };
-    const body = campaignInNewWorld('reuse', [reusePackage]);
+    const body = { ...campaignInNewWorld('reuse', [reusePackage]), initialInventory: [{
+      scope: 'world', contentType: 'weapon', code: 'longbow', quantity: 1, entryRefs: ['reuse-longbow-1'],
+      equip: { targetSlotRef: 'main_hand' },
+    }] };
     const response = await post('/api/v1/game/start', body);
     expect(response.status).toBe(200);
-    expect(bodyRecord(response).linkedContent).toEqual([expect.objectContaining({ code: 'longbow', equipped: true })]);
+    expect(bodyRecord(response).linkedContent).toEqual([expect.objectContaining({ code: 'longbow' })]);
     await expect(prisma.player.findUniqueOrThrow({ where: { slug: 'new-player' } })).resolves.toMatchObject({ displayName: beforePlayer.displayName, updatedAt: beforePlayer.updatedAt });
     await expect(prisma.world.findUniqueOrThrow({ where: { id: beforeWorld.id } })).resolves.toMatchObject({
       name: beforeWorld.name, description: beforeWorld.description, metadata: beforeWorld.metadata, updatedAt: beforeWorld.updatedAt,
@@ -856,7 +984,7 @@ describe('GPT v1 persistence with real transactions', () => {
     });
     const classLink = {
       definition: { mode: 'reuse', scope: 'world', code: persistedClass.code, contentType: 'class' },
-      protagonistLink: { state: 'known', rank: 1, progress: 0, mastery: 0, equipped: false, quantity: 1, metadata: {} },
+      protagonistLink: { state: 'known', rank: 1, progress: 0, mastery: 0, metadata: {} },
     };
     const template = campaignInNewWorld('mechanical-reuse', [classLink]);
     const mechanicalConfig = {
@@ -886,14 +1014,14 @@ describe('GPT v1 persistence with real transactions', () => {
     const world = await prisma.world.findUniqueOrThrow({ where: { playerId_code: { playerId: player.id, code: 'new-world' } } });
     const otherPlayer = await prisma.player.findUniqueOrThrow({ where: { slug: 'neon-player' } });
     const otherWorld = await prisma.world.findUniqueOrThrow({ where: { playerId_code: { playerId: otherPlayer.id, code: 'neon-world' } } });
-    const [attributeDefinition, passiveDefinition] = await Promise.all([
+    const [attributeDefinition, nonPhysicalDefinition] = await Promise.all([
       publishTestContent({
         worldId: world.id, code: 'attribute-gated', name: 'Técnica Intelectual', contentType: ContentType.SKILL,
         profile: activeProfile('skill', 'attribute-gated', 'Técnica Intelectual', { minimumPrimaryAttributes: { intelligence: 11 } }),
       }),
       publishTestContent({
-        worldId: world.id, code: 'passive-reuse', name: 'Passiva Persistida', contentType: ContentType.TALENT,
-        profile: passiveProfile('talent', 'passive-reuse', 'Passiva Persistida'),
+        worldId: world.id, code: 'nonphysical-reuse', name: 'Item não físico', contentType: ContentType.ITEM,
+        profile: canonicalProfile('item', 'nonphysical-reuse', 'Item não físico'),
       }),
       publishTestContent({
         worldId: otherWorld.id, code: 'foreign-only', name: 'Outro World', contentType: ContentType.SKILL,
@@ -904,7 +1032,7 @@ describe('GPT v1 persistence with real transactions', () => {
         profile: activeProfile('spell', 'typed-only', 'Mesmo code, outro tipo'),
       }),
     ]);
-    const link = { state: 'known', rank: 1, progress: 0, mastery: 0, equipped: false, quantity: 1, metadata: {} };
+    const link = { state: 'known', rank: 1, progress: 0, mastery: 0, metadata: {} };
     const attributeBody = campaignInNewWorld('attribute-reuse', [{
       definition: { mode: 'reuse', scope: 'world', code: attributeDefinition.code, contentType: 'skill' }, protagonistLink: link,
     }]);
@@ -912,13 +1040,13 @@ describe('GPT v1 persistence with real transactions', () => {
     expect(attributeFailure.status).toBe(409);
     expect(responseErrorMessage(attributeFailure)).toBe('Initial attribute requirements are not met');
 
-    const passiveBody = campaignInNewWorld('passive-reuse', [{
-      definition: { mode: 'reuse', scope: 'world', code: passiveDefinition.code, contentType: 'talent' },
-      protagonistLink: { ...link, equipped: true },
-    }]);
+    const passiveBody = { ...campaignInNewWorld('passive-reuse', [{
+      definition: { mode: 'reuse', scope: 'world', code: nonPhysicalDefinition.code, contentType: 'item' },
+      protagonistLink: link,
+    }]), initialInventory: [{ scope: 'world', contentType: 'item', code: nonPhysicalDefinition.code, quantity: 1, entryRefs: ['passive-reuse-1'] }] };
     const passiveFailure = await post('/api/v1/game/start', passiveBody);
     expect(passiveFailure.status).toBe(409);
-    expect(responseErrorMessage(passiveFailure)).toBe('Initial equipment is incompatible with the content profile');
+    expect(responseErrorMessage(passiveFailure)).toBe('Inventory operation is invalid for the current state');
 
     const foreign = await post('/api/v1/game/start', campaignInNewWorld('foreign-reuse', [{
       definition: { mode: 'reuse', scope: 'world', code: 'foreign-only', contentType: 'skill' }, protagonistLink: link,
@@ -930,9 +1058,9 @@ describe('GPT v1 persistence with real transactions', () => {
     expect(wrongType.status).toBe(404);
 
     const unchanged = await prisma.contentDefinition.findUniqueOrThrow({
-      where: { id: passiveDefinition.id }, include: { versions: { orderBy: { versionNumber: 'desc' }, take: 1 } },
+      where: { id: nonPhysicalDefinition.id }, include: { versions: { orderBy: { versionNumber: 'desc' }, take: 1 } },
     });
-    expect(unchanged).toMatchObject({ updatedAt: passiveDefinition.updatedAt, versions: [{ name: 'Passiva Persistida', versionNumber: 1 }] });
+    expect(unchanged).toMatchObject({ updatedAt: nonPhysicalDefinition.updatedAt, versions: [{ name: 'Item não físico', versionNumber: 1 }] });
   });
 
   it('enforces create and reuse existence policies for Player and World', async () => {
@@ -972,7 +1100,7 @@ describe('GPT v1 persistence with real transactions', () => {
       profile: { ...missing.definition.profile, code: 'absent-global' },
     } };
     const failedTemplate = structuredStart('missing-override');
-    const failedBody = { ...failedTemplate, initialContentPackages: [missingPackage] };
+    const failedBody = { ...failedTemplate, initialContentPackages: [missingPackage], initialInventory: [] };
     const failed = await post('/api/v1/game/start', failedBody);
     expect(failed.status).toBe(409);
     await expectNoCreatedIntent(failedBody);
@@ -1011,8 +1139,8 @@ describe('GPT v1 persistence with real transactions', () => {
     const missingGlobalTemplate = structuredStart('missing-global-reuse');
     const missingGlobalBody = { ...missingGlobalTemplate, initialContentPackages: [{
       definition: { mode: 'reuse', scope: 'world', code: 'missing-global', contentType: 'skill' },
-      protagonistLink: { state: 'known', rank: 1, progress: 0, mastery: 0, equipped: false, quantity: 1, metadata: {} },
-    }] };
+      protagonistLink: { state: 'known', rank: 1, progress: 0, mastery: 0, metadata: {} },
+    }], initialInventory: [] };
     const missingGlobal = await post('/api/v1/game/start', missingGlobalBody);
     expect(missingGlobal.status).toBe(404);
     await expectNoCreatedIntent(missingGlobalBody);
@@ -1020,8 +1148,8 @@ describe('GPT v1 persistence with real transactions', () => {
     const newPlayer = await prisma.player.findUniqueOrThrow({ where: { slug: 'new-player' } });
     const newWorld = await prisma.world.findUniqueOrThrow({ where: { playerId_code: { playerId: newPlayer.id, code: 'new-world' } } });
     const passive = await publishTestContent({
-      worldId: newWorld.id, code: 'passive-reuse-test', name: 'Passiva de teste', contentType: ContentType.TALENT,
-      profile: passiveProfile('talent', 'passive-reuse-test', 'Passiva de teste'),
+      worldId: newWorld.id, code: 'nonphysical-reuse-test', name: 'Item não físico de teste', contentType: ContentType.ITEM,
+      profile: canonicalProfile('item', 'nonphysical-reuse-test', 'Item não físico de teste'),
     });
     const beforeDefinitionCount = await prisma.contentDefinition.count({ where: { worldId: newWorld.id } });
     const linkTemplate = structuredStart('invalid-link');
@@ -1030,9 +1158,10 @@ describe('GPT v1 persistence with real transactions', () => {
       worldMode: 'reuse', worldRef: 'new-world', worldName: undefined, worldDescription: undefined, worldConfiguration: undefined,
       protagonist: { ...linkTemplate.protagonist, code: 'new-player' },
       initialContentPackages: [{
-        definition: { mode: 'reuse', scope: 'world', code: 'passive-reuse-test', contentType: 'talent' },
-        protagonistLink: { state: 'known', rank: 1, progress: 0, mastery: 0, equipped: true, quantity: 1, metadata: {} },
+        definition: { mode: 'reuse', scope: 'world', code: 'nonphysical-reuse-test', contentType: 'item' },
+        protagonistLink: { state: 'known', rank: 1, progress: 0, mastery: 0, metadata: {} },
       }],
+      initialInventory: [{ scope: 'world', contentType: 'item', code: 'nonphysical-reuse-test', quantity: 1, entryRefs: ['invalid-passive-1'] }],
     };
     const invalidLink = await post('/api/v1/game/start', invalidLinkBody);
     expect(invalidLink.status).toBe(409);
@@ -1064,7 +1193,7 @@ describe('GPT v1 persistence with real transactions', () => {
         narrativeTone: Array.from({ length: 5 }, (_, index) => multibyte(index)),
         focus: Array.from({ length: 8 }, (_, index) => multibyte(index)),
       },
-      initialContentPackages: eventPackages, initialPremise: '😀'.repeat(500),
+      initialContentPackages: eventPackages, initialInventory: [], initialPremise: '😀'.repeat(500),
     };
     const eventFailure = await post('/api/v1/game/start', eventBody);
     expect(eventFailure.status).toBe(409);
@@ -1220,7 +1349,7 @@ describe('GPT v1 persistence with real transactions', () => {
     await expect(prisma.contentVersion.count({ where: { contentDefinition: { code: 'quiet-step' } } })).resolves.toBe(2);
   });
 
-  it('gets, lists, learns, updates, equips, unequips and removes actor content', async () => {
+  it('gets, lists, learns, updates and removes actor content', async () => {
     const getExisting = await post('/api/v1/actors/ralph/content/manage', { operation: 'get', contentRef: 'wind_breeze_step', contentType: 'skill' });
     const listExisting = await post('/api/v1/actors/ralph/content/manage', { operation: 'list' });
     expect(getExisting.body).toMatchObject({ code: 'wind_breeze_step', state: 'learning' });
@@ -1234,14 +1363,227 @@ describe('GPT v1 persistence with real transactions', () => {
     expect(learn.body).toMatchObject({ code: 'quiet-step', name: 'Passo Muito Silencioso', versionNumber: 2, state: 'learning', progress: 5 });
 
     const update = await post('/api/v1/actors/ralph/content/manage', { operation: 'update', contentRef: 'quiet-step', contentType: 'skill', idempotencyKey: 'integration-update-quiet-step-001', changes: { state: 'known', rank: 2, progress: 30, mastery: 4 } });
-    const equip = await post('/api/v1/actors/ralph/content/manage', { operation: 'equip', contentRef: 'quiet-step', contentType: 'skill', idempotencyKey: 'integration-equip-quiet-step-001' });
-    const unequip = await post('/api/v1/actors/ralph/content/manage', { operation: 'unequip', contentRef: 'quiet-step', contentType: 'skill', idempotencyKey: 'integration-unequip-quiet-step-001' });
     const remove = await post('/api/v1/actors/ralph/content/manage', { operation: 'remove', contentRef: 'quiet-step', contentType: 'skill', idempotencyKey: 'integration-remove-quiet-step-001' });
     expect(update.body).toMatchObject({ state: 'known', rank: 2, progress: 30, mastery: 4 });
-    expect(equip.body).toMatchObject({ equipped: true });
-    expect(unequip.body).toMatchObject({ equipped: false });
     expect(remove.body).toMatchObject({ actorRef: 'ralph', contentRef: 'quiet-step', removed: true });
     await expect(prisma.actorContent.count({ where: { contentDefinition: { code: 'quiet-step' } } })).resolves.toBe(0);
+  });
+
+  it('persists transactional inventory operations with optimistic versions and public refs', async () => {
+    const world = await prisma.world.findFirstOrThrow({ where: { code: 'elarion', player: { slug: 'ralph' } } });
+    const greatswordProfile = weaponProfile('inventory-greatsword', 'Montante de Inventário');
+    await publishTestContent({
+      worldId: world.id, contentType: ContentType.WEAPON, code: 'inventory-greatsword', name: 'Montante de Inventário',
+      description: 'Arma inicial.', profile: greatswordProfile, tags: ['weapon'],
+      inventorySpec: uniqueInventorySpec(12, { equipmentSlots: ['main_hand', 'off_hand'], handedness: 'two_handed' }),
+    });
+    await publishTestContent({
+      worldId: world.id, contentType: ContentType.CONSUMABLE, code: 'inventory-potion', name: 'Poção de Inventário',
+      profile: canonicalProfile('consumable', 'inventory-potion', 'Poção de Inventário'), inventorySpec: stackInventorySpec(30, 10),
+    });
+    await publishTestContent({
+      worldId: world.id, contentType: ContentType.ITEM, code: 'inventory-strength-harness', name: 'Arnês de Força',
+      profile: {
+        ...(canonicalProfile('item', 'inventory-strength-harness', 'Arnês de Força') as Record<string, unknown>),
+        passiveModifiers: [{ target: 'strength', amount: 1, sourceRule: 'equipped_content' }],
+      },
+      inventorySpec: uniqueInventorySpec(6, { equipmentSlots: ['chest', 'body'] }),
+    });
+    await publishTestContent({
+      worldId: world.id, contentType: ContentType.ITEM, code: 'inventory-nonphysical', name: 'Item sem Spec',
+      profile: canonicalProfile('item', 'inventory-nonphysical', 'Item sem Spec'),
+    });
+
+    const getInventory = () => post('/api/v1/actors/ralph/inventory/manage', { operation: 'get' });
+    const initial = await getInventory();
+    expect(initial.status).toBe(200);
+    const initialSheet = await authenticated(`/api/v1/actors/ralph?${seedScopeQuery}`);
+    const initialStrength = Number((bodyRecord(initialSheet).primaryAttributes as Record<string, unknown>).strength);
+    const initialMechanicsVersion = Number(bodyRecord(initialSheet).mechanicsStateVersion);
+    let version = Number(bodyRecord(initial).inventoryStateVersion);
+    const grantWeaponBody = {
+      operation: 'grant', idempotencyKey: 'inventory-http-grant-weapon-001', expectedInventoryStateVersion: version,
+      contentRef: { scope: 'world', contentType: 'weapon', code: 'inventory-greatsword', versionNumber: 1 },
+      quantity: 1, entryRefs: ['inventory-greatsword-1'],
+    };
+    const grantedWeapon = await post('/api/v1/actors/ralph/inventory/manage', grantWeaponBody);
+    const grantReplay = await post('/api/v1/actors/ralph/inventory/manage', grantWeaponBody);
+    expect(grantedWeapon.status).toBe(200);
+    expect(grantReplay.body).toEqual(grantedWeapon.body);
+    version = Number(bodyRecord(grantedWeapon).inventoryStateVersion);
+    await expect(prisma.inventoryEntry.count({ where: { actor: { code: 'ralph' }, entryRef: 'inventory-greatsword-1' } })).resolves.toBe(1);
+
+    const stale = await post('/api/v1/actors/ralph/inventory/manage', {
+      operation: 'reserve', idempotencyKey: 'inventory-http-stale-001', expectedInventoryStateVersion: version - 1,
+      entryRef: 'inventory-greatsword-1',
+    });
+    expect(stale.status).toBe(409);
+    expect(responseErrorMessage(stale)).toBe('Inventory state version conflict');
+
+    const equip = await post('/api/v1/actors/ralph/inventory/manage', {
+      operation: 'equip', idempotencyKey: 'inventory-http-equip-001', expectedInventoryStateVersion: version,
+      entryRef: 'inventory-greatsword-1', targetSlotRef: 'main_hand',
+    });
+    expect(equip.status).toBe(200);
+    expect(bodyRecord(equip).entries).toEqual(expect.arrayContaining([expect.objectContaining({
+      entryRef: 'inventory-greatsword-1', state: 'equipped', equippedSlots: ['main_hand', 'off_hand'],
+    })]));
+    const equippedSheet = await authenticated(`/api/v1/actors/ralph?${seedScopeQuery}`);
+    expect((bodyRecord(equippedSheet).primaryAttributes as Record<string, unknown>).strength).toBe(initialStrength);
+    expect(bodyRecord(equippedSheet).mechanicsStateVersion).toBe(initialMechanicsVersion + 2);
+    version = Number(bodyRecord(equip).inventoryStateVersion);
+    const equippedRow = await prisma.inventoryEntry.findFirstOrThrow({ where: { actor: { code: 'ralph' }, entryRef: 'inventory-greatsword-1' } });
+    await expect(prisma.inventoryEntry.update({
+      where: { id: equippedRow.id }, data: { instanceLifecycle: InventoryInstanceLifecycle.RESERVED },
+    })).rejects.toThrow(/equipped/i);
+    await expect(prisma.inventoryEntry.delete({ where: { id: equippedRow.id } })).rejects.toThrow(/equipped/i);
+    const lyra = await prisma.actor.findFirstOrThrow({ where: { code: 'lyra', campaign: { code: 'main-campaign' } } });
+    await expect(prisma.actorEquipmentSlot.create({
+      data: { actorId: lyra.id, inventoryEntryId: equippedRow.id, slotRef: ActorEquipmentSlotRef.HEAD },
+    })).rejects.toThrow();
+    const equippedRemoval = await post('/api/v1/actors/ralph/inventory/manage', {
+      operation: 'remove', idempotencyKey: 'inventory-http-remove-equipped-001', expectedInventoryStateVersion: version,
+      entryRef: 'inventory-greatsword-1', quantity: 1,
+    });
+    expect(equippedRemoval.status).toBe(409);
+    expect(Number(bodyRecord(await getInventory()).inventoryStateVersion)).toBe(version);
+
+    for (const [operation, key, expectedState] of [
+      ['unequip', 'inventory-http-unequip-001', 'available'],
+      ['reserve', 'inventory-http-reserve-001', 'reserved'],
+      ['release', 'inventory-http-release-001', 'available'],
+      ['destroy', 'inventory-http-destroy-001', 'destroyed'],
+    ] as const) {
+      const response = await post('/api/v1/actors/ralph/inventory/manage', {
+        operation, idempotencyKey: key, expectedInventoryStateVersion: version, entryRef: 'inventory-greatsword-1',
+      });
+      expect(response.status).toBe(200);
+      expect(bodyRecord(response).entries).toEqual(expect.arrayContaining([expect.objectContaining({
+        entryRef: 'inventory-greatsword-1', state: expectedState,
+      })]));
+      version = Number(bodyRecord(response).inventoryStateVersion);
+    }
+    const destroyedSheet = await authenticated(`/api/v1/actors/ralph?${seedScopeQuery}`);
+    expect((bodyRecord(destroyedSheet).primaryAttributes as Record<string, unknown>).strength).toBe(initialStrength);
+    expect(bodyRecord(destroyedSheet).mechanicsStateVersion).toBe(initialMechanicsVersion + 6);
+
+    const harnessGrant = await post('/api/v1/actors/ralph/inventory/manage', {
+      operation: 'grant', idempotencyKey: 'inventory-http-harness-grant-001', expectedInventoryStateVersion: version,
+      contentRef: { scope: 'world', contentType: 'item', code: 'inventory-strength-harness', versionNumber: 1 },
+      quantity: 1, entryRefs: ['inventory-strength-harness-1'],
+    });
+    expect(harnessGrant.status).toBe(200);
+    version = Number(bodyRecord(harnessGrant).inventoryStateVersion);
+    const harnessEquip = await post('/api/v1/actors/ralph/inventory/manage', {
+      operation: 'equip', idempotencyKey: 'inventory-http-harness-equip-001', expectedInventoryStateVersion: version,
+      entryRef: 'inventory-strength-harness-1', targetSlotRef: 'chest',
+    });
+    expect(harnessEquip.status).toBe(200);
+    version = Number(bodyRecord(harnessEquip).inventoryStateVersion);
+    expect((bodyRecord(await authenticated(`/api/v1/actors/ralph?${seedScopeQuery}`)).primaryAttributes as Record<string, unknown>).strength).toBe(initialStrength + 1);
+    const harnessUnequip = await post('/api/v1/actors/ralph/inventory/manage', {
+      operation: 'unequip', idempotencyKey: 'inventory-http-harness-unequip-001', expectedInventoryStateVersion: version,
+      entryRef: 'inventory-strength-harness-1',
+    });
+    expect(harnessUnequip.status).toBe(200);
+    version = Number(bodyRecord(harnessUnequip).inventoryStateVersion);
+    expect((bodyRecord(await authenticated(`/api/v1/actors/ralph?${seedScopeQuery}`)).primaryAttributes as Record<string, unknown>).strength).toBe(initialStrength);
+
+    const grantedStack = await post('/api/v1/actors/ralph/inventory/manage', {
+      operation: 'grant', idempotencyKey: 'inventory-http-grant-stack-001', expectedInventoryStateVersion: version,
+      contentRef: { scope: 'world', contentType: 'consumable', code: 'inventory-potion', versionNumber: 1 },
+      quantity: 25, entryRefs: ['inventory-potions-a', 'inventory-potions-b', 'inventory-potions-c'],
+    });
+    expect(grantedStack.status).toBe(200);
+    expect((bodyRecord(grantedStack).entries as Array<Record<string, unknown>>)
+      .filter((entry) => String(entry.entryRef).startsWith('inventory-potions-')).map((entry) => entry.quantity)).toEqual([10, 10, 5]);
+    expect((bodyRecord(grantedStack).encumbrance as Record<string, unknown>).state).not.toBe('normal');
+    version = Number(bodyRecord(grantedStack).inventoryStateVersion);
+    const stackRow = await prisma.inventoryEntry.findFirstOrThrow({ where: { actor: { code: 'ralph' }, entryRef: 'inventory-potions-a' } });
+    await expect(prisma.inventoryEntry.update({ where: { id: stackRow.id }, data: { quantity: 11 } })).rejects.toThrow(/maxStack/i);
+    await expect(prisma.actorEquipmentSlot.create({
+      data: { actorId: stackRow.actorId, inventoryEntryId: stackRow.id, slotRef: ActorEquipmentSlotRef.HEAD },
+    })).rejects.toThrow(/instance/i);
+    const inventoryRules = await prisma.inventoryRulesVersion.findUniqueOrThrow({ where: { code: 'core-v1-inventory-v1' } });
+    await expect(prisma.inventoryRulesVersion.update({ where: { id: inventoryRules.id }, data: { configHash: '0'.repeat(64) } })).rejects.toThrow(/immutable/i);
+    const physicalVersion = await prisma.contentVersion.findFirstOrThrow({ where: { contentDefinition: { code: 'inventory-potion' } } });
+    await expect(prisma.contentVersion.update({ where: { id: physicalVersion.id }, data: { inventorySpec: { changed: true } } })).rejects.toThrow(/immutable/i);
+    const stackOperations = [
+      { operation: 'remove', idempotencyKey: 'inventory-http-remove-partial-001', entryRef: 'inventory-potions-a', quantity: 4 },
+      { operation: 'split', idempotencyKey: 'inventory-http-split-001', entryRef: 'inventory-potions-a', quantity: 2, newEntryRef: 'inventory-potions-split' },
+      { operation: 'merge', idempotencyKey: 'inventory-http-merge-001', sourceEntryRef: 'inventory-potions-split', targetEntryRef: 'inventory-potions-a' },
+      { operation: 'remove', idempotencyKey: 'inventory-http-remove-full-001', entryRef: 'inventory-potions-b', quantity: 10 },
+      { operation: 'remove', idempotencyKey: 'inventory-http-remove-a-001', entryRef: 'inventory-potions-a', quantity: 6 },
+      { operation: 'remove', idempotencyKey: 'inventory-http-remove-c-001', entryRef: 'inventory-potions-c', quantity: 5 },
+    ] as const;
+    for (const operation of stackOperations) {
+      const response = await post('/api/v1/actors/ralph/inventory/manage', { ...operation, expectedInventoryStateVersion: version });
+      expect(response.status).toBe(200);
+      version = Number(bodyRecord(response).inventoryStateVersion);
+    }
+    const final = await getInventory();
+    expect(final.status).toBe(200);
+    expect((bodyRecord(final).encumbrance as Record<string, unknown>).state).toBe('normal');
+    expect(JSON.stringify(final.body)).not.toMatch(/inventoryEntryId|contentVersionId|inventoryRulesVersionId|inventorySpecHash|inputHash|[0-9a-f]{8}-[0-9a-f-]{27}/i);
+
+    const concurrencyGrant = await post('/api/v1/actors/ralph/inventory/manage', {
+      operation: 'grant', idempotencyKey: 'inventory-http-concurrency-grant-001', expectedInventoryStateVersion: version,
+      contentRef: { scope: 'world', contentType: 'weapon', code: 'inventory-greatsword', versionNumber: 1 },
+      quantity: 2, entryRefs: ['inventory-concurrency-a', 'inventory-concurrency-b'],
+    });
+    expect(concurrencyGrant.status).toBe(200);
+    version = Number(bodyRecord(concurrencyGrant).inventoryStateVersion);
+    const [concurrentA, concurrentB] = await Promise.all([
+      post('/api/v1/actors/ralph/inventory/manage', {
+        operation: 'reserve', idempotencyKey: 'inventory-http-concurrency-a-001', expectedInventoryStateVersion: version,
+        entryRef: 'inventory-concurrency-a',
+      }),
+      post('/api/v1/actors/ralph/inventory/manage', {
+        operation: 'reserve', idempotencyKey: 'inventory-http-concurrency-b-001', expectedInventoryStateVersion: version,
+        entryRef: 'inventory-concurrency-b',
+      }),
+    ]);
+    expect([concurrentA.status, concurrentB.status].sort()).toEqual([200, 409]);
+    const concurrencyState = await getInventory();
+    version = Number(bodyRecord(concurrencyState).inventoryStateVersion);
+    expect(version).toBe(Number(bodyRecord(concurrencyGrant).inventoryStateVersion) + 1);
+    await expect(prisma.inventoryEntry.count({
+      where: { actor: { code: 'ralph' }, entryRef: { in: ['inventory-concurrency-a', 'inventory-concurrency-b'] }, instanceLifecycle: 'RESERVED' },
+    })).resolves.toBe(1);
+
+    const alternateRuleset = await createAlternateRulesetVersion('inventory-entry-ruleset');
+    const incompatibleInventoryRules = await prisma.inventoryRulesVersion.create({ data: {
+      rulesetVersionId: alternateRuleset.id, code: 'test-incompatible-inventory-rules', schemaVersion: 1,
+      configHash: 'd'.repeat(64), configSnapshot: { test: true },
+    } });
+    const contentProfileVersion = await prisma.contentProfileVersion.findUniqueOrThrow({ where: { code: 'core-v1-content-v1' } });
+    const incompatibleDefinition = await prisma.contentDefinition.create({ data: {
+      worldId: world.id, code: 'incompatible-inventory-rules-item', contentType: ContentType.ITEM, status: ContentStatus.ACTIVE,
+    } });
+    const incompatibleVersion = await prisma.contentVersion.create({ data: {
+      contentDefinitionId: incompatibleDefinition.id, rulesetVersionId: world.defaultRulesetVersionId,
+      contentProfileVersionId: contentProfileVersion.id, inventoryRulesVersionId: incompatibleInventoryRules.id,
+      versionNumber: 1, schemaVersion: 1, profileMode: 'GENERIC', name: 'Item de Ruleset Incompatível',
+      profile: Prisma.DbNull, presentation: {}, tags: [], metadata: {}, contentHash: 'e'.repeat(64),
+      inventorySpec: uniqueInventorySpec(), inventorySpecHash: 'f'.repeat(64),
+    } });
+    const ralphActor = await prisma.actor.findFirstOrThrow({ where: { code: 'ralph', campaign: { code: 'main-campaign' } } });
+    await expect(prisma.inventoryEntry.create({ data: {
+      actorId: ralphActor.id, entryRef: 'incompatible-rules-entry', contentVersionId: incompatibleVersion.id,
+      inventoryRulesVersionId: incompatibleInventoryRules.id, entryKind: InventoryEntryKind.INSTANCE,
+      quantity: 1, instanceLifecycle: InventoryInstanceLifecycle.AVAILABLE,
+    } })).rejects.toThrow(/ruleset/i);
+
+    const noSpec = await post('/api/v1/actors/ralph/inventory/manage', {
+      operation: 'grant', idempotencyKey: 'inventory-http-no-spec-001', expectedInventoryStateVersion: version,
+      contentRef: { scope: 'world', contentType: 'item', code: 'inventory-nonphysical', versionNumber: 1 }, quantity: 1, entryRefs: ['nonphysical-item'],
+    });
+    expect(noSpec.status).toBe(409);
+    const missingVersion = await post('/api/v1/actors/ralph/inventory/manage', {
+      operation: 'grant', idempotencyKey: 'inventory-http-missing-version-001', expectedInventoryStateVersion: version,
+      contentRef: { scope: 'world', contentType: 'consumable', code: 'inventory-potion', versionNumber: 999 }, quantity: 1, entryRefs: ['missing-version'],
+    });
+    expect(missingVersion.status).toBe(404);
   });
 
   it('rolls back the idempotency reservation when the related mutation fails', async () => {

@@ -50,14 +50,15 @@ const startGameBody = {
         handedness: 'two_handed', weaponTags: ['bow'],
       }, presentation: {}, tags: ['weapon'], status: 'active',
     },
-    protagonistLink: { state: 'known', rank: 0, progress: 0, mastery: 0, equipped: true, quantity: 1, metadata: { slotHint: 'hands' } },
+    protagonistLink: { state: 'known', rank: 0, progress: 0, mastery: 0, metadata: { slotHint: 'hands' } },
   }],
   initialPremise: 'Premissa narrativa privada.',
 };
 const emptyGptRepository: GptRepository = {
   loadGame: () => Promise.resolve({}), listPlayerWorlds: () => Promise.resolve([]), listWorldCampaigns: () => Promise.resolve([]),
   startGame: () => Promise.resolve({}), listCampaignActors: () => Promise.resolve([]), upsertActor: () => Promise.resolve({}),
-  patchActor: () => Promise.resolve({}), upsertContent: () => Promise.resolve({}), manageActorContent: () => Promise.resolve({}), createEvent: () => Promise.resolve({}),
+  patchActor: () => Promise.resolve({}), upsertContent: () => Promise.resolve({}), manageActorContent: () => Promise.resolve({}),
+  manageActorInventory: () => Promise.resolve({}), createEvent: () => Promise.resolve({}),
 };
 
 function appWith(
@@ -73,6 +74,7 @@ function appWith(
     patchActor: (actorRef, input) => Promise.resolve({ code: actorRef, name: input.name }),
     upsertContent: (input) => Promise.resolve({ code: input.code, contentType: input.contentType }),
     manageActorContent: (_actorRef, input) => Promise.resolve({ operation: input.operation, state: input.changes?.state ?? 'known' }),
+    manageActorInventory: (_actorRef, input) => Promise.resolve({ operation: input.operation, inventoryStateVersion: 1 }),
     createEvent: (input) => Promise.resolve({ eventType: input.eventType, title: input.title }),
   },
   readiness: ReadinessCheck = { check: () => Promise.resolve(true) },
@@ -165,7 +167,7 @@ describe('HTTP API', () => {
     expect(records[0]?.request).toMatchObject({ body: {
       playerMode: 'create', worldMode: 'create', playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign',
       difficultyPreset: 'standard',
-      initialContent: { packageCount: 1, linkCount: 1, equippedCount: 1, contentTypes: { weapon: 1 } },
+      initialContent: { packageCount: 1, linkCount: 1, contentTypes: { weapon: 1 } },
       protagonist: { attributeCount: 9 },
     } });
     expect(records[0]?.response).toMatchObject({ attributeCount: 9 });

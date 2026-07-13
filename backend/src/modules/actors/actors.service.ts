@@ -15,7 +15,7 @@ export function normalizeActorContent(item: ActorContentRecord) {
   const definition = item.contentDefinition;
   return { ...publicContentVersionDto(definition, item.contentVersion),
     state: normalizeEnum(item.state), rank: item.rank, progress: item.progress,
-    mastery: item.mastery, equipped: item.equipped, quantity: item.quantity, notes: item.notes,
+    mastery: item.mastery, notes: item.notes,
     linkMetadata: item.metadata };
 }
 

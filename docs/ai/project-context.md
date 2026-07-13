@@ -23,7 +23,8 @@ Projeto de RPG narrativo reiniciado como nova versão, com o sistema anterior ar
 - `Ruleset(core)` e `RulesetVersion(core-v1/RC1.1)` persistem manifesto canônico e hash SHA-256; todo World recebe um default obrigatório e toda Campaign copia um vínculo imutável na criação.
 - A ficha mecânica de Actor é autoritativa no backend: nove atributos normalizados, HP/Mana/SP atuais e snapshot derivado recomputável pelo `core-v1`; clientes nunca enviam máximos ou derivados.
 - O núcleo `core-v1` valida fichas canônicas de 13 tipos e sua configuração possui publicação própria `core-v1-content-v1`. `ContentDefinition` guarda identidade, `ContentVersion` guarda snapshots imutáveis e `ActorContent` fixa a versão concedida. `startGame`, `upsertContent`, `getContent`, `loadGame` e `manageActorContent` usam essa fronteira versionada.
-- O núcleo puro `core-v1-inventory-v1` modela posse física futura por instâncias únicas ou stacks homogêneos fixados em uma `ContentVersion`, peso/carga RC1.1 e equipamento atômico por slots. Ele apenas planeja e valida; não persiste inventário, não substitui `ActorContent` e não aplica modificadores ao snapshot.
+- O `core-v1-inventory-v1` possui publicação imutável própria e agora sustenta inventário físico persistido por instâncias ou stacks fixados em uma `ContentVersion`, equipamento atômico por slots, peso/carga RC1.1 e modificadores equipados aplicados ao snapshot. `ActorContent` permanece apenas progressão/conhecimento.
+- `manageActorInventory` é a única operação pública de inventário; escritas são idempotentes, usam `expectedInventoryStateVersion`, lock do Actor e recomputação mecânica na mesma transação. `startGame` reutiliza a mesma orquestração para inventário inicial.
 - Auditoria HTTP estruturada com `x-request-id`, resumos seguros de requisição/resposta e caminhos de validação, sem headers ou payloads sensíveis.
 - Blueprint Render de staging nativo Node, Free em `virginia`, branch `develop`, sem Docker, sem pre-deploy e sem deploy automático.
 
@@ -35,7 +36,7 @@ Projeto de RPG narrativo reiniciado como nova versão, com o sistema anterior ar
 
 ## Fases futuras
 
-Frontend React, integração GPT ao vivo, operação explícita de upgrade de conteúdo do ator, combate, persistência/transações de inventário físico e equipamento (Fase 1H), comércio, aplicação de efeitos, lojas, facções, relações, memórias detalhadas, viagens, clima e snapshots narrativos.
+Frontend React, integração GPT ao vivo, operação explícita de upgrade de conteúdo do ator, uso de consumíveis, combate, comércio, aplicação de efeitos, lojas, facções, relações, memórias detalhadas, viagens, clima e snapshots narrativos.
 
 ## Segurança
 

@@ -645,7 +645,7 @@
       "post": {
         "operationId": "manageActorContent",
         "summary": "Consultar, vincular ou evoluir conteúdo do ator",
-        "description": "get/list são leituras. learn, grant, update, equip, unequip e remove exigem idempotencyKey.",
+        "description": "get/list são leituras. learn, grant, update e remove exigem idempotencyKey.",
         "parameters": [
           {
             "name": "actorRef",
@@ -705,6 +705,23 @@
           "500": {
             "$ref": "#/components/responses/InternalError"
           }
+        }
+      }
+    },
+    "/api/v1/actors/{actorRef}/inventory/manage": {
+      "post": {
+        "operationId": "manageActorInventory",
+        "summary": "Consultar e alterar o inventário físico autoritativo do ator",
+        "description": "get é leitura. Toda escrita exige idempotencyKey e expectedInventoryStateVersion; equipamento é derivado dos slots físicos.",
+        "parameters": [{ "name": "actorRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActorInventoryManageInput" } } } },
+        "responses": {
+          "200": { "description": "Inventário físico atual", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActorInventory" } } } },
+          "400": { "$ref": "#/components/responses/InvalidInput" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
         }
       }
     },
@@ -1326,6 +1343,23 @@
         "type": "object", "additionalProperties": false,
         "properties": { "physical": { "type": "boolean" }, "magical": { "type": "boolean" }, "elements": { "type": "array", "minItems": 1, "maxItems": 10, "uniqueItems": true, "items": { "type": "string", "enum": ["fire", "ice", "lightning", "earth", "wind", "water", "light", "shadow", "poison", "arcane"] } } }
       },
+      "InventorySpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "rulesetCode", "inventoryRulesCode", "unitWeight", "stacking"],
+        "properties": {
+          "schemaVersion": { "const": 1 },
+          "rulesetCode": { "const": "core-v1" },
+          "inventoryRulesCode": { "const": "core-v1-inventory-v1" },
+          "unitWeight": { "type": "integer", "minimum": 0 },
+          "stacking": {
+            "type": "object", "additionalProperties": false, "required": ["mode"],
+            "properties": { "mode": { "type": "string", "enum": ["unique", "stackable"] }, "maxStack": { "type": "integer", "minimum": 2, "maximum": 999 } }
+          },
+          "equipmentSlots": { "type": "array", "uniqueItems": true, "maxItems": 9, "items": { "type": "string", "enum": ["main_hand", "off_hand", "head", "chest", "hands", "legs", "feet", "body", "accessory"] } },
+          "handedness": { "type": "string", "enum": ["one_handed", "two_handed", "versatile"] }
+        }
+      },
       "InitialContentDefinition": {
         "type": "object",
         "additionalProperties": false,
@@ -1338,6 +1372,7 @@
           "name": { "type": "string", "minLength": 1, "maxLength": 200 },
           "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
           "profile": { "$ref": "#/components/schemas/CoreV1ContentProfile" },
+          "inventorySpec": { "$ref": "#/components/schemas/InventorySpec" },
           "presentation": { "$ref": "#/components/schemas/ContentPresentation" },
           "tags": { "type": "array", "maxItems": 24, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 100 } },
           "status": { "const": "active" },
@@ -1349,14 +1384,12 @@
       "InitialActorContentLink": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["state", "rank", "progress", "mastery", "equipped", "quantity"],
+        "required": ["state", "rank", "progress", "mastery"],
         "properties": {
           "state": { "type": "string", "enum": ["locked", "learning", "known", "mastered"] },
           "rank": { "type": "integer", "minimum": 0 },
           "progress": { "type": "integer", "minimum": 0 },
           "mastery": { "type": "integer", "minimum": 0 },
-          "equipped": { "type": "boolean" },
-          "quantity": { "type": "integer", "minimum": 1, "maximum": 999 },
           "notes": { "type": ["string", "null"], "maxLength": 2000 },
           "metadata": { "$ref": "#/components/schemas/JsonObject", "description": "Até 4096 bytes UTF-8, profundidade 5 e 30 chaves recursivas." }
         }
@@ -1368,6 +1401,25 @@
         "properties": {
           "definition": { "$ref": "#/components/schemas/InitialContentDefinition" },
           "protagonistLink": { "$ref": "#/components/schemas/InitialActorContentLink" }
+        }
+      },
+      "InitialInventoryItem": {
+        "type": "object", "additionalProperties": false,
+        "required": ["scope", "contentType", "code", "quantity", "entryRefs"],
+        "properties": {
+          "scope": { "type": "string", "enum": ["world", "campaign"] },
+          "contentType": { "type": "string", "enum": ["weapon", "armor", "shield", "clothing", "item", "consumable", "material", "other"] },
+          "code": { "$ref": "#/components/schemas/Code" },
+          "quantity": { "type": "integer", "minimum": 1 },
+          "entryRefs": { "type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
+          "customName": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "equip": {
+            "type": "object", "additionalProperties": false,
+            "properties": {
+              "targetSlotRef": { "type": "string", "enum": ["main_hand", "off_hand", "head", "chest", "hands", "legs", "feet", "body", "accessory_1", "accessory_2"] },
+              "versatileMode": { "type": "string", "enum": ["one_handed", "two_handed"] }
+            }
+          }
         }
       },
       "PrimaryAttributes": {
@@ -1582,6 +1634,9 @@
             "maxItems": 24,
             "items": { "$ref": "#/components/schemas/InitialContentPackage" }
           },
+          "initialInventory": {
+            "type": "array", "maxItems": 256, "items": { "$ref": "#/components/schemas/InitialInventoryItem" }
+          },
           "initialPremise": {
             "type": "string",
             "minLength": 1,
@@ -1688,6 +1743,8 @@
           "resources",
           "secondaryAttributes",
           "mechanicsStateVersion",
+          "inventoryStateVersion",
+          "inventorySummary",
           "ruleset",
           "appearance",
           "personality",
@@ -1750,6 +1807,8 @@
           "resources": { "$ref": "#/components/schemas/ActorResources" },
           "secondaryAttributes": { "$ref": "#/components/schemas/SecondaryAttributes" },
           "mechanicsStateVersion": { "type": "integer", "minimum": 1 },
+          "inventoryStateVersion": { "type": "integer", "minimum": 1 },
+          "inventorySummary": { "$ref": "#/components/schemas/InventorySummary" },
           "ruleset": {
             "type": "object", "additionalProperties": false, "required": ["code", "revision"],
             "properties": { "code": { "type": "string" }, "revision": { "type": "string" } }
@@ -1835,7 +1894,8 @@
           "metadata",
           "versionNumber",
           "ruleset",
-          "contentProfile"
+          "contentProfile",
+          "inventorySpec"
         ],
         "properties": {
           "code": {
@@ -1877,7 +1937,8 @@
           },
           "versionNumber": { "type": "integer", "minimum": 1 },
           "ruleset": { "type": "object", "additionalProperties": false, "required": ["code", "revision"], "properties": { "code": { "const": "core-v1" }, "revision": { "type": "string" } } },
-          "contentProfile": { "type": "object", "additionalProperties": false, "required": ["code", "schemaVersion"], "properties": { "code": { "const": "core-v1-content-v1" }, "schemaVersion": { "const": 1 } } }
+          "contentProfile": { "type": "object", "additionalProperties": false, "required": ["code", "schemaVersion"], "properties": { "code": { "const": "core-v1-content-v1" }, "schemaVersion": { "const": 1 } } },
+          "inventorySpec": { "oneOf": [{ "$ref": "#/components/schemas/InventorySpec" }, { "type": "null" }] }
         }
       },
       "ContentType": {
@@ -1956,6 +2017,7 @@
             "minLength": 1
           },
           "profile": { "$ref": "#/components/schemas/CoreV1ContentProfile" },
+          "inventorySpec": { "$ref": "#/components/schemas/InventorySpec" },
           "presentation": {
             "$ref": "#/components/schemas/ContentPresentation"
           },
@@ -1985,7 +2047,7 @@
         "additionalProperties": false,
         "required": [
           "code", "name", "contentType", "description", "profile", "presentation", "tags", "status", "metadata",
-          "versionNumber", "ruleset", "contentProfile", "state", "rank", "progress", "mastery", "equipped", "quantity", "notes", "linkMetadata"
+          "versionNumber", "ruleset", "contentProfile", "inventorySpec", "state", "rank", "progress", "mastery", "notes", "linkMetadata"
         ],
         "properties": {
               "code": { "$ref": "#/components/schemas/Code" },
@@ -2000,6 +2062,7 @@
               "versionNumber": { "type": "integer", "minimum": 1 },
               "ruleset": { "type": "object", "additionalProperties": false, "required": ["code", "revision"], "properties": { "code": { "const": "core-v1" }, "revision": { "type": "string" } } },
               "contentProfile": { "type": "object", "additionalProperties": false, "required": ["code", "schemaVersion"], "properties": { "code": { "const": "core-v1-content-v1" }, "schemaVersion": { "const": 1 } } },
+              "inventorySpec": { "oneOf": [{ "$ref": "#/components/schemas/InventorySpec" }, { "type": "null" }] },
               "state": {
                 "type": "string",
                 "enum": [
@@ -2018,13 +2081,6 @@
                 "minimum": 0
               },
               "mastery": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "equipped": {
-                "type": "boolean"
-              },
-              "quantity": {
                 "type": "integer",
                 "minimum": 0
               },
@@ -2057,8 +2113,6 @@
                     "learn",
                     "grant",
                     "update",
-                    "equip",
-                    "unequip",
                     "remove"
                   ]
                 }
@@ -2129,8 +2183,6 @@
               "learn",
               "grant",
               "update",
-              "equip",
-              "unequip",
               "remove"
             ]
           },
@@ -2169,13 +2221,6 @@
                 "type": "integer",
                 "minimum": 0
               },
-              "equipped": {
-                "type": "boolean"
-              },
-              "quantity": {
-                "type": "integer",
-                "minimum": 0
-              },
               "notes": {
                 "type": [
                   "string",
@@ -2185,6 +2230,106 @@
               "metadata": {
                 "$ref": "#/components/schemas/JsonObject"
               }
+            }
+          }
+        }
+      },
+      "InventorySummary": {
+        "type": "object", "additionalProperties": false,
+        "required": ["entryCount", "equippedCount", "totalCarriedWeight", "encumbranceState"],
+        "properties": {
+          "entryCount": { "type": "integer", "minimum": 0 },
+          "equippedCount": { "type": "integer", "minimum": 0 },
+          "totalCarriedWeight": { "type": "integer", "minimum": 0 },
+          "encumbranceState": { "type": "string", "enum": ["normal", "encumbered", "heavily_encumbered", "overloaded"] }
+        }
+      },
+      "InventoryContentReference": {
+        "type": "object", "additionalProperties": false,
+        "required": ["scope", "contentType", "code", "versionNumber"],
+        "properties": {
+          "scope": { "type": "string", "enum": ["world", "campaign"] },
+          "contentType": { "type": "string", "enum": ["weapon", "armor", "shield", "clothing", "item", "consumable", "material", "other"] },
+          "code": { "$ref": "#/components/schemas/Code" },
+          "versionNumber": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "ActorInventoryManageInput": {
+        "type": "object", "additionalProperties": false,
+        "required": ["playerRef", "worldRef", "campaignRef", "operation"],
+        "properties": {
+          "playerRef": { "$ref": "#/components/schemas/Code" },
+          "worldRef": { "$ref": "#/components/schemas/Code" },
+          "campaignRef": { "$ref": "#/components/schemas/Code" },
+          "operation": { "type": "string", "enum": ["get", "grant", "remove", "split", "merge", "reserve", "release", "destroy", "equip", "unequip"] },
+          "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" },
+          "expectedInventoryStateVersion": { "type": "integer", "minimum": 1 },
+          "contentRef": { "$ref": "#/components/schemas/InventoryContentReference" },
+          "quantity": { "type": "integer", "minimum": 1 },
+          "entryRefs": { "type": "array", "maxItems": 256, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
+          "customName": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "entryRef": { "$ref": "#/components/schemas/Code" },
+          "newEntryRef": { "$ref": "#/components/schemas/Code" },
+          "sourceEntryRef": { "$ref": "#/components/schemas/Code" },
+          "targetEntryRef": { "$ref": "#/components/schemas/Code" },
+          "targetSlotRef": { "type": "string", "enum": ["main_hand", "off_hand", "head", "chest", "hands", "legs", "feet", "body", "accessory_1", "accessory_2"] },
+          "versatileMode": { "type": "string", "enum": ["one_handed", "two_handed"] }
+        },
+        "description": "Objeto fechado. get não aceita idempotencyKey nem expectedInventoryStateVersion; escritas exigem ambos. O backend valida os campos compatíveis com operation."
+      },
+      "ActorInventoryEntry": {
+        "type": "object", "additionalProperties": false,
+        "required": ["entryRef", "entryKind", "quantity", "content", "inventorySpec", "equippedSlots"],
+        "properties": {
+          "entryRef": { "$ref": "#/components/schemas/Code" },
+          "entryKind": { "type": "string", "enum": ["instance", "stack"] },
+          "state": { "type": "string", "enum": ["available", "equipped", "reserved", "consumed", "destroyed"] },
+          "quantity": { "type": "integer", "minimum": 1 },
+          "customName": { "type": "string" },
+          "content": {
+            "type": "object", "additionalProperties": false,
+            "required": ["scope", "contentType", "code", "versionNumber", "name"],
+            "properties": {
+              "scope": { "type": "string", "enum": ["world", "campaign"] },
+              "contentType": { "type": "string", "enum": ["weapon", "armor", "shield", "clothing", "item", "consumable", "material", "other"] },
+              "code": { "$ref": "#/components/schemas/Code" },
+              "versionNumber": { "type": "integer", "minimum": 1 },
+              "name": { "type": "string" }
+            }
+          },
+          "inventorySpec": { "$ref": "#/components/schemas/InventorySpec" },
+          "equippedSlots": { "type": "array", "uniqueItems": true, "items": { "type": "string", "enum": ["main_hand", "off_hand", "head", "chest", "hands", "legs", "feet", "body", "accessory_1", "accessory_2"] } }
+        }
+      },
+      "ActorInventory": {
+        "type": "object", "additionalProperties": false,
+        "required": ["actorRef", "inventoryStateVersion", "entries", "loadout", "weight", "encumbrance"],
+        "properties": {
+          "actorRef": { "$ref": "#/components/schemas/Code" },
+          "inventoryStateVersion": { "type": "integer", "minimum": 1 },
+          "entries": { "type": "array", "maxItems": 256, "items": { "$ref": "#/components/schemas/ActorInventoryEntry" } },
+          "loadout": {
+            "type": "array", "minItems": 10, "maxItems": 10,
+            "items": {
+              "type": "object", "additionalProperties": false, "required": ["slotRef", "entryRef"],
+              "properties": {
+                "slotRef": { "type": "string", "enum": ["main_hand", "off_hand", "head", "chest", "hands", "legs", "feet", "body", "accessory_1", "accessory_2"] },
+                "entryRef": { "oneOf": [{ "$ref": "#/components/schemas/Code" }, { "type": "null" }] }
+              }
+            }
+          },
+          "weight": {
+            "type": "object", "additionalProperties": false, "required": ["totalCarriedWeight", "carryingCapacity"],
+            "properties": { "totalCarriedWeight": { "type": "integer", "minimum": 0 }, "carryingCapacity": { "type": "integer", "minimum": 0 } }
+          },
+          "encumbrance": {
+            "type": "object", "additionalProperties": false,
+            "required": ["ratioBps", "state", "penaltyBps", "canStartAttackOrMovement"],
+            "properties": {
+              "ratioBps": { "type": ["integer", "null"], "minimum": 0 },
+              "state": { "type": "string", "enum": ["normal", "encumbered", "heavily_encumbered", "overloaded"] },
+              "penaltyBps": { "type": "integer", "minimum": 0 },
+              "canStartAttackOrMovement": { "type": "boolean" }
             }
           }
         }

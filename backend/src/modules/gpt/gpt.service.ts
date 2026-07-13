@@ -1,6 +1,6 @@
 import type { GptRepository } from './gpt.types.js';
 import type {
-  CreateEventInput, ListCampaignActorsInput, LoadGameInput, ManageActorContentInput,
+  CreateEventInput, ListCampaignActorsInput, LoadGameInput, ManageActorContentInput, ManageActorInventoryInput,
   ListPlayerWorldsInput, ListWorldCampaignsInput, PatchActorInput, StartGameInput, UpsertActorInput, UpsertContentInput,
 } from './gpt.schemas.js';
 
@@ -15,6 +15,7 @@ export function createGptService(repository: GptRepository) {
     patchActor: (actorRef: string, input: PatchActorInput) => repository.patchActor(actorRef, input),
     upsertContent: (input: UpsertContentInput) => repository.upsertContent(input),
     manageActorContent: (actorRef: string, input: ManageActorContentInput) => repository.manageActorContent(actorRef, input),
+    manageActorInventory: (actorRef: string, input: ManageActorInventoryInput) => repository.manageActorInventory(actorRef, input),
     createEvent: (input: CreateEventInput) => repository.createEvent(input),
   };
 }

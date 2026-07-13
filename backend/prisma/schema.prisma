@@ -92,6 +92,31 @@ enum ActorContentState {
   MASTERED
 }
 
+enum InventoryEntryKind {
+  INSTANCE
+  STACK
+}
+
+enum InventoryInstanceLifecycle {
+  AVAILABLE
+  RESERVED
+  CONSUMED
+  DESTROYED
+}
+
+enum ActorEquipmentSlotRef {
+  MAIN_HAND
+  OFF_HAND
+  HEAD
+  CHEST
+  HANDS
+  LEGS
+  FEET
+  BODY
+  ACCESSORY_1
+  ACCESSORY_2
+}
+
 model Player {
   id          String   @id @default(uuid()) @db.Uuid
   slug        String   @unique
@@ -124,6 +149,7 @@ model RulesetVersion {
   actorSnapshots ActorDerivedSnapshot[]
   contentProfiles ContentProfileVersion[]
   contentVersions ContentVersion[]
+  inventoryRulesVersions InventoryRulesVersion[]
 
   @@index([rulesetId])
 }
@@ -182,6 +208,7 @@ model Actor {
   xp                      Int                   @default(0)
   gold                    Int                   @default(0)
   mechanicsStateVersion  Int                   @default(1)
+  inventoryStateVersion  Int                   @default(1)
   appearance              Json                  @default("{}")
   personality             Json                  @default("{}")
   metadata                Json                  @default("{}")
@@ -193,6 +220,8 @@ model Actor {
   resources               ActorResource[]
   derivedSnapshot         ActorDerivedSnapshot?
   content                 ActorContent[]
+  inventoryEntries        InventoryEntry[]
+  equipmentSlots          ActorEquipmentSlot[]
   events                  GameEvent[]
 
   @@unique([campaignId, code])
@@ -231,6 +260,7 @@ model ActorDerivedSnapshot {
   actorId                       String         @unique @db.Uuid
   rulesetVersionId              String         @db.Uuid
   mechanicsStateVersion         Int
+  inventoryStateVersion         Int
   maxHp                         Int
   maxMana                       Int
   maxSp                         Int
@@ -294,11 +324,27 @@ model ContentProfileVersion {
   @@index([rulesetVersionId])
 }
 
+model InventoryRulesVersion {
+  id               String           @id @default(uuid()) @db.Uuid
+  rulesetVersionId String           @db.Uuid
+  code             String           @unique
+  schemaVersion    Int
+  configHash       String           @db.Char(64)
+  configSnapshot   Json
+  createdAt        DateTime         @default(now())
+  rulesetVersion   RulesetVersion   @relation(fields: [rulesetVersionId], references: [id], onDelete: Restrict)
+  contentVersions  ContentVersion[]
+  inventoryEntries InventoryEntry[]
+
+  @@index([rulesetVersionId])
+}
+
 model ContentVersion {
   id                      String                @id @default(uuid()) @db.Uuid
   contentDefinitionId     String                @db.Uuid
   rulesetVersionId        String                @db.Uuid
   contentProfileVersionId String                @db.Uuid
+  inventoryRulesVersionId String?               @db.Uuid
   versionNumber           Int
   schemaVersion           Int
   profileMode             ContentProfileMode
@@ -309,18 +355,24 @@ model ContentVersion {
   tags                    Json                  @default("[]")
   metadata                Json                  @default("{}")
   contentHash             String                @db.Char(64)
+  inventorySpec           Json?
+  inventorySpecHash       String?               @db.Char(64)
   createdAt               DateTime              @default(now())
   contentDefinition       ContentDefinition     @relation(fields: [contentDefinitionId], references: [id], onDelete: Restrict)
   rulesetVersion          RulesetVersion        @relation(fields: [rulesetVersionId], references: [id], onDelete: Restrict)
   contentProfileVersion   ContentProfileVersion @relation(fields: [contentProfileVersionId], references: [id], onDelete: Restrict)
+  inventoryRulesVersion   InventoryRulesVersion? @relation(fields: [inventoryRulesVersionId], references: [id], onDelete: Restrict)
   actors                  ActorContent[]
+  inventoryEntries        InventoryEntry[]
 
   @@unique([contentDefinitionId, versionNumber])
-  @@unique([contentDefinitionId, contentHash])
+  @@unique([contentDefinitionId, contentHash], map: "ContentVersion_without_inventory_spec_key", where: { inventorySpecHash: null })
+  @@unique([contentDefinitionId, contentHash, inventorySpecHash], map: "ContentVersion_with_inventory_spec_key", where: { inventorySpecHash: { not: null } })
   @@unique([id, contentDefinitionId])
   @@index([contentDefinitionId, versionNumber(sort: Desc)])
   @@index([rulesetVersionId])
   @@index([contentProfileVersionId])
+  @@index([inventoryRulesVersionId])
 }
 
 model ActorContent {
@@ -332,8 +384,6 @@ model ActorContent {
   rank                Int               @default(0)
   progress            Int               @default(0)
   mastery             Int               @default(0)
-  equipped            Boolean           @default(false)
-  quantity            Int               @default(1)
   notes               String?
   metadata            Json              @default("{}")
   createdAt           DateTime          @default(now())
@@ -344,6 +394,43 @@ model ActorContent {
 
   @@unique([actorId, contentDefinitionId])
   @@index([contentVersionId, contentDefinitionId])
+}
+
+model InventoryEntry {
+  id                      String                      @id @default(uuid()) @db.Uuid
+  actorId                 String                      @db.Uuid
+  entryRef                String
+  contentVersionId        String                      @db.Uuid
+  inventoryRulesVersionId String                      @db.Uuid
+  entryKind               InventoryEntryKind
+  quantity                Int
+  instanceLifecycle       InventoryInstanceLifecycle?
+  customName              String?
+  createdAt               DateTime                    @default(now())
+  updatedAt               DateTime                    @updatedAt
+  actor                   Actor                       @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  contentVersion          ContentVersion              @relation(fields: [contentVersionId], references: [id], onDelete: Restrict)
+  inventoryRulesVersion   InventoryRulesVersion       @relation(fields: [inventoryRulesVersionId], references: [id], onDelete: Restrict)
+  equipmentSlots          ActorEquipmentSlot[]
+
+  @@unique([actorId, entryRef])
+  @@unique([id, actorId])
+  @@index([contentVersionId])
+  @@index([inventoryRulesVersionId])
+}
+
+model ActorEquipmentSlot {
+  id               String                @id @default(uuid()) @db.Uuid
+  actorId          String                @db.Uuid
+  slotRef          ActorEquipmentSlotRef
+  inventoryEntryId String                @db.Uuid
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  actor            Actor                 @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  inventoryEntry   InventoryEntry        @relation(fields: [inventoryEntryId, actorId], references: [id, actorId], onDelete: Restrict)
+
+  @@unique([actorId, slotRef])
+  @@index([inventoryEntryId, actorId])
 }
 
 model GameEvent {

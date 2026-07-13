@@ -75,12 +75,12 @@ function collectEnums(value: unknown, result: unknown[][] = []): unknown[][] {
 }
 
 describe('official OpenAPI contract', () => {
-  it('is valid JSON loaded as OpenAPI 3.1 with exactly 17 unique operationIds', () => {
+  it('is valid JSON loaded as OpenAPI 3.1 with exactly 18 unique operationIds', () => {
     const ids = operations().map(({ operation }) => operation.operationId);
     expect(contract.openapi).toBe('3.1.0');
     expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(17);
+    expect(ids).toHaveLength(18);
   });
 
   it('matches every registered Express route exactly', () => {
@@ -93,7 +93,7 @@ describe('official OpenAPI contract', () => {
     expect(contract.security).toEqual([{ RpgApiKey: [] }]);
     const publicIds = operations().filter(({ operation }) => Array.isArray(operation.security) && operation.security.length === 0).map(({ operation }) => operation.operationId).sort();
     expect(publicIds).toEqual(['checkHealth', 'checkReadiness', 'getOpenApiContract']);
-    expect(operations().filter(({ operation }) => !Array.isArray(operation.security) || operation.security.length > 0)).toHaveLength(14);
+    expect(operations().filter(({ operation }) => !Array.isArray(operation.security) || operation.security.length > 0)).toHaveLength(15);
   });
 
   it('contains no localhost production server', () => {
@@ -115,6 +115,21 @@ describe('official OpenAPI contract', () => {
     expect(schema.allOf).toEqual(expect.arrayContaining([
       expect.objectContaining({ then: { required: ['idempotencyKey'] } }),
     ]));
+  });
+
+  it('documents one inventory operation with physical refs and optimistic concurrency', () => {
+    const operation = operations().find((item) => item.operation.operationId === 'manageActorInventory')?.operation;
+    const schema = resolveSchema(operation?.requestBody?.content?.['application/json']?.schema);
+    expect(operation?.description).toContain('expectedInventoryStateVersion');
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.properties).toMatchObject({
+      operation: { enum: ['get', 'grant', 'remove', 'split', 'merge', 'reserve', 'release', 'destroy', 'equip', 'unequip'] },
+      expectedInventoryStateVersion: { type: 'integer' },
+      contentRef: { $ref: '#/components/schemas/InventoryContentReference' },
+    });
+    expect(contract.components.schemas.InventorySpec?.additionalProperties).toBe(false);
+    expect(contract.components.schemas.ActorContent?.properties).not.toHaveProperty('equipped');
+    expect(contract.components.schemas.ActorContent?.properties).not.toHaveProperty('quantity');
   });
 
   it('documents safe errors for every protected API operation', () => {
@@ -168,7 +183,7 @@ describe('official OpenAPI contract', () => {
     const scope = contract.components.schemas.ScopeInput;
     expect(scope?.required).toEqual(['playerRef', 'worldRef', 'campaignRef']);
     expect(contract.components.schemas.Code?.not).toEqual({ format: 'uuid' });
-    for (const operationId of ['loadGame', 'startGame', 'upsertActor', 'updateActor', 'upsertContent', 'manageActorContent', 'createGameEvent']) {
+    for (const operationId of ['loadGame', 'startGame', 'upsertActor', 'updateActor', 'upsertContent', 'manageActorContent', 'manageActorInventory', 'createGameEvent']) {
       const operation = byId.get(operationId);
       const schema = resolveSchema(operation?.requestBody?.content?.['application/json']?.schema);
       expect(schema.required, operationId).toEqual(expect.arrayContaining(['playerRef', 'worldRef', 'campaignRef']));
@@ -202,6 +217,7 @@ describe('official OpenAPI contract', () => {
     expect(contract.components.schemas.InitialActorContentLink?.properties).not.toHaveProperty('actorRef');
     expect(start.description).toContain('81920 bytes UTF-8');
     expect(start.properties?.initialContentPackages?.maxItems).toBe(24);
+    expect(start.properties?.initialInventory?.maxItems).toBe(256);
     expect(start.properties?.initialPremise?.maxLength).toBe(1000);
   });
 
@@ -224,7 +240,7 @@ describe('official OpenAPI contract', () => {
       expect(contract.components.schemas[schemaName]?.additionalProperties, schemaName).toBe(false);
     }
     expect(contract.components.schemas.Actor?.required).toEqual(expect.arrayContaining([
-      'primaryAttributes', 'resources', 'secondaryAttributes', 'mechanicsStateVersion', 'ruleset',
+      'primaryAttributes', 'resources', 'secondaryAttributes', 'mechanicsStateVersion', 'inventoryStateVersion', 'inventorySummary', 'ruleset',
     ]));
     const forbidden = ['health', 'maxHealth', 'mana', 'maxMana', 'attributes', 'resistances', 'affinities', 'inputHash', 'rulesetVersionId'];
     expect(forbidden.every((field) => contract.components.schemas.InitialActorInput?.properties?.[field] === undefined)).toBe(true);

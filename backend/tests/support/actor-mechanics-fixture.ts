@@ -29,6 +29,7 @@ export function actorMechanicalSheetFixture(
     },
     secondaryAttributes: { ...scalarSecondary, elementalResistanceBps: { default: elementalResistanceBps } },
     mechanicsStateVersion: 1,
+    inventoryStateVersion: 1,
     ruleset: { code: 'core-v1', revision: 'RC1.1' },
   };
 }
