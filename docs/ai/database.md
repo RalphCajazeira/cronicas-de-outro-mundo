@@ -47,3 +47,22 @@ A migration `20260713190000_engine_v1_actor_mechanics` falha antes do DDL quando
 Máximos nunca são persistência independente em `ActorResource`. O snapshot usa `inputHash` SHA-256 canônico e é validado/recalculado pelo backend, não por trigger. O rollout remoto futuro continua exigindo limpeza funcional explícita e o gate manual normal; staging/Supabase não foram acessados.
 
 Status: implementada e validada na Fase 1D; revisão e integração rastreadas pelo PR correspondente
+
+## Fase 1F — conteúdo publicado por versão
+
+Models:
+
+- `ContentProfileVersion`: manifesto imutável `core-v1-content-v1`, ligado à `RulesetVersion`, sem `updatedAt`;
+- `ContentDefinition`: identidade estável e lifecycle, sem conteúdo funcional mutável;
+- `ContentVersion`: snapshot imutável numerado, com perfil, apresentação, tags, metadata e hash canônico;
+- `ActorContent`: vínculo simultâneo à definição e à versão, garantido por FK composta.
+
+A migration `20260713230000_engine_v1_content_versioning` falha antes do DDL se `ContentDefinition` ou `ActorContent` contiver linhas. Não há delete, truncate, conversão, backfill, dual-read ou dual-write. Ela adiciona `CLOTHING`/`CONSUMABLE`, cria o modo de perfil, remove os campos versionados da identidade, instala checks de schema/hash/JSON, índices da versão atual, FKs restritas e RLS sem policies.
+
+Triggers bloqueiam `UPDATE`/`DELETE` em `ContentProfileVersion` e `ContentVersion`, além de alterações reais em World, Campaign, code ou tipo da definição. Somente status permanece lifecycle mutável. Como versões publicadas também não podem ser apagadas por cascata, futuras rotinas administrativas de reset precisam de desenho explícito e migration corretiva revisada; não existe bypass público.
+
+`contentHash` usa JSON canônico de dados públicos e auditáveis, ruleset e identidade da publicação do perfil. UUIDs, timestamps, status e idempotency key não participam. A publicação usa advisory lock transacional por identidade antes de numerar versões; snapshots idênticos são deduplicados e diferentes recebem números sequenciais.
+
+O rollout remoto exige limpeza funcional separada e autorizada antes da migration. Nenhum staging, Supabase remoto, deploy ou GPT ao vivo foi alterado nesta fase.
+
+Status: implementada e validada na Fase 1F; revisão e integração rastreadas pelo PR correspondente

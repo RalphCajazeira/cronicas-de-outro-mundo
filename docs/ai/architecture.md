@@ -69,6 +69,22 @@ Esta fase não altera o manifesto persistido da Fase 1C, Prisma, migrations, rep
 
 Status: implementada e validada na Fase 1E; revisão e integração rastreadas pelo PR correspondente
 
+### Fase 1F — publicação canônica e conteúdo persistido por versão
+
+`ContentProfileVersion(code=core-v1-content-v1, schemaVersion=1)` publica, separadamente da configuração numérica imutável de `RulesetVersion`, o catálogo e os limites validáveis da Fase 1E em snapshot JSON canônico e hash SHA-256. O registry valida ruleset, code, schema, hash e snapshot, rejeita drift e só recupera colisões `P2002` comprovadamente esperadas; não atualiza nem registra o snapshot.
+
+`ContentDefinition` contém apenas identidade estável (`World`, Campaign opcional, code, tipo e lifecycle). Nome, descrição, perfil, apresentação, tags e metadata pertencem a `ContentVersion`, que é imutável e referencia obrigatoriamente a `RulesetVersion` e a `ContentProfileVersion`. A versão atual é a de maior `versionNumber`; não há ponte circular `currentVersionId`.
+
+`publishContentVersion` é a única orquestração de escrita usada por `startGame`, `upsertContent` e seed. Ela resolve o ruleset do escopo, delega ao validador puro da Fase 1E, calcula hash sem IDs/status/timestamps, serializa a identidade com advisory lock transacional e deduplica snapshots iguais ou cria a próxima versão. Campanha específica tem prioridade nas leituras e o fallback permanece restrito ao mesmo World, tipo e code global.
+
+`ActorContent` referencia simultaneamente definição e versão com FK composta. Novos vínculos recebem a versão atual, mas get/list/update/equip/unequip continuam na versão fixada; publicar v2 não migra um ator ligado à v1. `equipped` e `quantity` continuam conceituais: não há `ItemInstance`, inventário, slots físicos ou aplicação de modificadores.
+
+A migration é clean-slate para `ContentDefinition`/`ActorContent`, não apaga ou converte dados e instala constraints, FKs restritas, RLS e triggers contra update/delete das publicações e contra mudança de identidade. Imutabilidade afeta futuras rotinas administrativas: reset funcional deve recriar o banco local autorizado ou ser desenhado por migration corretiva explícita, nunca por bypass público.
+
+O OpenAPI ativo aceita perfil estruturado para os 13 tipos canônicos e `profile: null` para tipos narrativos genéricos; `mechanics`, `requirements` e schema arbitrário deixaram de ser rotas paralelas. O nome `upsertContent` foi preservado, mas update significa publicação de nova versão imutável. O GPT ao vivo e qualquer deploy continuam pendentes.
+
+Status: implementada e validada na Fase 1F; revisão e integração rastreadas pelo PR correspondente
+
 ## Arquitetura de testes
 
 ```text

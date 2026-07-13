@@ -1,5 +1,5 @@
 import { Prisma } from '../../generated/prisma/client.js';
-import { isExpectedUniqueConflict } from '../../shared/database/prisma-errors.js';
+import { createAfterExpectedUnique } from '../../shared/database/create-after-expected-unique.js';
 import { canonicalJson } from '../../shared/json/canonical-json.js';
 import {
   CORE_V1_CONFIG_HASH,
@@ -57,31 +57,9 @@ export function validateCoreV1RulesetVersion(version: CoreRulesetVersion): CoreR
   return version;
 }
 
-async function createAfterSavepoint<T>(
-  client: RulesetRegistryClient,
-  savepoint: string,
-  create: () => Promise<T>,
-  reread: () => Promise<T | null>,
-  expected: { modelName: string; fields: readonly string[]; index: string },
-): Promise<T> {
-  await client.$executeRawUnsafe(`SAVEPOINT ${savepoint}`);
-  try {
-    const created = await create();
-    await client.$executeRawUnsafe(`RELEASE SAVEPOINT ${savepoint}`);
-    return created;
-  } catch (error) {
-    await client.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT ${savepoint}`);
-    await client.$executeRawUnsafe(`RELEASE SAVEPOINT ${savepoint}`);
-    if (!isExpectedUniqueConflict(error, { ...expected, allowModelOnly: true })) throw error;
-    const persisted = await reread();
-    if (persisted === null) throw error;
-    return persisted;
-  }
-}
-
 export async function ensureCoreV1RulesetVersion(client: RulesetRegistryClient): Promise<CoreRulesetVersion> {
   let ruleset = await client.ruleset.findUnique({ where: { code: CORE_V1_RULESET_CODE }, select: { id: true } });
-  ruleset ??= await createAfterSavepoint(
+  ruleset ??= await createAfterExpectedUnique(
     client,
     'ensure_core_ruleset',
     () => client.ruleset.create({
@@ -89,11 +67,11 @@ export async function ensureCoreV1RulesetVersion(client: RulesetRegistryClient):
       select: { id: true },
     }),
     () => client.ruleset.findUnique({ where: { code: CORE_V1_RULESET_CODE }, select: { id: true } }),
-    { modelName: 'Ruleset', fields: ['code'], index: 'Ruleset_code_key' },
+    { modelName: 'Ruleset', fields: ['code'], index: 'Ruleset_code_key', allowModelOnly: true },
   );
 
   let version = await client.rulesetVersion.findUnique({ where: { code: CORE_V1_VERSION_CODE }, select: versionSelect });
-  version ??= await createAfterSavepoint(
+  version ??= await createAfterExpectedUnique(
     client,
     'ensure_core_ruleset_version',
     () => client.rulesetVersion.create({
@@ -108,7 +86,7 @@ export async function ensureCoreV1RulesetVersion(client: RulesetRegistryClient):
       select: versionSelect,
     }),
     () => client.rulesetVersion.findUnique({ where: { code: CORE_V1_VERSION_CODE }, select: versionSelect }),
-    { modelName: 'RulesetVersion', fields: ['code'], index: 'RulesetVersion_code_key' },
+    { modelName: 'RulesetVersion', fields: ['code'], index: 'RulesetVersion_code_key', allowModelOnly: true },
   );
 
   if (version.rulesetId !== ruleset.id) throw new CoreRulesetVersionDriftError(['rulesetCode']);

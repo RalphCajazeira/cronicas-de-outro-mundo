@@ -275,3 +275,21 @@ Impacto:
 - nenhuma migration ou alteração de dados é necessária.
 
 Status: implementada localmente; deploy e atualização da Action pendentes
+
+## 2026-07-13 — Conteúdo canônico publicado em versões imutáveis
+
+Decisão:
+- publicar a configuração validável da Fase 1E em `ContentProfileVersion(core-v1-content-v1)` sem alterar o manifesto numérico `core-v1/RC1.1`;
+- reduzir `ContentDefinition` a identidade/lifecycle e mover todo conteúdo mutável para `ContentVersion` numerada, imutável e hashada canonicamente;
+- centralizar seed, `startGame` e `upsertContent` em `publishContentVersion`, com advisory lock transacional e deduplicação por hash;
+- vincular `ActorContent` a uma versão exata por FK composta, sem upgrade implícito quando uma v2 é publicada;
+- preservar prioridade Campaign e fallback somente para conteúdo global do mesmo World;
+- aceitar perfil validado para 13 tipos canônicos e perfil nulo para os tipos narrativos genéricos, removendo `mechanics`/`requirements` livres dos requests;
+- adotar migration clean-slate sem preservação, conversão ou remoção automática de dados funcionais.
+
+Impacto:
+- `upsertContent` preserva o operationId, mas “update” passa a significar publicar nova versão;
+- triggers impedem update/delete de publicações e alteração da identidade, afetando futuros resets administrativos;
+- inventário, equipamento por instância, aplicação de efeitos, combate, deploy e atualização do GPT ao vivo permanecem fora do escopo.
+
+Status: implementada e validada na Fase 1F; revisão e integração rastreadas pelo PR correspondente

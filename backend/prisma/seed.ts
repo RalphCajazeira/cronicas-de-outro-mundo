@@ -4,6 +4,7 @@ import { ActorContentState, ActorStatus, ActorType, CampaignStatus, ContentStatu
 import { createActorMechanicalState, loadActorMechanicalSheet } from '../src/modules/actors/actor-mechanics.service.js';
 import { getInitialAttributePreset } from '../src/modules/rules/core-v1/index.js';
 import { ensureCoreV1RulesetVersion } from '../src/modules/rules/ruleset.registry.js';
+import { publishContentVersion } from '../src/modules/content/content-publication.service.js';
 
 const connectionString = process.env.DATABASE_URL;
 if (connectionString === undefined || connectionString.length === 0) throw new Error('Invalid application configuration');
@@ -45,15 +46,44 @@ async function main() {
     } else {
       await loadActorMechanicalSheet(transaction, lyra.id);
     }
-    const breezeStep = await transaction.contentDefinition.upsert({
-      where: { worldId_campaignId_contentType_code: { worldId: world.id, campaignId: campaign.id, contentType: ContentType.SKILL, code: 'wind_breeze_step' } },
-      update: {},
-      create: { worldId: world.id, campaignId: campaign.id, code: 'wind_breeze_step', name: 'Passo da Brisa', contentType: ContentType.SKILL, description: 'Um deslocamento leve guiado pela afinidade com o vento.', mechanics: { effect: 'mobility', movementBonus: 2 }, requirements: { level: 1 }, presentation: { element: 'wind' }, tags: ['wind', 'movement'], schemaVersion: 1, status: ContentStatus.ACTIVE },
+    const breezeDescription = 'Um deslocamento leve guiado pela afinidade com o vento.';
+    const breezePresentation = { summary: 'Movimento leve guiado pelo vento.' };
+    const breezeTags = ['wind', 'movement'];
+    const breezeStep = await publishContentVersion(transaction, {
+      worldId: world.id,
+      campaignId: campaign.id,
+      code: 'wind_breeze_step',
+      contentType: ContentType.SKILL,
+      name: 'Passo da Brisa',
+      description: breezeDescription,
+      profile: {
+        schemaVersion: 1,
+        rulesetCode: 'core-v1',
+        profileMode: 'mechanical',
+        contentKind: 'skill',
+        code: 'wind_breeze_step',
+        name: 'Passo da Brisa',
+        description: breezeDescription,
+        presentation: breezePresentation,
+        tags: breezeTags,
+        tier: 1,
+        rarity: 'common',
+        activation: { type: 'active' },
+        cost: { type: 'sp', amount: 3 },
+        actionProfile: 'normal',
+        effects: [{ type: 'movement', from: 'near', to: 'engaged', maximumTransitions: 1 }],
+      },
+      presentation: breezePresentation,
+      tags: breezeTags,
+      status: ContentStatus.ACTIVE,
+      metadata: {},
     });
+    const breezeVersion = breezeStep.versions[0];
+    if (breezeVersion === undefined) throw new Error('Seed content publication is incomplete');
     await transaction.actorContent.upsert({
       where: { actorId_contentDefinitionId: { actorId: ralph.id, contentDefinitionId: breezeStep.id } },
       update: { state: ActorContentState.LEARNING, rank: 1, progress: 10, mastery: 0, notes: 'Treino inicial com Lyra' },
-      create: { actorId: ralph.id, contentDefinitionId: breezeStep.id, state: ActorContentState.LEARNING, rank: 1, progress: 10, mastery: 0, notes: 'Treino inicial com Lyra' },
+      create: { actorId: ralph.id, contentDefinitionId: breezeStep.id, contentVersionId: breezeVersion.id, state: ActorContentState.LEARNING, rank: 1, progress: 10, mastery: 0, notes: 'Treino inicial com Lyra' },
     });
   });
 }

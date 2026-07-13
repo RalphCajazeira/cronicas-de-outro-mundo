@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import {
+  CORE_V1_PASSIVE_MODIFIER_TARGETS,
+  CORE_V1_SECONDARY_MODIFIER_CODES,
+} from '../rules/core-v1/core-v1.content-mechanics.config.js';
 import { ACTIVE_API_ROUTES, getOfficialContract } from './openapi.routes.js';
 
 interface Operation { operationId?: string; security?: unknown; parameters?: Array<Schema & { name?: string; in?: string; required?: boolean }>; requestBody?: { content?: { 'application/json'?: { schema?: Schema } } }; description?: string; responses?: Record<string, unknown> }
@@ -176,7 +180,8 @@ describe('official OpenAPI contract', () => {
     const requestSchemas = operations().map(({ operation }) => resolveSchema(operation.requestBody?.content?.['application/json']?.schema)).filter((schema) => Object.keys(schema).length > 0);
     expect(requestSchemas.every((schema) => schema.additionalProperties === false)).toBe(true);
     const enumStrings = collectEnums(contract).flat().filter((value): value is string => typeof value === 'string');
-    expect(enumStrings.every((value) => value === value.toLowerCase())).toBe(true);
+    const canonicalCamelCase = new Set([...CORE_V1_SECONDARY_MODIFIER_CODES, ...CORE_V1_PASSIVE_MODIFIER_TARGETS]);
+    expect(enumStrings.every((value) => value === value.toLowerCase() || canonicalCamelCase.has(value as never))).toBe(true);
   });
 
   it('documents structured startGame without request unions and with reusable closed objects', () => {

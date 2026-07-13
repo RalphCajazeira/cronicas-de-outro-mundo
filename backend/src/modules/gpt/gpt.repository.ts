@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
-  ActorContentState, ActorStatus, ActorType, CampaignStatus, ContentStatus, ContentType, Prisma, type ContentDefinition,
+  ActorContentState, ActorStatus, ActorType, CampaignStatus, ContentStatus, ContentType, Prisma,
 } from '../../generated/prisma/client.js';
 import { prisma } from '../../shared/database/prisma.js';
 import { resolveBase, resolvePlayer, resolveScope, type DbClient } from '../../shared/database/game-scope.js';
@@ -9,6 +9,15 @@ import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import { scopedActorKey } from '../actors/actors.repository.js';
 import { createActorMechanicalState, loadActorMechanicalSheet } from '../actors/actor-mechanics.service.js';
 import { findScopedContent } from '../content/content.repository.js';
+import {
+  contentVersionPublicInclude,
+  publicContentDto,
+  publicContentVersionDto,
+  publishContentVersion,
+  publishedContentInclude,
+  type PublishedContent,
+  type PublicContentVersion,
+} from '../content/content-publication.service.js';
 import { ensureCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
 import type {
   CreateEventInput, ListCampaignActorsInput, LoadGameInput, ManageActorContentInput,
@@ -27,7 +36,10 @@ const actorSelect = {
   appearance: true, personality: true,
 } satisfies Prisma.ActorSelect;
 
-const contentInclude = { contentDefinition: true } satisfies Prisma.ActorContentInclude;
+const contentInclude = {
+  contentDefinition: true,
+  contentVersion: { include: contentVersionPublicInclude },
+} satisfies Prisma.ActorContentInclude;
 
 function requestHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
@@ -74,18 +86,13 @@ async function actorDto(client: DbClient, actor: Record<string, unknown>) {
   };
 }
 
-function contentDto(content: Record<string, unknown>) {
+function actorContentDto(link: Record<string, unknown> & {
+  contentDefinition: Record<string, unknown>;
+  contentVersion: PublicContentVersion;
+}) {
   return {
-    code: content.code, name: content.name, contentType: normalizeEnum(content.contentType as string),
-    description: content.description, mechanics: content.mechanics, requirements: content.requirements,
-    presentation: content.presentation, tags: content.tags, schemaVersion: content.schemaVersion,
-    status: normalizeEnum(content.status as string), metadata: content.metadata,
-  };
-}
-
-function actorContentDto(link: Record<string, unknown> & { contentDefinition: Record<string, unknown> }) {
-  return {
-    ...contentDto(link.contentDefinition), state: normalizeEnum(link.state as string), rank: link.rank,
+    ...publicContentVersionDto(link.contentDefinition as Pick<PublishedContent, 'code' | 'contentType' | 'status'>, link.contentVersion),
+    state: normalizeEnum(link.state as string), rank: link.rank,
     progress: link.progress, mastery: link.mastery, equipped: link.equipped, quantity: link.quantity,
     notes: link.notes, linkMetadata: link.metadata,
   };
@@ -167,46 +174,47 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function assertInitialEquipment(
-  definition: { contentType: ContentType; mechanics: Prisma.JsonValue },
+  definition: { contentType: ContentType; version: PublicContentVersion },
   link: StartGameInput['initialContentPackages'][number]['protagonistLink'],
 ) {
   if (link?.equipped !== true) return;
-  const mechanics = isRecord(definition.mechanics) ? definition.mechanics : {};
-  const behavior = mechanics.equipBehavior;
   const type = normalizeEnum(definition.contentType);
-  const disallowed = type === 'race' || type === 'class'
-    || (type === 'status_effect' && mechanics.permanence === 'permanent')
-    || mechanics.passive === true || behavior === 'none';
-  const allowed: Record<string, string[]> = {
-    weapon: ['wieldable'], armor: ['wearable'], shield: ['wieldable', 'wearable'], item: ['readied', 'activatable'],
-    spell: ['prepared', 'activatable'], talent: ['activatable'], skill: ['activatable'],
-  };
-  if (disallowed || typeof behavior !== 'string' || !(allowed[type]?.includes(behavior) ?? false)) throw new ConflictError('Initial equipment is incompatible with the content definition');
+  const profile = isRecord(definition.version.profile) ? definition.version.profile : null;
+  const directlySelectable = ['weapon', 'armor', 'shield', 'clothing'].includes(type);
+  const activation = profile !== null && isRecord(profile.activation) ? profile.activation.type : null;
+  const activatable = ['spell', 'skill', 'talent', 'item', 'consumable'].includes(type)
+    && profile?.profileMode === 'mechanical' && activation !== 'passive';
+  if (!directlySelectable && !activatable) throw new ConflictError('Initial equipment is incompatible with the content profile');
 }
 
 function assertPersistedRequirements(
-  definition: { requirements: Prisma.JsonValue },
+  version: PublicContentVersion,
   link: StartGameInput['initialContentPackages'][number]['protagonistLink'],
   linkedKnown: Set<string>,
   attributes: Record<string, unknown>,
 ) {
-  if (link === undefined || !['known', 'mastered'].includes(link.state) || !isRecord(definition.requirements)) return;
-  const requiredContent = definition.requirements.requiredContent;
+  const profile = isRecord(version.profile) ? version.profile : null;
+  const requirements = profile !== null && isRecord(profile.requirements) ? profile.requirements : null;
+  if (link === undefined || !['known', 'mastered'].includes(link.state) || requirements === null) return;
+  const requiredContent = requirements.requiredContent;
   if (Array.isArray(requiredContent)) {
     for (const required of requiredContent) {
-      if (!isRecord(required) || typeof required.contentType !== 'string' || typeof required.code !== 'string'
-        || !linkedKnown.has(`${required.contentType}:${required.code}`)) {
+      if (!isRecord(required) || typeof required.contentKind !== 'string' || typeof required.code !== 'string'
+        || !linkedKnown.has(`${required.contentKind}:${required.code}`)) {
         throw new ConflictError('Initial content requirements are not met');
       }
     }
   }
-  const minimumAttributes = definition.requirements.minimumAttributes;
+  const minimumAttributes = requirements.minimumPrimaryAttributes;
   if (isRecord(minimumAttributes)) {
     for (const [attribute, minimum] of Object.entries(minimumAttributes)) {
       if (typeof minimum !== 'number' || typeof attributes[attribute] !== 'number' || attributes[attribute] < minimum) {
         throw new ConflictError('Initial attribute requirements are not met');
       }
     }
+  }
+  if (typeof requirements.minimumLevel === 'number' && requirements.minimumLevel > 1) {
+    throw new ConflictError('Initial level requirements are not met');
   }
 }
 
@@ -312,7 +320,7 @@ export const prismaGptRepository: GptRepository = {
       });
 
       const resolvedPackages: Array<{
-        definition: ContentDefinition;
+        definition: PublishedContent;
         link: StartGameInput['initialContentPackages'][number]['protagonistLink'];
         scope: 'world' | 'campaign';
       }> = [];
@@ -322,8 +330,12 @@ export const prismaGptRepository: GptRepository = {
         if (definitionInput.mode === 'reuse') {
           const definition = await transaction.contentDefinition.findFirst({
             where: { worldId: world.id, campaignId: null, contentType: type, code: definitionInput.code },
+            include: publishedContentInclude,
           });
           if (definition === null) throw new NotFoundError('Content');
+          const version = definition.versions[0];
+          if (definition.status !== ContentStatus.ACTIVE || version === undefined) throw new ConflictError('Reused content is not an active publication');
+          if (version.rulesetVersionId !== campaign.rulesetVersionId) throw new ConflictError('Reused content is not compatible with the Campaign ruleset');
           resolvedPackages.push({ definition, link: item.protagonistLink, scope: definitionInput.scope });
           continue;
         }
@@ -340,15 +352,12 @@ export const prismaGptRepository: GptRepository = {
           if (global !== null && definitionInput.overridesWorldDefinition !== true) throw new ConflictError('Campaign content requires an explicit World override');
           if (global === null && definitionInput.overridesWorldDefinition === true) throw new ConflictError('World content to override was not found');
         }
-        const definition = await transaction.contentDefinition.create({
-          data: {
-            worldId: world.id, campaignId, code: definitionInput.code, contentType: type,
-            name: definitionInput.name ?? '', ...(definitionInput.description === undefined ? {} : { description: definitionInput.description }),
-            mechanics: inputJson(definitionInput.mechanics ?? {}), requirements: inputJson(definitionInput.requirements ?? {}),
-            presentation: inputJson(definitionInput.presentation ?? {}), tags: inputJson(definitionInput.tags ?? []),
-            schemaVersion: definitionInput.schemaVersion ?? 1, status: ContentStatus.ACTIVE,
-            metadata: inputJson(definitionInput.metadata ?? {}),
-          },
+        const definition = await publishContentVersion(transaction, {
+          worldId: world.id, campaignId, code: definitionInput.code, contentType: type,
+          name: definitionInput.name ?? '', description: definitionInput.description ?? null,
+          profile: definitionInput.profile, presentation: definitionInput.presentation ?? {},
+          tags: definitionInput.tags ?? [], status: ContentStatus.ACTIVE,
+          metadata: definitionInput.metadata ?? {},
         });
         resolvedPackages.push({ definition, link: item.protagonistLink, scope: definitionInput.scope });
       }
@@ -359,18 +368,20 @@ export const prismaGptRepository: GptRepository = {
         && ['required', 'optional'].includes(input.campaignConfiguration.classModel.startingClass)) {
         const linkedClasses = resolvedPackages.filter((item) => item.definition.contentType === ContentType.CLASS && item.link !== undefined);
         if (linkedClasses.length === 1 && input.protagonist.className !== undefined && input.protagonist.className !== null
-          && linkedClasses[0]?.definition.name !== input.protagonist.className) {
+          && linkedClasses[0]?.definition.versions[0]?.name !== input.protagonist.className) {
           throw new ConflictError('Mechanical class name does not match the persisted class definition');
         }
       }
       const attributes = input.protagonist.primaryAttributes;
       for (const item of resolvedPackages) {
         if (item.link === undefined) continue;
-        assertInitialEquipment(item.definition, item.link);
-        assertPersistedRequirements(item.definition, item.link, linkedKnown, attributes);
+        const version = item.definition.versions[0];
+        if (version === undefined) throw new ConflictError('Content definition has no published version');
+        assertInitialEquipment({ contentType: item.definition.contentType, version }, item.link);
+        assertPersistedRequirements(version, item.link, linkedKnown, attributes);
         await transaction.actorContent.create({
           data: {
-            actorId: protagonist.id, contentDefinitionId: item.definition.id,
+            actorId: protagonist.id, contentDefinitionId: item.definition.id, contentVersionId: version.id,
             state: item.link.state.toUpperCase() as ActorContentState, rank: item.link.rank, progress: item.link.progress,
             mastery: item.link.mastery, equipped: item.link.equipped, quantity: item.link.quantity,
             ...(item.link.notes === undefined ? {} : { notes: item.link.notes }), metadata: inputJson(item.link.metadata ?? {}),
@@ -463,17 +474,13 @@ export const prismaGptRepository: GptRepository = {
         campaignId = campaign.id;
       }
       const type = input.contentType.toUpperCase() as ContentType;
-      const existing = await transaction.contentDefinition.findFirst({ where: { worldId: world.id, campaignId, contentType: type, code: input.code } });
-      const data = {
-        name: input.name, description: input.description, mechanics: inputJson(input.mechanics),
-        requirements: inputJson(input.requirements), presentation: inputJson(input.presentation),
-        tags: inputJson(input.tags), schemaVersion: input.schemaVersion, status: input.status.toUpperCase() as ContentStatus,
-        metadata: inputJson(input.metadata ?? {}),
-      };
-      const content = existing === null
-        ? await transaction.contentDefinition.create({ data: { worldId: world.id, campaignId, code: input.code, contentType: type, ...data } })
-        : await transaction.contentDefinition.update({ where: { id: existing.id }, data });
-      return contentDto(content);
+      const content = await publishContentVersion(transaction, {
+        worldId: world.id, campaignId, contentType: type, code: input.code,
+        name: input.name, description: input.description, profile: input.profile,
+        presentation: input.presentation, tags: input.tags,
+        status: input.status.toUpperCase() as ContentStatus, metadata: input.metadata ?? {},
+      });
+      return publicContentDto(content);
     });
   },
 
@@ -484,17 +491,45 @@ export const prismaGptRepository: GptRepository = {
       if (input.operation === 'list') {
         const links = await client.actorContent.findMany({
           where: { actorId: actor.id }, include: contentInclude,
-          orderBy: [{ contentDefinition: { name: 'asc' } }, { contentDefinition: { contentType: 'asc' } }, { contentDefinition: { code: 'asc' } }],
+          orderBy: [{ contentVersion: { name: 'asc' } }, { contentDefinition: { contentType: 'asc' } }, { contentDefinition: { code: 'asc' } }],
         });
         return links.map(actorContentDto);
       }
-      const definition = await findScopedContent(client, { worldId: world.id, campaignId: campaign.id }, input.contentRef ?? '', input.contentType ?? 'other');
-      const link = await client.actorContent.findUnique({ where: { actorId_contentDefinitionId: { actorId: actor.id, contentDefinitionId: definition.id } }, include: contentInclude });
+      const type = (input.contentType ?? 'other').toUpperCase() as ContentType;
+      let link = await client.actorContent.findFirst({
+        where: {
+          actorId: actor.id,
+          contentDefinition: {
+            worldId: world.id, campaignId: campaign.id, contentType: type, code: input.contentRef ?? '',
+          },
+        },
+        include: contentInclude,
+      });
+      link ??= await client.actorContent.findFirst({
+        where: {
+          actorId: actor.id,
+          contentDefinition: {
+            worldId: world.id, campaignId: null, contentType: type, code: input.contentRef ?? '',
+          },
+        },
+        include: contentInclude,
+      });
       if (input.operation === 'get') {
         if (link === null) throw new NotFoundError('Actor content');
         return actorContentDto(link);
       }
-      return { actor, definition, link };
+      if (['update', 'equip', 'unequip', 'remove'].includes(input.operation)) {
+        if (link === null) throw new NotFoundError('Actor content');
+        return { actor, definition: link.contentDefinition, link };
+      }
+      const definition = await findScopedContent(client, {
+        worldId: world.id, campaignId: campaign.id, rulesetVersionId: campaign.rulesetVersionId,
+      }, input.contentRef ?? '', input.contentType ?? 'other');
+      const existingLink = await client.actorContent.findUnique({
+        where: { actorId_contentDefinitionId: { actorId: actor.id, contentDefinitionId: definition.id } },
+        include: contentInclude,
+      });
+      return { actor, definition, link: existingLink };
     };
 
     if (['get', 'list'].includes(input.operation)) return read(prisma);
@@ -511,9 +546,17 @@ export const prismaGptRepository: GptRepository = {
       const changes = linkUpdateData(input);
       if (input.operation === 'equip') changes.equipped = true;
       if (input.operation === 'unequip') changes.equipped = false;
+      if (['update', 'equip', 'unequip'].includes(input.operation)) {
+        if (link === null) throw new NotFoundError('Actor content');
+        await transaction.actorContent.update({ where: { id: link.id }, data: changes });
+        const updated = await transaction.actorContent.findUniqueOrThrow({ where: { id: link.id }, include: contentInclude });
+        return actorContentDto(updated);
+      }
       const defaultState = input.operation === 'learn' ? ActorContentState.LEARNING : ActorContentState.KNOWN;
+      const currentVersion = 'versions' in definition ? definition.versions[0] : undefined;
+      if (currentVersion === undefined) throw new ConflictError('Content definition has no published version');
       const createData: Prisma.ActorContentUncheckedCreateInput = {
-        actorId: actor.id, contentDefinitionId: definition.id,
+        actorId: actor.id, contentDefinitionId: definition.id, contentVersionId: currentVersion.id,
         state: input.changes?.state?.toUpperCase() as ActorContentState | undefined ?? defaultState,
         rank: input.changes?.rank ?? (input.operation === 'grant' ? 1 : 0), progress: input.changes?.progress ?? 0,
         mastery: input.changes?.mastery ?? 0, equipped: input.changes?.equipped ?? false,

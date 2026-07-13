@@ -2,6 +2,7 @@ import { NotFoundError } from '../../shared/errors/app-error.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import type { CampaignReference } from '../../shared/database/game-scope.js';
 import type { ActorContentRecord, ActorRecord, ActorRepository } from './actors.types.js';
+import { publicContentVersionDto } from '../content/content-publication.service.js';
 
 export function normalizeActor(actor: ActorRecord) {
   return { code: actor.code, name: actor.name, actorType: normalizeEnum(actor.actorType), species: actor.species,
@@ -12,11 +13,10 @@ export function normalizeActor(actor: ActorRecord) {
 
 export function normalizeActorContent(item: ActorContentRecord) {
   const definition = item.contentDefinition;
-  return { code: definition.code, name: definition.name, contentType: normalizeEnum(definition.contentType),
-    description: definition.description, state: normalizeEnum(item.state), rank: item.rank, progress: item.progress,
+  return { ...publicContentVersionDto(definition, item.contentVersion),
+    state: normalizeEnum(item.state), rank: item.rank, progress: item.progress,
     mastery: item.mastery, equipped: item.equipped, quantity: item.quantity, notes: item.notes,
-    mechanics: definition.mechanics, requirements: definition.requirements, presentation: definition.presentation,
-    tags: definition.tags, schemaVersion: definition.schemaVersion, status: normalizeEnum(definition.status) };
+    linkMetadata: item.metadata };
 }
 
 export function createActorsService(repository: ActorRepository) {

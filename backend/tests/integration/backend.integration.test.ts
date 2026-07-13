@@ -3,13 +3,14 @@ import { createHash } from 'node:crypto';
 import process from 'node:process';
 import request from 'supertest';
 import { afterAll, describe, expect, it } from 'vitest';
-import { ActorContentState, ActorType, CampaignStatus, ContentStatus, ContentType } from '../../src/generated/prisma/client.js';
+import { ActorContentState, ActorType, CampaignStatus, ContentStatus, ContentType, type Prisma } from '../../src/generated/prisma/client.js';
 import { createApp } from '../../src/app.js';
 import { parseConfig } from '../../src/config/env.js';
 import { prismaActorRepository } from '../../src/modules/actors/actors.repository.js';
 import { createActorMechanicalState, recomputeActorDerivedSnapshot } from '../../src/modules/actors/actor-mechanics.service.js';
 import type { ActorRepository } from '../../src/modules/actors/actors.types.js';
 import { prismaContentRepository } from '../../src/modules/content/content.repository.js';
+import { publishContentVersion } from '../../src/modules/content/content-publication.service.js';
 import { prismaGptRepository } from '../../src/modules/gpt/gpt.repository.js';
 import { canonicalize, jsonByteSize } from '../../src/modules/gpt/gpt.start-game.js';
 import { prismaReadinessCheck } from '../../src/modules/health/health.repository.js';
@@ -22,6 +23,7 @@ const config = parseConfig(process.env);
 const dependencies = { actorRepository: prismaActorRepository, contentRepository: prismaContentRepository, gptRepository: prismaGptRepository, readiness: prismaReadinessCheck };
 const app = createApp(config, dependencies);
 const authenticated = (path: string) => request(app).get(path).set('x-rpg-key', config.RPG_API_KEY);
+const post = (path: string, body: object) => request(app).post(path).set('x-rpg-key', config.RPG_API_KEY).send({ ...seedScope, ...body });
 function bodyRecord(response: { body: unknown }): Record<string, unknown> {
   return response.body !== null && typeof response.body === 'object' ? response.body as Record<string, unknown> : {};
 }
@@ -45,6 +47,77 @@ async function createMechanicalActor(input: {
     await createActorMechanicalState(transaction, { actorId: actor.id, primaryAttributes: balancedPrimaryAttributes });
     return actor;
   });
+}
+
+function weaponProfile(code: string, name: string, description = 'Arma inicial.') {
+  return {
+    schemaVersion: 1 as const, rulesetCode: 'core-v1' as const, profileMode: 'mechanical' as const,
+    contentKind: 'weapon' as const, code, name, description, presentation: {}, tags: ['weapon'],
+    tier: 1, rarity: 'common' as const, activation: { type: 'active' as const }, cost: { type: 'none' as const },
+    actionProfile: 'normal' as const, targeting: { type: 'single_target' as const, rangeBand: 'near' as const, maxTargets: 1 },
+    damageComponents: [{ id: `${code}-physical`, channel: 'physical' as const, element: null, baseDamage: 4, scaling: 'full' as const, canCrit: true }],
+    handedness: 'two_handed' as const, weaponTags: ['weapon'],
+  };
+}
+
+function passiveProfile(contentKind: 'talent' | 'class', code: string, name: string) {
+  return {
+    schemaVersion: 1 as const, rulesetCode: 'core-v1' as const, profileMode: 'mechanical' as const,
+    contentKind, code, name, tier: 1, rarity: 'common' as const,
+    activation: { type: 'passive' as const }, cost: { type: 'none' as const },
+    ...(contentKind === 'class'
+      ? { grants: [{ contentKind: 'skill' as const, code: 'quiet_step' }] }
+      : { passiveModifiers: [{ target: 'accuracy' as const, amount: 1, sourceRule: 'content_intrinsic' as const }] }),
+  };
+}
+
+function activeProfile(contentKind: 'skill' | 'spell', code: string, name: string, requirements?: Record<string, unknown>) {
+  return {
+    schemaVersion: 1 as const, rulesetCode: 'core-v1' as const, profileMode: 'mechanical' as const,
+    contentKind, code, name, tier: 1, rarity: 'common' as const,
+    activation: { type: 'active' as const }, cost: { type: 'sp' as const, amount: 3 }, actionProfile: 'quick' as const,
+    effects: [{ type: 'movement' as const, from: 'near' as const, to: 'engaged' as const, maximumTransitions: 1 }],
+    ...(requirements === undefined ? {} : { requirements }),
+  };
+}
+
+function canonicalProfile(contentKind: string, code: string, name: string): unknown {
+  const identity = { schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical', contentKind, code, name };
+  const passive = { tier: 1, rarity: 'common', activation: { type: 'passive' }, cost: { type: 'none' } };
+  if (contentKind === 'weapon') return weaponProfile(code, name, 'Canonical test content.');
+  if (contentKind === 'spell' || contentKind === 'skill') return activeProfile(contentKind, code, name);
+  if (contentKind === 'armor') return { ...identity, ...passive, defense: { physicalFlatDefense: 3 }, equipmentSlots: ['chest'] };
+  if (contentKind === 'shield') return { ...identity, ...passive, rarity: 'uncommon', defense: { blockValue: 3 }, equipmentSlots: ['off_hand'], effects: [{ type: 'grant_reaction', reactionKind: 'block', reactionDepth: 1 }] };
+  if (contentKind === 'clothing') return { ...identity, profileMode: 'narrative' };
+  if (contentKind === 'talent') return { ...identity, ...passive, passiveModifiers: [{ target: 'accuracy', amount: 1, sourceRule: 'content_intrinsic' }] };
+  if (contentKind === 'item') return { ...identity, ...passive, passiveModifiers: [{ target: 'carryingCapacity', amount: 10, sourceRule: 'equipped_content' }] };
+  if (contentKind === 'consumable') return {
+    ...identity, tier: 1, rarity: 'common', activation: { type: 'active' }, cost: { type: 'none' },
+    actionProfile: 'normal', consumable: true,
+    effects: [{ type: 'restore_resource', resource: 'hp', amount: 20, targeting: { type: 'self', rangeBand: 'self' } }],
+  };
+  if (contentKind === 'status_effect') return {
+    ...identity, ...passive, duration: { type: 'actions', value: 2 }, stacking: { type: 'refresh' },
+    passiveModifiers: [{ target: 'attackSpeedBps', amount: -100, sourceRule: 'status_effect' }],
+  };
+  if (contentKind === 'race') return { ...identity, ...passive, passiveModifiers: [{ target: 'vitality', amount: 1, sourceRule: 'content_intrinsic' }] };
+  if (contentKind === 'class') return { ...identity, ...passive, grants: [{ contentKind: 'skill', code: 'canonical_skill' }] };
+  if (contentKind === 'creature_template') return {
+    ...identity, ...passive,
+    template: { role: 'standard', primaryAttributeBudget: 81, contentRefs: [{ contentKind: 'skill', code: 'canonical_skill' }], tags: ['test'], limits: { maxContentRefs: 4, maxActiveAbilities: 2 } },
+  };
+  throw new Error(`Unsupported canonical fixture: ${contentKind}`);
+}
+
+async function publishTestContent(input: {
+  worldId: string; campaignId?: string | null; contentType: ContentType; code: string; name: string;
+  profile?: unknown; status?: ContentStatus;
+}) {
+  return prisma.$transaction((transaction) => publishContentVersion(transaction, {
+    worldId: input.worldId, campaignId: input.campaignId ?? null, contentType: input.contentType,
+    code: input.code, name: input.name, description: null, profile: input.profile,
+    presentation: {}, tags: [], status: input.status ?? ContentStatus.ACTIVE, metadata: {},
+  }));
 }
 
 function structuredStart(prefix: string, genre = 'fantasy') {
@@ -71,7 +144,8 @@ function structuredStart(prefix: string, genre = 'fantasy') {
     initialContentPackages: [{
       definition: {
         mode: 'create', scope: 'world', contentType: 'weapon', code: cyberpunk ? 'smart-pistol' : 'longbow', name: cyberpunk ? 'Pistola Inteligente' : 'Arco Longo',
-        description: 'Arma inicial.', mechanics: { equipBehavior: 'wieldable' }, requirements: {}, presentation: {}, tags: ['weapon'], schemaVersion: 1, status: 'active', metadata: {},
+        description: 'Arma inicial.', profile: weaponProfile(cyberpunk ? 'smart-pistol' : 'longbow', cyberpunk ? 'Pistola Inteligente' : 'Arco Longo'),
+        presentation: {}, tags: ['weapon'], status: 'active', metadata: {},
       },
       protagonistLink: { state: 'known', rank: 0, progress: 0, mastery: 0, equipped: true, quantity: 1, metadata: { slotHint: 'hands' } },
     }],
@@ -155,12 +229,20 @@ describe('migration and PostgreSQL schema', () => {
     expect(migration[0]?.finished_at).toBeInstanceOf(Date);
   });
 
+  it('records the Phase 1F content versioning migration as successfully applied', async () => {
+    const migration = await prisma.$queryRaw<Array<{ finished_at: Date | null }>>`
+      SELECT finished_at FROM "_prisma_migrations"
+      WHERE migration_name = '20260713230000_engine_v1_content_versioning' AND rolled_back_at IS NULL
+    `;
+    expect(migration[0]?.finished_at).toBeInstanceOf(Date);
+  });
+
   it('contains every principal table', async () => {
     const rows = await prisma.$queryRaw<Array<{ table_name: string }>>`
       SELECT table_name FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_name IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
+      WHERE table_schema = 'public' AND table_name IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
     `;
-    expect(rows.map((row) => row.table_name).sort()).toEqual(['Actor', 'ActorAttribute', 'ActorContent', 'ActorDerivedSnapshot', 'ActorResource', 'Campaign', 'ContentDefinition', 'GameEvent', 'IdempotencyRecord', 'Player', 'Ruleset', 'RulesetVersion', 'World']);
+    expect(rows.map((row) => row.table_name).sort()).toEqual(['Actor', 'ActorAttribute', 'ActorContent', 'ActorDerivedSnapshot', 'ActorResource', 'Campaign', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'GameEvent', 'IdempotencyRecord', 'Player', 'Ruleset', 'RulesetVersion', 'World']);
   });
 
   it('contains the principal foreign keys', async () => {
@@ -174,6 +256,9 @@ describe('migration and PostgreSQL schema', () => {
       'ActorAttribute_actorId_fkey', 'ActorResource_actorId_fkey',
       'ActorDerivedSnapshot_actorId_fkey', 'ActorDerivedSnapshot_rulesetVersionId_fkey',
       'ActorContent_actorId_fkey', 'ActorContent_contentDefinitionId_fkey',
+      'ContentProfileVersion_rulesetVersionId_fkey', 'ContentVersion_contentDefinitionId_fkey',
+      'ContentVersion_rulesetVersionId_fkey', 'ContentVersion_contentProfileVersionId_fkey',
+      'ActorContent_contentVersionId_contentDefinitionId_fkey',
     ]));
   });
 
@@ -189,12 +274,12 @@ describe('migration and PostgreSQL schema', () => {
     const tables = await prisma.$queryRaw<Array<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>>`
       SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
+      WHERE n.nspname = 'public' AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
     `;
-    expect(tables).toHaveLength(13);
+    expect(tables).toHaveLength(15);
     expect(tables.every((table) => table.relrowsecurity)).toBe(true);
     expect(tables.every((table) => !table.relforcerowsecurity)).toBe(true);
-    await expect(prisma.$queryRaw<Array<{ tablename: string }>>`SELECT tablename::text FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ActorContent', 'GameEvent', 'IdempotencyRecord')`).resolves.toHaveLength(0);
+    await expect(prisma.$queryRaw<Array<{ tablename: string }>>`SELECT tablename::text FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'GameEvent', 'IdempotencyRecord')`).resolves.toHaveLength(0);
   });
 
   it('does not grant table privileges to PUBLIC', async () => {
@@ -204,7 +289,7 @@ describe('migration and PostgreSQL schema', () => {
       JOIN pg_namespace n ON n.oid = c.relnamespace
       CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) privilege
       WHERE n.nspname = 'public'
-        AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
+        AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
         AND privilege.grantee = 0
     `;
     expect(rows[0]?.count).toBe(0);
@@ -236,17 +321,17 @@ describe('migration and PostgreSQL schema', () => {
 
 describe('idempotent seed', () => {
   async function counts() {
-    const [rulesets, rulesetVersions, players, worlds, campaigns, actors, attributes, resources, snapshots, definitions, links] = await Promise.all([
-      prisma.ruleset.count(), prisma.rulesetVersion.count(),
+    const [rulesets, rulesetVersions, contentProfileVersions, players, worlds, campaigns, actors, attributes, resources, snapshots, definitions, contentVersions, links] = await Promise.all([
+      prisma.ruleset.count(), prisma.rulesetVersion.count(), prisma.contentProfileVersion.count(),
       prisma.player.count(), prisma.world.count(), prisma.campaign.count(), prisma.actor.count(),
       prisma.actorAttribute.count(), prisma.actorResource.count(), prisma.actorDerivedSnapshot.count(),
-      prisma.contentDefinition.count(), prisma.actorContent.count(),
+      prisma.contentDefinition.count(), prisma.contentVersion.count(), prisma.actorContent.count(),
     ]);
-    return { rulesets, rulesetVersions, players, worlds, campaigns, actors, attributes, resources, snapshots, definitions, links };
+    return { rulesets, rulesetVersions, contentProfileVersions, players, worlds, campaigns, actors, attributes, resources, snapshots, definitions, contentVersions, links };
   }
 
   it('creates the expected initial records', async () => {
-    await expect(counts()).resolves.toEqual({ rulesets: 1, rulesetVersions: 1, players: 1, worlds: 1, campaigns: 1, actors: 2, attributes: 18, resources: 6, snapshots: 2, definitions: 1, links: 1 });
+    await expect(counts()).resolves.toEqual({ rulesets: 1, rulesetVersions: 1, contentProfileVersions: 1, players: 1, worlds: 1, campaigns: 1, actors: 2, attributes: 18, resources: 6, snapshots: 2, definitions: 1, contentVersions: 1, links: 1 });
   });
 
   it('keeps counts and the Ralph content link unchanged on a second seed', async () => {
@@ -257,7 +342,7 @@ describe('idempotent seed', () => {
     expect(result.status).toBe(0);
     await expect(counts()).resolves.toEqual(before);
 
-    const ralph = await prisma.actor.findFirstOrThrow({ where: { code: 'ralph' }, include: { attributes: true, resources: true, derivedSnapshot: true, content: { include: { contentDefinition: true } } } });
+    const ralph = await prisma.actor.findFirstOrThrow({ where: { code: 'ralph' }, include: { attributes: true, resources: true, derivedSnapshot: true, content: { include: { contentDefinition: true, contentVersion: true } } } });
     const lyraCount = await prisma.actor.count({ where: { code: 'lyra' } });
     const definitionCount = await prisma.contentDefinition.count({ where: { code: 'wind_breeze_step' } });
     expect(lyraCount).toBe(1);
@@ -267,6 +352,7 @@ describe('idempotent seed', () => {
     expect(ralph.resources).toHaveLength(3);
     expect(ralph.derivedSnapshot).not.toBeNull();
     expect(ralph.content[0]).toMatchObject({ state: 'LEARNING', rank: 1, progress: 10, mastery: 0, notes: 'Treino inicial com Lyra' });
+    expect(ralph.content[0]?.contentVersion).toMatchObject({ contentDefinitionId: ralph.content[0]?.contentDefinitionId, versionNumber: 1 });
   });
 });
 
@@ -323,6 +409,95 @@ describe('ruleset persistence and database immutability', () => {
   });
 });
 
+describe('content publication and database immutability', () => {
+  it('blocks profile/version mutation and stable identity changes in PostgreSQL', async () => {
+    const profileVersion = await prisma.contentProfileVersion.findUniqueOrThrow({ where: { code: 'core-v1-content-v1' } });
+    const content = await prisma.contentDefinition.findFirstOrThrow({
+      where: { code: 'wind_breeze_step' }, include: { versions: { orderBy: { versionNumber: 'desc' } } },
+    });
+    const version = content.versions[0]!;
+    await expect(prisma.contentProfileVersion.update({ where: { id: profileVersion.id }, data: { schemaVersion: 2 } }))
+      .rejects.toThrow(/ContentProfileVersion is immutable and cannot be updated or deleted/);
+    await expect(prisma.contentProfileVersion.delete({ where: { id: profileVersion.id } }))
+      .rejects.toThrow(/ContentProfileVersion is immutable and cannot be updated or deleted/);
+    await expect(prisma.contentVersion.update({ where: { id: version.id }, data: { name: 'Mutated' } }))
+      .rejects.toThrow(/ContentVersion is immutable and cannot be updated or deleted/);
+    await expect(prisma.contentVersion.delete({ where: { id: version.id } }))
+      .rejects.toThrow(/ContentVersion is immutable and cannot be updated or deleted/);
+    await expect(prisma.contentDefinition.update({ where: { id: content.id }, data: { code: 'mutated-code' } }))
+      .rejects.toThrow(/ContentDefinition identity fields are immutable/);
+    await expect(prisma.contentDefinition.update({ where: { id: content.id }, data: { status: ContentStatus.INACTIVE } }))
+      .resolves.toMatchObject({ status: ContentStatus.INACTIVE });
+    await prisma.contentDefinition.update({ where: { id: content.id }, data: { status: ContentStatus.ACTIVE } });
+  });
+
+  it('deduplicates equal snapshots and serializes different concurrent publications into sequential versions', async () => {
+    const world = await prisma.world.findFirstOrThrow({ where: { code: 'elarion' } });
+    const identicalInput = {
+      worldId: world.id, contentType: ContentType.SKILL, code: 'concurrent-identical', name: 'Concurrent Identical',
+      profile: activeProfile('skill', 'concurrent-identical', 'Concurrent Identical'),
+    };
+    const identical = await Promise.all([publishTestContent(identicalInput), publishTestContent(identicalInput)]);
+    expect(identical[0].id).toBe(identical[1].id);
+    await expect(prisma.contentVersion.count({ where: { contentDefinitionId: identical[0].id } })).resolves.toBe(1);
+    const lifecycle = await publishTestContent({ ...identicalInput, status: ContentStatus.ARCHIVED });
+    expect(lifecycle.status).toBe(ContentStatus.ARCHIVED);
+    await expect(prisma.contentVersion.count({ where: { contentDefinitionId: identical[0].id } })).resolves.toBe(1);
+
+    const code = 'concurrent-different';
+    const different = await Promise.all([
+      publishTestContent({ worldId: world.id, contentType: ContentType.SKILL, code, name: 'Concurrent A', profile: activeProfile('skill', code, 'Concurrent A') }),
+      publishTestContent({ worldId: world.id, contentType: ContentType.SKILL, code, name: 'Concurrent B', profile: activeProfile('skill', code, 'Concurrent B') }),
+    ]);
+    expect(different[0].id).toBe(different[1].id);
+    const versions = await prisma.contentVersion.findMany({ where: { contentDefinitionId: different[0].id }, orderBy: { versionNumber: 'asc' } });
+    expect(versions.map((item) => item.versionNumber)).toEqual([1, 2]);
+    expect(new Set(versions.map((item) => item.name))).toEqual(new Set(['Concurrent A', 'Concurrent B']));
+  });
+
+  it('keeps an actor on v1 while a new link receives v2 and rejects a mismatched definition/version pair', async () => {
+    const world = await prisma.world.findFirstOrThrow({ where: { code: 'elarion' } });
+    const [ralph, lyra] = await Promise.all([
+      prisma.actor.findFirstOrThrow({ where: { code: 'ralph', campaign: { code: 'main-campaign' } } }),
+      prisma.actor.findFirstOrThrow({ where: { code: 'lyra', campaign: { code: 'main-campaign' } } }),
+    ]);
+    const code = 'actor-version-pin';
+    const v1 = await publishTestContent({ worldId: world.id, contentType: ContentType.SKILL, code, name: 'Pinned V1', profile: activeProfile('skill', code, 'Pinned V1') });
+    const v1Version = v1.versions[0]!;
+    const lyraLink = await prisma.actorContent.create({ data: {
+      actorId: lyra.id, contentDefinitionId: v1.id, contentVersionId: v1Version.id, state: ActorContentState.KNOWN,
+    } });
+    const v2 = await publishTestContent({ worldId: world.id, contentType: ContentType.SKILL, code, name: 'Pinned V2', profile: activeProfile('skill', code, 'Pinned V2') });
+    const v2Version = v2.versions[0]!;
+    expect(v2Version.versionNumber).toBe(2);
+    const ralphLink = await prisma.actorContent.create({ data: {
+      actorId: ralph.id, contentDefinitionId: v2.id, contentVersionId: v2Version.id, state: ActorContentState.LEARNING,
+    } });
+    await prisma.actorContent.update({ where: { id: lyraLink.id }, data: { equipped: true, rank: 2 } });
+    await expect(prisma.actorContent.findUniqueOrThrow({ where: { id: lyraLink.id } })).resolves.toMatchObject({ contentVersionId: v1Version.id });
+    await expect(prisma.actorContent.findUniqueOrThrow({ where: { id: ralphLink.id } })).resolves.toMatchObject({ contentVersionId: v2Version.id });
+    const [lyraGet, ralphGet] = await Promise.all([
+      post('/api/v1/actors/lyra/content/manage', { operation: 'get', contentRef: code, contentType: 'skill' }),
+      post('/api/v1/actors/ralph/content/manage', { operation: 'get', contentRef: code, contentType: 'skill' }),
+    ]);
+    expect(lyraGet.body).toMatchObject({ code, name: 'Pinned V1', versionNumber: 1 });
+    expect(ralphGet.body).toMatchObject({ code, name: 'Pinned V2', versionNumber: 2 });
+    const unequipped = await post('/api/v1/actors/lyra/content/manage', {
+      operation: 'unequip', contentRef: code, contentType: 'skill', idempotencyKey: 'actor-pin-unequip-001',
+    });
+    expect(unequipped.body).toMatchObject({ name: 'Pinned V1', versionNumber: 1, equipped: false });
+    await expect(prisma.actorContent.findUniqueOrThrow({ where: { id: lyraLink.id } })).resolves.toMatchObject({ contentVersionId: v1Version.id });
+
+    const foreign = await publishTestContent({
+      worldId: world.id, contentType: ContentType.SKILL, code: 'actor-version-foreign', name: 'Foreign Version',
+      profile: activeProfile('skill', 'actor-version-foreign', 'Foreign Version'),
+    });
+    await expect(prisma.actorContent.create({ data: {
+      actorId: lyra.id, contentDefinitionId: foreign.id, contentVersionId: v2Version.id, state: ActorContentState.KNOWN,
+    } })).rejects.toThrow();
+  });
+});
+
 describe('complete API with real repositories', () => {
   it('serves health in memory without authentication', async () => {
     const response = await request(app).get('/health');
@@ -357,7 +532,7 @@ describe('complete API with real repositories', () => {
   it('returns Ralph content with the database enum normalized', async () => {
     const response = await authenticated(`/api/v1/characters/ralph/content?${seedScopeQuery}`);
     expect(response.status).toBe(200);
-    expect(response.body).toEqual([expect.objectContaining({ code: 'wind_breeze_step', state: 'learning', rank: 1, progress: 10, mastery: 0, notes: 'Treino inicial com Lyra' })]);
+    expect(response.body).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'wind_breeze_step', state: 'learning', rank: 1, progress: 10, mastery: 0, notes: 'Treino inicial com Lyra' })]));
     expect(JSON.stringify(response.body)).not.toContain('contentDefinition');
   });
 
@@ -367,6 +542,90 @@ describe('complete API with real repositories', () => {
     expect(lyra.body).toMatchObject({ code: 'lyra', actorType: 'spirit', status: 'active' });
     expect(content.body).toMatchObject({ code: 'wind_breeze_step', name: 'Passo da Brisa', contentType: 'skill', status: 'active' });
     expect(content.body).not.toHaveProperty('worldId');
+  });
+
+  it('rejects definitions without a version and versions incompatible with the Campaign ruleset', async () => {
+    const world = await prisma.world.findFirstOrThrow({ where: { code: 'elarion' } });
+    await prisma.contentDefinition.create({ data: {
+      worldId: world.id, code: 'http-missing-version', contentType: ContentType.SKILL, status: ContentStatus.ACTIVE,
+    } });
+    const missing = await authenticated(`/api/v1/content/http-missing-version?${seedScopeQuery}&contentType=skill`);
+    expect(missing.status).toBe(409);
+    expect(responseErrorMessage(missing)).toBe('Content definition has no published version');
+
+    const [alternate, profileVersion] = await Promise.all([
+      createAlternateRulesetVersion('content-read-incompatible'),
+      prisma.contentProfileVersion.findUniqueOrThrow({ where: { code: 'core-v1-content-v1' } }),
+    ]);
+    const profile = activeProfile('skill', 'http-incompatible-version', 'Incompatible Version');
+    await prisma.contentDefinition.create({ data: {
+      worldId: world.id, code: profile.code, contentType: ContentType.SKILL, status: ContentStatus.ACTIVE,
+      versions: { create: {
+        rulesetVersionId: alternate.id, contentProfileVersionId: profileVersion.id, versionNumber: 1,
+        schemaVersion: 1, profileMode: 'MECHANICAL', name: profile.name, profile: profile as unknown as Prisma.InputJsonValue,
+        presentation: {}, tags: [], metadata: {}, contentHash: 'd'.repeat(64),
+      } },
+    } });
+    const incompatible = await authenticated(`/api/v1/content/http-incompatible-version?${seedScopeQuery}&contentType=skill`);
+    expect(incompatible.status).toBe(409);
+    expect(responseErrorMessage(incompatible)).toBe('Content version is not compatible with the Campaign ruleset');
+  });
+
+  it.each([
+    'weapon', 'armor', 'shield', 'clothing', 'spell', 'skill', 'talent', 'item', 'consumable',
+    'status_effect', 'race', 'class', 'creature_template',
+  ] as const)('publishes canonical %s content through the HTTP contract', async (contentType) => {
+    const code = `http-${contentType.replaceAll('_', '-')}`;
+    const name = `HTTP ${contentType}`;
+    const response = await post('/api/v1/content/upsert', {
+      ...seedScope, campaignRef: null, idempotencyKey: `http-canonical-${contentType}-001`,
+      contentType, code, name, description: 'Canonical test content.',
+      profile: canonicalProfile(contentType, code, name), presentation: {},
+      tags: contentType === 'weapon' ? ['weapon'] : [], status: 'draft', metadata: {},
+    });
+    expect(response.status).toBe(200);
+    const responseBody = bodyRecord(response);
+    expect(responseBody).toMatchObject({ code, contentType, versionNumber: 1 });
+    expect(responseBody.profile).toMatchObject({ contentKind: contentType });
+    expect(JSON.stringify(response.body)).not.toMatch(/contentHash|configHash|contentDefinitionId|contentVersionId|rulesetVersionId|[0-9a-f]{8}-[0-9a-f-]{27}/i);
+  });
+
+  it('publishes generic narrative content with a null profile and rejects parallel free mechanics', async () => {
+    const generic = await post('/api/v1/content/upsert', {
+      ...seedScope, campaignRef: null, idempotencyKey: 'http-generic-material-001', contentType: 'material',
+      code: 'http-iron', name: 'Ferro', description: 'Material narrativo.', profile: null,
+      presentation: { appearance: 'Metal escuro.' }, tags: ['metal'], status: 'active', metadata: {},
+    });
+    expect(generic.status).toBe(200);
+    expect(generic.body).toMatchObject({ code: 'http-iron', contentType: 'material', profile: null, versionNumber: 1 });
+
+    const invalid = await post('/api/v1/content/upsert', {
+      ...seedScope, campaignRef: null, idempotencyKey: 'http-free-mechanics-001', contentType: 'skill',
+      code: 'http-free-mechanics', name: 'Free Mechanics', description: 'Inválido.',
+      profile: activeProfile('skill', 'http-free-mechanics', 'Free Mechanics'), presentation: {}, tags: [], status: 'draft',
+      mechanics: { damage: 999 }, requirements: { level: 1 }, schemaVersion: 99,
+    });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body).toMatchObject({ error: { code: 'INVALID_INPUT' } });
+    expect(JSON.stringify(invalid.body)).not.toContain('999');
+  });
+
+  it('returns structured profile issue paths for incompatible kinds and forbidden derived fields', async () => {
+    const base = {
+      ...seedScope, campaignRef: null, contentType: 'skill', code: 'http-invalid-profile', name: 'Invalid Profile',
+      description: 'Inválido.', presentation: {}, tags: [], status: 'draft', metadata: {},
+    };
+    const mismatch = await post('/api/v1/content/upsert', {
+      ...base, idempotencyKey: 'http-kind-mismatch-001', profile: activeProfile('spell', base.code, base.name),
+    });
+    const forbidden = await post('/api/v1/content/upsert', {
+      ...base, idempotencyKey: 'http-derived-field-001', profile: { ...activeProfile('skill', base.code, base.name), finalDamage: 999 },
+    });
+    expect(mismatch.status).toBe(400);
+    expect(forbidden.status).toBe(400);
+    expect(JSON.stringify(mismatch.body)).toContain('profile.contentKind');
+    expect(JSON.stringify(forbidden.body)).toContain('profile.finalDamage');
+    expect(JSON.stringify(forbidden.body)).not.toContain('999');
   });
 
   it('distinguishes invalid, internal UUID and valid missing code references', async () => {
@@ -396,7 +655,6 @@ describe('complete API with real repositories', () => {
 });
 
 describe('GPT v1 persistence with real transactions', () => {
-  const post = (path: string, body: object) => request(app).post(path).set('x-rpg-key', config.RPG_API_KEY).send({ ...seedScope, ...body });
   const patch = (path: string, body: object) => request(app).patch(path).set('x-rpg-key', config.RPG_API_KEY).send({ ...seedScope, ...body });
 
   it('does not infer the only persisted save when scope refs are absent', async () => {
@@ -538,7 +796,7 @@ describe('GPT v1 persistence with real transactions', () => {
       },
     });
     expect(JSON.stringify(event.payload)).not.toMatch(/excludedThemes|appearance|personality|origin|metadata|mechanics|requirements|presentation|idempotencyKey/);
-    expect(JSON.stringify(created.body)).not.toMatch(/"id"|playerId|worldId|campaignId|actorId|contentDefinitionId/);
+    expect(JSON.stringify(created.body)).not.toMatch(/playerId|worldId|campaignId|actorId|contentDefinitionId|contentVersionId|contentHash/);
   });
 
   it('reuses Player, World and global content without updating persisted values', async () => {
@@ -592,10 +850,10 @@ describe('GPT v1 persistence with real transactions', () => {
   it('matches className against the persisted public name of a reused mechanical class', async () => {
     const player = await prisma.player.findUniqueOrThrow({ where: { slug: 'new-player' } });
     const world = await prisma.world.findUniqueOrThrow({ where: { playerId_code: { playerId: player.id, code: 'new-world' } } });
-    const persistedClass = await prisma.contentDefinition.create({ data: {
+    const persistedClass = await publishTestContent({
       worldId: world.id, code: 'persisted-mage', name: 'Mago Persistido', contentType: ContentType.CLASS,
-      mechanics: { equipBehavior: 'none' }, status: ContentStatus.ACTIVE,
-    } });
+      profile: passiveProfile('class', 'persisted-mage', 'Mago Persistido'),
+    });
     const classLink = {
       definition: { mode: 'reuse', scope: 'world', code: persistedClass.code, contentType: 'class' },
       protagonistLink: { state: 'known', rank: 1, progress: 0, mastery: 0, equipped: false, quantity: 1, metadata: {} },
@@ -606,7 +864,7 @@ describe('GPT v1 persistence with real transactions', () => {
       classModel: { mode: 'mechanical', startingClass: 'required', progressionBasis: ['class', 'content'], description: 'Classe mecânica.' },
     };
     const coherent = await post('/api/v1/game/start', {
-      ...template, campaignConfiguration: mechanicalConfig, protagonist: { ...template.protagonist, className: persistedClass.name },
+      ...template, campaignConfiguration: mechanicalConfig, protagonist: { ...template.protagonist, className: persistedClass.versions[0]?.name },
     });
     expect(coherent.status).toBe(200);
 
@@ -629,20 +887,22 @@ describe('GPT v1 persistence with real transactions', () => {
     const otherPlayer = await prisma.player.findUniqueOrThrow({ where: { slug: 'neon-player' } });
     const otherWorld = await prisma.world.findUniqueOrThrow({ where: { playerId_code: { playerId: otherPlayer.id, code: 'neon-world' } } });
     const [attributeDefinition, passiveDefinition] = await Promise.all([
-      prisma.contentDefinition.create({ data: {
+      publishTestContent({
         worldId: world.id, code: 'attribute-gated', name: 'Técnica Intelectual', contentType: ContentType.SKILL,
-        mechanics: { equipBehavior: 'activatable' }, requirements: { minimumAttributes: { intellect: 7 } }, status: ContentStatus.ACTIVE,
-      } }),
-      prisma.contentDefinition.create({ data: {
+        profile: activeProfile('skill', 'attribute-gated', 'Técnica Intelectual', { minimumPrimaryAttributes: { intelligence: 11 } }),
+      }),
+      publishTestContent({
         worldId: world.id, code: 'passive-reuse', name: 'Passiva Persistida', contentType: ContentType.TALENT,
-        mechanics: { equipBehavior: 'none', passive: true }, status: ContentStatus.ACTIVE,
-      } }),
-      prisma.contentDefinition.create({ data: {
-        worldId: otherWorld.id, code: 'foreign-only', name: 'Outro World', contentType: ContentType.SKILL, status: ContentStatus.ACTIVE,
-      } }),
-      prisma.contentDefinition.create({ data: {
-        worldId: world.id, code: 'typed-only', name: 'Mesmo code, outro tipo', contentType: ContentType.SPELL, status: ContentStatus.ACTIVE,
-      } }),
+        profile: passiveProfile('talent', 'passive-reuse', 'Passiva Persistida'),
+      }),
+      publishTestContent({
+        worldId: otherWorld.id, code: 'foreign-only', name: 'Outro World', contentType: ContentType.SKILL,
+        profile: activeProfile('skill', 'foreign-only', 'Outro World'),
+      }),
+      publishTestContent({
+        worldId: world.id, code: 'typed-only', name: 'Mesmo code, outro tipo', contentType: ContentType.SPELL,
+        profile: activeProfile('spell', 'typed-only', 'Mesmo code, outro tipo'),
+      }),
     ]);
     const link = { state: 'known', rank: 1, progress: 0, mastery: 0, equipped: false, quantity: 1, metadata: {} };
     const attributeBody = campaignInNewWorld('attribute-reuse', [{
@@ -658,7 +918,7 @@ describe('GPT v1 persistence with real transactions', () => {
     }]);
     const passiveFailure = await post('/api/v1/game/start', passiveBody);
     expect(passiveFailure.status).toBe(409);
-    expect(responseErrorMessage(passiveFailure)).toBe('Initial equipment is incompatible with the content definition');
+    expect(responseErrorMessage(passiveFailure)).toBe('Initial equipment is incompatible with the content profile');
 
     const foreign = await post('/api/v1/game/start', campaignInNewWorld('foreign-reuse', [{
       definition: { mode: 'reuse', scope: 'world', code: 'foreign-only', contentType: 'skill' }, protagonistLink: link,
@@ -669,8 +929,10 @@ describe('GPT v1 persistence with real transactions', () => {
     }]));
     expect(wrongType.status).toBe(404);
 
-    const unchanged = await prisma.contentDefinition.findUniqueOrThrow({ where: { id: passiveDefinition.id } });
-    expect(unchanged).toMatchObject({ name: passiveDefinition.name, mechanics: passiveDefinition.mechanics, updatedAt: passiveDefinition.updatedAt });
+    const unchanged = await prisma.contentDefinition.findUniqueOrThrow({
+      where: { id: passiveDefinition.id }, include: { versions: { orderBy: { versionNumber: 'desc' }, take: 1 } },
+    });
+    expect(unchanged).toMatchObject({ updatedAt: passiveDefinition.updatedAt, versions: [{ name: 'Passiva Persistida', versionNumber: 1 }] });
   });
 
   it('enforces create and reuse existence policies for Player and World', async () => {
@@ -698,6 +960,7 @@ describe('GPT v1 persistence with real transactions', () => {
     const override = structuredStart('override').initialContentPackages[0]!;
     const overridePackage = { ...override, definition: {
       ...override.definition, scope: 'campaign', code: 'longbow', name: 'Arco Longo da Campanha', overridesWorldDefinition: true,
+      profile: { ...override.definition.profile, code: 'longbow', name: 'Arco Longo da Campanha' },
     } };
     const success = await post('/api/v1/game/start', campaignInNewWorld('override', [overridePackage]));
     expect(success.status).toBe(200);
@@ -706,6 +969,7 @@ describe('GPT v1 persistence with real transactions', () => {
     const missing = structuredStart('missing-override').initialContentPackages[0]!;
     const missingPackage = { ...missing, definition: {
       ...missing.definition, scope: 'campaign', code: 'absent-global', overridesWorldDefinition: true,
+      profile: { ...missing.definition.profile, code: 'absent-global' },
     } };
     const failedTemplate = structuredStart('missing-override');
     const failedBody = { ...failedTemplate, initialContentPackages: [missingPackage] };
@@ -728,16 +992,18 @@ describe('GPT v1 persistence with real transactions', () => {
     await expect(prisma.rulesetVersion.count({ where: { code: 'core-v1' } })).resolves.toBe(1);
   });
 
-  it('rolls back a global ContentDefinition P2002 without misreporting idempotency', async () => {
+  it('publishes one global definition idempotently when different campaigns race on the same snapshot', async () => {
     const basePackage = structuredStart('definition-race').initialContentPackages[0]!;
-    const sharedPackage = { ...basePackage, definition: { ...basePackage.definition, code: 'race-global-weapon', name: 'Arma Global Concorrente' } };
+    const sharedPackage = { ...basePackage, definition: {
+      ...basePackage.definition, code: 'race-global-weapon', name: 'Arma Global Concorrente',
+      profile: { ...basePackage.definition.profile, code: 'race-global-weapon', name: 'Arma Global Concorrente' },
+    } };
     const leftBody = campaignInNewWorld('definition-left', [sharedPackage]);
     const rightBody = campaignInNewWorld('definition-right', [sharedPackage]);
     const [left, right] = await Promise.all([post('/api/v1/game/start', leftBody), post('/api/v1/game/start', rightBody)]);
-    expect([left.status, right.status].sort()).toEqual([200, 409]);
-    const conflict = left.status === 409 ? left : right;
-    expect(responseErrorMessage(conflict)).toBe('Resource already exists');
-    expect(responseErrorMessage(conflict)).not.toBe('Idempotency key already used');
+    expect([left.status, right.status]).toEqual([200, 200]);
+    expect(bodyRecord(left).linkedContent).toEqual([expect.objectContaining({ code: 'race-global-weapon', versionNumber: 1 })]);
+    expect(bodyRecord(right).linkedContent).toEqual([expect.objectContaining({ code: 'race-global-weapon', versionNumber: 1 })]);
     await expect(prisma.contentDefinition.count({ where: { world: { code: 'new-world' }, code: sharedPackage.definition.code } })).resolves.toBe(1);
   });
 
@@ -753,10 +1019,10 @@ describe('GPT v1 persistence with real transactions', () => {
 
     const newPlayer = await prisma.player.findUniqueOrThrow({ where: { slug: 'new-player' } });
     const newWorld = await prisma.world.findUniqueOrThrow({ where: { playerId_code: { playerId: newPlayer.id, code: 'new-world' } } });
-    const passive = await prisma.contentDefinition.create({ data: {
-      worldId: newWorld.id, code: 'passive-reuse-test', name: 'Passiva de teste', contentType: ContentType.SKILL,
-      mechanics: { equipBehavior: 'none', passive: true }, status: ContentStatus.ACTIVE,
-    } });
+    const passive = await publishTestContent({
+      worldId: newWorld.id, code: 'passive-reuse-test', name: 'Passiva de teste', contentType: ContentType.TALENT,
+      profile: passiveProfile('talent', 'passive-reuse-test', 'Passiva de teste'),
+    });
     const beforeDefinitionCount = await prisma.contentDefinition.count({ where: { worldId: newWorld.id } });
     const linkTemplate = structuredStart('invalid-link');
     const invalidLinkBody = {
@@ -764,7 +1030,7 @@ describe('GPT v1 persistence with real transactions', () => {
       worldMode: 'reuse', worldRef: 'new-world', worldName: undefined, worldDescription: undefined, worldConfiguration: undefined,
       protagonist: { ...linkTemplate.protagonist, code: 'new-player' },
       initialContentPackages: [{
-        definition: { mode: 'reuse', scope: 'world', code: 'passive-reuse-test', contentType: 'skill' },
+        definition: { mode: 'reuse', scope: 'world', code: 'passive-reuse-test', contentType: 'talent' },
         protagonistLink: { state: 'known', rank: 1, progress: 0, mastery: 0, equipped: true, quantity: 1, metadata: {} },
       }],
     };
@@ -784,8 +1050,10 @@ describe('GPT v1 persistence with real transactions', () => {
     const multibyte = (index: number) => `${'😀'.repeat(48)}${String(index).padStart(2, '0')}`;
     const eventPackages = Array.from({ length: 24 }, (_, index) => {
       const basePackage = eventTemplate.initialContentPackages[0]!;
+      const code = `event-${String(index).padStart(2, '0')}-${'x'.repeat(80)}`;
+      const name = `Conteúdo ${index}`;
       return { ...basePackage, definition: {
-        ...basePackage.definition, code: `event-${String(index).padStart(2, '0')}-${'x'.repeat(80)}`, name: `Conteúdo ${index}`,
+        ...basePackage.definition, code, name, profile: { ...basePackage.definition.profile, code, name },
       } };
     });
     const eventBody = {
@@ -930,16 +1198,26 @@ describe('GPT v1 persistence with real transactions', () => {
 
   it('upserts a complete content definition idempotently', async () => {
     const body = {
-      idempotencyKey: 'integration-content-quiet-step-001', contentType: 'skill', code: 'quiet-step', name: 'Passo Silencioso',
-      description: 'Movimento discreto.', mechanics: { effect: 'stealth' }, requirements: { level: 1 }, presentation: { sound: 'none' },
-      tags: ['stealth'], schemaVersion: 1, status: 'active',
+      ...seedScope, idempotencyKey: 'integration-content-quiet-step-001', contentType: 'skill', code: 'quiet-step', name: 'Passo Silencioso',
+      description: 'Movimento discreto.', profile: {
+        ...activeProfile('skill', 'quiet-step', 'Passo Silencioso', { minimumLevel: 1 }),
+        description: 'Movimento discreto.', presentation: { sensory: 'Silencioso.' }, tags: ['stealth'],
+      }, presentation: { sensory: 'Silencioso.' }, tags: ['stealth'], status: 'active',
     };
     const first = await post('/api/v1/content/upsert', body);
     const retry = await post('/api/v1/content/upsert', body);
+    const deduplicated = await post('/api/v1/content/upsert', { ...body, idempotencyKey: 'integration-content-quiet-step-002' });
+    const changed = await post('/api/v1/content/upsert', {
+      ...body, idempotencyKey: 'integration-content-quiet-step-003', name: 'Passo Muito Silencioso',
+      profile: { ...body.profile, name: 'Passo Muito Silencioso' },
+    });
     expect(first.status).toBe(200);
     expect(retry.body).toEqual(first.body);
-    expect(first.body).toMatchObject({ code: 'quiet-step', contentType: 'skill', status: 'active' });
+    expect(first.body).toMatchObject({ code: 'quiet-step', contentType: 'skill', status: 'active', versionNumber: 1 });
+    expect(deduplicated.body).toMatchObject({ code: 'quiet-step', versionNumber: 1 });
+    expect(changed.body).toMatchObject({ code: 'quiet-step', name: 'Passo Muito Silencioso', versionNumber: 2 });
     await expect(prisma.contentDefinition.count({ where: { code: 'quiet-step' } })).resolves.toBe(1);
+    await expect(prisma.contentVersion.count({ where: { contentDefinition: { code: 'quiet-step' } } })).resolves.toBe(2);
   });
 
   it('gets, lists, learns, updates, equips, unequips and removes actor content', async () => {
@@ -953,7 +1231,7 @@ describe('GPT v1 persistence with real transactions', () => {
     const learnRetry = await post('/api/v1/actors/ralph/content/manage', learnBody);
     expect(learn.status).toBe(200);
     expect(learnRetry.body).toEqual(learn.body);
-    expect(learn.body).toMatchObject({ code: 'quiet-step', state: 'learning', progress: 5 });
+    expect(learn.body).toMatchObject({ code: 'quiet-step', name: 'Passo Muito Silencioso', versionNumber: 2, state: 'learning', progress: 5 });
 
     const update = await post('/api/v1/actors/ralph/content/manage', { operation: 'update', contentRef: 'quiet-step', contentType: 'skill', idempotencyKey: 'integration-update-quiet-step-001', changes: { state: 'known', rank: 2, progress: 30, mastery: 4 } });
     const equip = await post('/api/v1/actors/ralph/content/manage', { operation: 'equip', contentRef: 'quiet-step', contentType: 'skill', idempotencyKey: 'integration-equip-quiet-step-001' });
@@ -1001,14 +1279,14 @@ describe('GPT v1 persistence with real transactions', () => {
       createMechanicalActor({ campaignId: campaignTwo.id, code: 'shared-hero', name: 'Hero Two', actorType: ActorType.CHARACTER }),
     ]);
     const [globalSkill, campaignSkill, campaignSpell, foreignSkill] = await Promise.all([
-      prisma.contentDefinition.create({ data: { worldId: worldOne.id, campaignId: null, code: 'shared-power', name: 'Global Skill', contentType: ContentType.SKILL, status: ContentStatus.ACTIVE } }),
-      prisma.contentDefinition.create({ data: { worldId: worldOne.id, campaignId: campaignOne.id, code: 'shared-power', name: 'Campaign Skill', contentType: ContentType.SKILL, status: ContentStatus.ACTIVE } }),
-      prisma.contentDefinition.create({ data: { worldId: worldOne.id, campaignId: campaignOne.id, code: 'shared-power', name: 'Campaign Spell', contentType: ContentType.SPELL, status: ContentStatus.ACTIVE } }),
-      prisma.contentDefinition.create({ data: { worldId: worldTwo.id, campaignId: campaignTwo.id, code: 'shared-power', name: 'Foreign Skill', contentType: ContentType.SKILL, status: ContentStatus.ACTIVE } }),
+      publishTestContent({ worldId: worldOne.id, code: 'shared-power', name: 'Global Skill', contentType: ContentType.SKILL, profile: activeProfile('skill', 'shared-power', 'Global Skill') }),
+      publishTestContent({ worldId: worldOne.id, campaignId: campaignOne.id, code: 'shared-power', name: 'Campaign Skill', contentType: ContentType.SKILL, profile: activeProfile('skill', 'shared-power', 'Campaign Skill') }),
+      publishTestContent({ worldId: worldOne.id, campaignId: campaignOne.id, code: 'shared-power', name: 'Campaign Spell', contentType: ContentType.SPELL, profile: activeProfile('spell', 'shared-power', 'Campaign Spell') }),
+      publishTestContent({ worldId: worldTwo.id, campaignId: campaignTwo.id, code: 'shared-power', name: 'Foreign Skill', contentType: ContentType.SKILL, profile: activeProfile('skill', 'shared-power', 'Foreign Skill') }),
     ]);
     await Promise.all([
-      prisma.actorContent.create({ data: { actorId: actorOne.id, contentDefinitionId: campaignSkill.id, state: ActorContentState.KNOWN } }),
-      prisma.actorContent.create({ data: { actorId: actorTwo.id, contentDefinitionId: foreignSkill.id, state: ActorContentState.MASTERED } }),
+      prisma.actorContent.create({ data: { actorId: actorOne.id, contentDefinitionId: campaignSkill.id, contentVersionId: campaignSkill.versions[0]!.id, state: ActorContentState.KNOWN } }),
+      prisma.actorContent.create({ data: { actorId: actorTwo.id, contentDefinitionId: foreignSkill.id, contentVersionId: foreignSkill.versions[0]!.id, state: ActorContentState.MASTERED } }),
     ]);
 
     const [missingLoadScope, missingActorScope] = await Promise.all([
