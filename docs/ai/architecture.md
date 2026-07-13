@@ -39,7 +39,11 @@ A Fase 1B implementa a economia de ações RC1.1 como núcleo puro, determiníst
 
 O módulo também concentra perfis temporais versionados, velocidades física/mágica/híbrida, iniciativa, slots independentes, casting e deltas conceituais de Mana, movimento por zonas, combos atômicos, planos limitados, economia temporal de encontros e multiplicadores temporais de XP. A cadeia de reações tem profundidade máxima 2: ação originadora em 0, no máximo uma reação defensiva em 1 e, quando permitido, um contra-ataque terminal em 2. Profundidade 2 não gera nova reação nem reinicia a cadeia.
 
-Não há estado persistido de combate, desconto real de recursos, repositories, transações ou contrato HTTP nesta fase. A Fase 1C integrará o núcleo ao runtime autoritativo futuro. Números calibráveis permanecem associados à revisão do ruleset e somente uma nova versão pode alterá-los para novos replays; telemetria de combate continua futura.
+Não há estado persistido de combate, desconto real de recursos ou contrato HTTP mecânico nesta fase. A Fase 1C persiste somente a identidade autoritativa do pacote: `Ruleset(code=core)` agrupa a família e `RulesetVersion(code=core-v1, revision=RC1.1, schemaVersion=1)` publica manifesto canônico e hash SHA-256. Números calibráveis permanecem associados à revisão do ruleset e somente uma nova versão pode alterá-los para novos replays; telemetria de combate continua futura.
+
+`World.defaultRulesetVersionId` é obrigatório e pode ser alterado somente por futura operação administrativa explícita. `Campaign.rulesetVersionId` copia o default no insert e é imutável depois disso. O registry interno garante a versão oficial dentro da transação de `startGame`, valida revision/schema/hash/snapshot, rejeita drift e resolve somente colisões `P2002` comprovadas nas chaves `Ruleset.code` ou `RulesetVersion.code`. Triggers PostgreSQL bloqueiam `UPDATE`/`DELETE` de versões publicadas e qualquer troca real do vínculo da Campaign; FKs usam delete restrito.
+
+A migration da Fase 1C é clean-slate e falha antes do DDL quando encontra World ou Campaign existente. Ela não contém backfill, `legacy-v0`, dual-read, dual-write ou remoção de dados. O rollout futuro deve limpar dados funcionais deliberadamente antes de aplicar a migration; staging e Supabase remoto não foram acessados nesta fase.
 
 Os coeficientes calibráveis permanecem associados à identidade `core-v1`/futura `RulesetVersion` e exigirão telemetria antes de nova versão. Nenhum número publicado deve ser alterado retroativamente para replays existentes.
 

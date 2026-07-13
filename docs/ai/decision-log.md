@@ -1,5 +1,25 @@
 # Decision Log
 
+## 2026-07-13 — Fase 1C de persistência e vínculo imutável do ruleset
+
+Decisão:
+- persistir a família `Ruleset(code=core)` e a publicação imutável `RulesetVersion(code=core-v1, revision=RC1.1, schemaVersion=1)`;
+- representar a configuração/identidade aprovada em manifesto JSON canônico, sem duplicar código executável, e calcular seu hash somente com SHA-256 de `node:crypto`;
+- tornar `World.defaultRulesetVersionId` e `Campaign.rulesetVersionId` obrigatórios, copiando o default do World no insert da Campaign;
+- bloquear no PostgreSQL update/delete de `RulesetVersion` e qualquer troca real de `Campaign.rulesetVersionId`;
+- garantir e validar a versão oficial dentro da transação de `startGame`, sem aceitar seleção de ruleset pelo GPT e sem alterar HTTP/OpenAPI;
+- usar constraints únicas como autoridade de concorrência, savepoints locais para colisões `P2002` esperadas e releitura/validação do vencedor;
+- exigir clean slate: a migration falha claramente diante de World/Campaign antigos e nunca apaga ou converte dados;
+- manter `legacy-v0`, backfill, dual-read/dual-write, combate persistido e demais entidades da Fase 1D fora do escopo;
+- não acessar staging, Supabase remoto, deploy ou configuração do GPT nesta fase.
+
+Impacto:
+- campanhas passam a apontar para uma configuração mecânica auditável e não podem mudar silenciosamente de versão;
+- replays futuros podem identificar o pacote por code/revision/hash sem expor o snapshot ao contrato público;
+- o rollout remoto futuro exige limpeza funcional explícita antes da migration e gate manual normal de staging.
+
+Status: implementada e validada na Fase 1C; revisão e integração rastreadas pelo PR correspondente
+
 ## 2026-07-13 — Fase 1B de timeline e economia de ações pura
 
 Decisão:

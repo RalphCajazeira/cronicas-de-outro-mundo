@@ -1,3 +1,5 @@
+import { canonicalJson, canonicalizeJson } from '../../shared/json/canonical-json.js';
+
 export const START_GAME_MAX_BYTES = 80 * 1024;
 export const METADATA_MAX_BYTES = 4 * 1024;
 export const METADATA_TOTAL_MAX_BYTES = 20 * 1024;
@@ -56,16 +58,11 @@ export function hasDangerousJsonKey(value: unknown, seen = new WeakSet<object>()
 }
 
 export function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => [key, canonicalize(item)]));
-  }
-  return value;
+  return canonicalizeJson(value);
 }
 
 export function canonicalJsonEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(canonicalize(left)) === JSON.stringify(canonicalize(right));
+  return canonicalJson(left) === canonicalJson(right);
 }
 
 export function resolveDifficulty(

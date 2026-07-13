@@ -1,38 +1,11 @@
-import { Prisma } from '../../generated/prisma/client.js';
+import { isExpectedUniqueConflict } from '../../shared/database/prisma-errors.js';
 
-function property(value: unknown, key: string): unknown {
-  if (value === null || typeof value !== 'object') return undefined;
-  return (value as Record<string, unknown>)[key];
-}
-
-export function isUniqueConflict(error: unknown): error is Prisma.PrismaClientKnownRequestError {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
-}
+export { isUniqueConflict } from '../../shared/database/prisma-errors.js';
 
 export function isIdempotencyKeyConflict(error: unknown): boolean {
-  if (!isUniqueConflict(error)) return false;
-  const metadata = error.meta;
-  if (metadata === undefined || metadata === null || typeof metadata !== 'object') return false;
-  const modelName = property(metadata, 'modelName');
-  const target = property(metadata, 'target');
-  if (Array.isArray(target)) {
-    return (modelName === undefined || modelName === 'IdempotencyRecord') && target.length === 1 && target[0] === 'key';
-  }
-
-  const driverAdapterError = property(metadata, 'driverAdapterError');
-  if (driverAdapterError === null || typeof driverAdapterError !== 'object') return false;
-  const cause = property(driverAdapterError, 'cause');
-  if (cause === null || typeof cause !== 'object' || property(cause, 'kind') !== 'UniqueConstraintViolation') return false;
-  const constraint = property(cause, 'constraint');
-  if (constraint !== null && typeof constraint === 'object') {
-    const fields = property(constraint, 'fields');
-    if (Array.isArray(fields)) return (modelName === undefined || modelName === 'IdempotencyRecord') && fields.length === 1 && fields[0] === 'key';
-    const index = property(constraint, 'index');
-    if (index !== undefined) return index === 'IdempotencyRecord_key_key' && (modelName === undefined || modelName === 'IdempotencyRecord');
-  }
-  // Prisma's pg adapter identifies the model and violation kind but may omit the target entirely.
-  // executeIdempotent creates this model with a generated id, leaving only the unique public key as a possible P2002.
-  return modelName === 'IdempotencyRecord';
+  return isExpectedUniqueConflict(error, {
+    modelName: 'IdempotencyRecord', fields: ['key'], index: 'IdempotencyRecord_key_key', allowModelOnly: true,
+  });
 }
 
 export type IdempotencyInspection =

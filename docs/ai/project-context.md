@@ -20,6 +20,7 @@ Projeto de RPG narrativo reiniciado como nova versão, com o sistema anterior ar
 - Chave interna temporária `x-rpg-key` em `/api/v1`.
 - OpenAPI 3.1 ativo em `gpt/openapi.json` e `/openapi.json`; artefatos atuais do GPT separados do legado.
 - Idempotência transacional persistida no PostgreSQL, readiness segura e migration incremental de RLS/revogações.
+- `Ruleset(core)` e `RulesetVersion(core-v1/RC1.1)` persistem manifesto canônico e hash SHA-256; todo World recebe um default obrigatório e toda Campaign copia um vínculo imutável na criação.
 - Auditoria HTTP estruturada com `x-request-id`, resumos seguros de requisição/resposta e caminhos de validação, sem headers ou payloads sensíveis.
 - Blueprint Render de staging nativo Node, Free em `virginia`, branch `develop`, sem Docker, sem pre-deploy e sem deploy automático.
 
