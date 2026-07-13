@@ -7,6 +7,7 @@ const actor: ActorRecord = {
   id: '7e7b7cbe-5767-47de-a0b5-4b7bc9365c89', code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER,
   species: null, className: 'Aventureiro', level: 1, xp: 0, gold: 0, health: 20, maxHealth: 20,
   mana: 10, maxMana: 10, attributes: { strength: 5 }, resistances: {}, affinities: {}, status: ActorStatus.ACTIVE,
+  appearance: { eyes: 'green' }, personality: { traits: ['calm'] },
 };
 const scope = { playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' };
 
@@ -16,7 +17,9 @@ function repository(found: ActorRecord | null = actor): ActorRepository {
 
 describe('actors service', () => {
   it('returns a found actor as a normalized DTO', async () => {
-    await expect(createActorsService(repository()).get(scope, 'ralph')).resolves.toEqual(expect.objectContaining({ code: 'ralph', actorType: 'character', status: 'active' }));
+    await expect(createActorsService(repository()).get(scope, 'ralph')).resolves.toEqual(expect.objectContaining({
+      code: 'ralph', actorType: 'character', appearance: { eyes: 'green' }, personality: { traits: ['calm'] }, status: 'active',
+    }));
   });
 
   it('rejects a missing actor', async () => {

@@ -4,10 +4,46 @@ import {
   createEventSchema, listCampaignActorsSchema, loadGameSchema, manageActorContentSchema, patchActorSchema,
   startGameSchema, upsertActorSchema, upsertContentSchema,
 } from './gpt.schemas.js';
+import { jsonByteSize, jsonDepth, jsonKeyCount } from './gpt.start-game.js';
+
+const scope = { playerRef: 'ralph', worldRef: 'mundo-cardinal', campaignRef: 'harem-perfeito' };
+
+function validStartGame() {
+  return {
+    idempotencyKey: 'start-game-schema-001', playerMode: 'create' as const, playerRef: 'ralph', playerDisplayName: 'Ralph',
+    worldMode: 'create' as const, worldRef: 'mundo-cardinal', worldName: 'Mundo Cardinal', worldDescription: 'Um mundo novo.',
+    worldConfiguration: {
+      schemaVersion: 1 as const, genres: ['fantasy'], setting: 'Reinos e ruínas.', era: 'medieval',
+      technologyLevel: { grade: 'preindustrial' as const }, magicLevel: { grade: 'high' as const }, worldTone: ['adventure'],
+    },
+    campaignRef: 'harem-perfeito', campaignName: 'Campanha',
+    campaignConfiguration: {
+      schemaVersion: 1 as const, difficulty: { preset: 'standard' as const, overrides: { opponentCunning: 4 } },
+      progressionPace: 'standard' as const, narrativeTone: ['heroic'], focus: ['exploration'], playerFreedom: 'open' as const,
+      consequenceLevel: 'serious' as const,
+      classModel: { mode: 'identity' as const, startingClass: 'optional' as const, progressionBasis: ['content'], description: 'Classes são identidades.' },
+    },
+    protagonist: {
+      code: 'ralph', name: 'Ralph', actorType: 'character' as const, className: 'Explorador', health: 20, maxHealth: 20,
+      mana: 10, maxMana: 10, attributes: { intellect: 5 }, appearance: { eyes: 'verdes' }, personality: { traits: ['calmo'] },
+      origin: { label: 'Viajante', summary: 'Chegou de terras distantes.' }, status: 'active' as const,
+    },
+    initialContentPackages: [], initialPremise: 'O protagonista chega à fronteira do reino.',
+  };
+}
+
+function createSkill(code = 'quiet-step') {
+  return {
+    definition: {
+      mode: 'create' as const, scope: 'world' as const, contentType: 'skill' as const, code, name: 'Passo Silencioso',
+      description: 'Movimento discreto.', mechanics: { equipBehavior: 'activatable' }, requirements: {}, presentation: {},
+      tags: ['stealth'], schemaVersion: 1, status: 'active' as const, metadata: {},
+    },
+    protagonistLink: { state: 'known' as const, rank: 1, progress: 0, mastery: 0, equipped: false, quantity: 1, metadata: {} },
+  };
+}
 
 describe('GPT API schemas', () => {
-  const scope = { playerRef: 'ralph', worldRef: 'mundo-cardinal', campaignRef: 'harem-perfeito' };
-
   it('requires explicit scope and accepts normalized enums', () => {
     const actor = upsertActorSchema.parse({ ...scope, idempotencyKey: 'actor-schema-001', code: 'lyra', name: 'Lyra', actorType: 'spirit', status: 'active' });
     expect(actor).toMatchObject({ ...scope, actorType: 'spirit', status: 'active' });
@@ -15,53 +51,165 @@ describe('GPT API schemas', () => {
   });
 
   it('rejects every scoped operation when any scope ref is absent', () => {
+    const start = validStartGame();
     const scopedInputs = [
-      [loadGameSchema, scope],
-      [listCampaignActorsSchema, scope],
-      [getContentSchema, { ...scope, contentType: 'skill' }],
-      [startGameSchema, { ...scope, idempotencyKey: 'start-scope-001', playerDisplayName: 'Ralph', worldName: 'Mundo', campaignName: 'Campanha', protagonist: { code: 'ralph', name: 'Ralph', actorType: 'character' } }],
+      [loadGameSchema, scope], [listCampaignActorsSchema, scope], [getContentSchema, { ...scope, contentType: 'skill' }],
+      [startGameSchema, start],
       [upsertActorSchema, { ...scope, idempotencyKey: 'actor-scope-001', code: 'lyra', name: 'Lyra', actorType: 'spirit' }],
       [patchActorSchema, { ...scope, idempotencyKey: 'patch-scope-001', health: 10 }],
       [upsertContentSchema, { ...scope, idempotencyKey: 'content-scope-001', contentType: 'skill', code: 'step', name: 'Step', description: 'Movement.', mechanics: {}, requirements: {}, presentation: {}, tags: [], schemaVersion: 1, status: 'active' }],
       [manageActorContentSchema, { ...scope, operation: 'list' }],
       [createEventSchema, { ...scope, eventType: 'scene', title: 'Scene', payload: {}, idempotencyKey: 'event-scope-001' }],
     ] as const;
-
     for (const [schema, input] of scopedInputs) {
       expect(schema.safeParse(input).success).toBe(true);
       expect(schema.safeParse({ ...input, playerRef: undefined }).success).toBe(false);
       expect(schema.safeParse({ ...input, worldRef: undefined }).success).toBe(false);
       expect(schema.safeParse({ ...input, campaignRef: undefined }).success).toBe(false);
     }
-    expect(getContentSchema.safeParse(scope).success).toBe(false);
   });
 
-  it('accepts a complete new-game scope and requires protagonist code to match the player', () => {
-    const input = {
-      ...scope, idempotencyKey: 'start-game-schema-001', playerDisplayName: 'Ralph', worldName: 'Elarion', campaignName: 'Campanha Principal',
-      protagonist: { code: 'ralph', name: 'Ralph', actorType: 'character', health: 20, maxHealth: 20, mana: 10, maxMana: 10 },
-    };
-    expect(startGameSchema.parse(input)).toMatchObject(scope);
-    expect(startGameSchema.safeParse({ ...input, protagonist: { ...input.protagonist, code: 'other' } }).success).toBe(false);
+  it('validates create and reuse requirements without allowing silent expectations', () => {
+    const base = validStartGame();
+    expect(startGameSchema.safeParse(base).success).toBe(true);
+    expect(startGameSchema.safeParse({ ...base, playerDisplayName: undefined }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, worldConfiguration: undefined }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, playerMode: 'reuse', playerDisplayName: undefined, worldMode: 'reuse', worldName: undefined, worldDescription: undefined, worldConfiguration: undefined }).success).toBe(true);
   });
 
-  it('allows only approved actor patch fields', () => {
-    expect(patchActorSchema.safeParse({ ...scope, idempotencyKey: 'actor-patch-001', health: 10, metadata: { mood: 'calm' } }).success).toBe(true);
-    expect(patchActorSchema.safeParse({ ...scope, idempotencyKey: 'actor-patch-002', id: 'forbidden' }).success).toBe(false);
-    expect(patchActorSchema.safeParse({ ...scope, idempotencyKey: 'actor-patch-003', campaignId: 'forbidden' }).success).toBe(false);
+  it('rejects protagonist inconsistencies and accepts structured profiles and origin', () => {
+    const base = validStartGame();
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, code: 'other' } }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, health: 21 } }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, mana: 11 } }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, metadata: { origin: {} } } }).success).toBe(false);
+    expect(upsertActorSchema.safeParse({ ...scope, idempotencyKey: 'appearance-001', code: 'lyra', name: 'Lyra', actorType: 'npc', appearance: { unexpected: true } }).success).toBe(false);
+    expect(patchActorSchema.safeParse({ ...scope, idempotencyKey: 'personality-001', personality: { traits: Array.from({ length: 9 }, () => 'trait') } }).success).toBe(false);
   });
 
-  it('requires a complete explicit content definition', () => {
-    const base = { ...scope, idempotencyKey: 'content-schema-001', contentType: 'skill', code: 'quiet-step', name: 'Passo Silencioso', description: 'Movimento discreto.', mechanics: {}, requirements: {}, presentation: {}, tags: [], schemaVersion: 1, status: 'active' };
-    expect(upsertContentSchema.safeParse(base).success).toBe(true);
-    const { mechanics: _mechanics, ...incomplete } = base;
+  it('accepts partial preset overrides and requires every custom dimension', () => {
+    const base = validStartGame();
+    expect(startGameSchema.safeParse(base).success).toBe(true);
+    const custom = { ...base.campaignConfiguration, difficulty: { preset: 'custom', overrides: { errorTolerance: 3 } } };
+    expect(startGameSchema.safeParse({ ...base, campaignConfiguration: custom }).success).toBe(false);
+    const complete = { preset: 'custom', overrides: { errorTolerance: 3, opponentCunning: 3, resourceAvailability: 3, lethality: 3, failureSeverity: 3, narrativeSafetyNet: 3 } };
+    expect(startGameSchema.safeParse({ ...base, campaignConfiguration: { ...base.campaignConfiguration, difficulty: complete } }).success).toBe(true);
+  });
+
+  it('enforces class models and mechanical starting class links', () => {
+    const base = validStartGame();
+    const none = { ...base.campaignConfiguration, classModel: { mode: 'none', startingClass: 'unassigned', progressionBasis: ['content'], description: 'Sem classes.' } };
+    expect(startGameSchema.safeParse({ ...base, campaignConfiguration: none, protagonist: { ...base.protagonist, className: null } }).success).toBe(true);
+    expect(startGameSchema.safeParse({ ...base, campaignConfiguration: none }).success).toBe(false);
+    const classSkill = createSkill('arcane-archer');
+    const classPackage = { ...classSkill, definition: {
+      ...classSkill.definition, contentType: 'class' as const, name: 'Arqueiro Arcano', mechanics: { equipBehavior: 'none' },
+    } };
+    const mechanical = { ...base.campaignConfiguration, classModel: { mode: 'mechanical', startingClass: 'required', progressionBasis: ['class', 'content'], description: 'Classes mecânicas.' } };
+    const coherent = { ...base, campaignConfiguration: mechanical, protagonist: { ...base.protagonist, className: 'Arqueiro Arcano' }, initialContentPackages: [classPackage] };
+    expect(startGameSchema.safeParse(coherent).success).toBe(true);
+    expect(startGameSchema.safeParse({ ...coherent, protagonist: { ...coherent.protagonist, className: 'Mago' } }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, campaignConfiguration: mechanical, initialContentPackages: [] }).success).toBe(false);
+
+    const optional = { ...base.campaignConfiguration, classModel: { ...mechanical.classModel, startingClass: 'optional' } };
+    expect(startGameSchema.safeParse({ ...base, campaignConfiguration: optional, protagonist: { ...base.protagonist, className: null } }).success).toBe(true);
+    expect(startGameSchema.safeParse({ ...base, campaignConfiguration: optional, protagonist: { ...base.protagonist, className: 'Arqueiro Arcano' }, initialContentPackages: [] }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, campaignConfiguration: optional, protagonist: { ...base.protagonist, className: null }, initialContentPackages: [classPackage] }).success).toBe(false);
+  });
+
+  it('accepts create packages and restricts reuse to a World reference', () => {
+    const base = validStartGame();
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [createSkill()] }).success).toBe(true);
+    const reuse = { definition: { mode: 'reuse', scope: 'world', code: 'quiet-step', contentType: 'skill' }, protagonistLink: createSkill().protagonistLink };
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [reuse] }).success).toBe(true);
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [{ ...reuse, definition: { ...reuse.definition, name: 'Forbidden' } }] }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [{ ...reuse, definition: { ...reuse.definition, scope: 'campaign' } }] }).success).toBe(false);
+  });
+
+  it('rejects duplicate packages, invalid quantities, invalid equipment and unmet known requirements', () => {
+    const base = validStartGame();
+    const skill = createSkill();
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [skill, skill] }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [{ ...skill, protagonistLink: { ...skill.protagonistLink, quantity: 0 } }] }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [{ ...skill, protagonistLink: { ...skill.protagonistLink, equipped: true } }] }).success).toBe(true);
+    const passive = { ...skill, definition: { ...skill.definition, mechanics: { equipBehavior: 'none', passive: true } }, protagonistLink: { ...skill.protagonistLink, equipped: true } };
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [passive] }).success).toBe(false);
+    const dependent = createSkill('dependent');
+    dependent.definition.requirements = { requiredContent: [{ contentType: 'skill', code: 'missing' }], minimumAttributes: { intellect: 6 } };
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [dependent] }).success).toBe(false);
+  });
+
+  it('validates override placement and duplicate narrative arrays', () => {
+    const base = validStartGame();
+    const skill = createSkill();
+    const override = { ...skill, definition: { ...skill.definition, scope: 'campaign' as const, overridesWorldDefinition: true } };
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [override] }).success).toBe(true);
+    expect(startGameSchema.safeParse({ ...base, worldConfiguration: { ...base.worldConfiguration, genres: ['fantasy', 'fantasy'] } }).success).toBe(false);
+  });
+
+  it('enforces payload and metadata limits', () => {
+    const base = validStartGame();
+    const tooManyKeys = Object.fromEntries(Array.from({ length: 31 }, (_, index) => [`k${index}`, index]));
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, metadata: tooManyKeys } }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, metadata: { a: { b: { c: { d: { e: { f: 1 } } } } } } } }).success).toBe(false);
+    const skill = createSkill();
+    const huge = { ...skill, definition: { ...skill.definition, mechanics: { text: 'x'.repeat(82_000) } } };
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [huge] }).success).toBe(false);
+  });
+
+  it('measures byte limits in UTF-8 for metadata, profiles and the full payload', () => {
+    const base = validStartGame();
+    expect(jsonByteSize('ação')).toBe(Buffer.byteLength(JSON.stringify('ação'), 'utf8'));
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, metadata: { text: 'a'.repeat(3_000) } } }).success).toBe(true);
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, metadata: { text: 'é'.repeat(2_050) } } }).success).toBe(false);
+    const features = Array.from({ length: 8 }, () => '😀'.repeat(120));
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, appearance: { distinctiveFeatures: features } } }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, personality: { traits: features } } }).success).toBe(false);
+    const skill = createSkill();
+    const multibytePayload = { ...skill, definition: { ...skill.definition, mechanics: { text: '😀'.repeat(20_500) } } };
+    const result = startGameSchema.safeParse({ ...base, initialContentPackages: [multibytePayload] });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const sizeIssue = result.error.issues.find((issue) => issue.path.length === 0);
+      expect(sizeIssue?.message).toContain('81920 bytes');
+      expect(JSON.stringify(result.error.issues)).not.toContain('😀');
+    }
+  });
+
+  it('counts recursive metadata keys, arrays and aggregate bytes without prototype promotion', () => {
+    const base = validStartGame();
+    const nested = { list: [{ first: 1 }, { second: { third: 3 } }] };
+    expect(jsonKeyCount(nested)).toBe(4);
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(() => jsonDepth(cyclic)).not.toThrow();
+    expect(() => jsonKeyCount(cyclic)).not.toThrow();
+    expect(jsonByteSize(cyclic)).toBe(Number.POSITIVE_INFINITY);
+
+    const dangerous = JSON.parse('{"__proto__":{"polluted":true}}') as Record<string, unknown>;
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, metadata: dangerous } }).success).toBe(false);
+    expect(Reflect.get(Object.prototype, 'polluted')).toBeUndefined();
+
+    const packages = Array.from({ length: 6 }, (_, index) => {
+      const item = createSkill(`metadata-${index}`);
+      return { ...item, definition: { ...item.definition, metadata: { text: 'é'.repeat(1_750) } } };
+    });
+    expect(packages.every((item) => jsonByteSize(item.definition.metadata) < 4_096)).toBe(true);
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: packages }).success).toBe(false);
+  });
+
+  it('allows only approved actor patch fields and requires complete standalone content definitions', () => {
+    expect(patchActorSchema.safeParse({ ...scope, idempotencyKey: 'actor-patch-001', health: 10, appearance: { hair: 'black' } }).success).toBe(true);
+    expect(patchActorSchema.safeParse({ ...scope, idempotencyKey: 'actor-patch-002', campaignId: 'forbidden' }).success).toBe(false);
+    const content = { ...scope, idempotencyKey: 'content-schema-001', contentType: 'skill', code: 'quiet-step', name: 'Passo Silencioso', description: 'Movimento discreto.', mechanics: {}, requirements: {}, presentation: {}, tags: [], schemaVersion: 1, status: 'active' };
+    expect(upsertContentSchema.safeParse(content).success).toBe(true);
+    const { mechanics: _mechanics, ...incomplete } = content;
     void _mechanics;
     expect(upsertContentSchema.safeParse(incomplete).success).toBe(false);
   });
 
   it('requires idempotency only for actor-content writes', () => {
     expect(manageActorContentSchema.safeParse({ ...scope, operation: 'list' }).success).toBe(true);
-    expect(manageActorContentSchema.safeParse({ ...scope, operation: 'get', contentRef: 'quiet-step', contentType: 'skill' }).success).toBe(true);
     expect(manageActorContentSchema.safeParse({ ...scope, operation: 'learn', contentRef: 'quiet-step', contentType: 'skill' }).success).toBe(false);
     expect(manageActorContentSchema.safeParse({ ...scope, operation: 'learn', contentRef: 'quiet-step', contentType: 'skill', idempotencyKey: 'learn-schema-001' }).success).toBe(true);
   });

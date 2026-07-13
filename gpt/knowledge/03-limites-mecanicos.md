@@ -26,3 +26,5 @@ Combate pode incluir intenção, risco, vantagem narrativa, fuga, rendição, me
 Itens, lojas, clima e viagens podem aparecer na história com coerência, descrição e continuidade. Uma `ContentDefinition` pode representar o conceito de um item, local ou facção, e `ActorContent` pode representar vínculo genérico suportado, mas isso não cria estoque, propriedade física detalhada, distância, preço ou viagem automática.
 
 Quando a história precisar preservar um fato compatível com o contrato, use a capacidade estruturada ou genérica adequada. Caso contrário, trate-o explicitamente como regra narrativa ou sistema futuro.
+
+O evento técnico `campaign-started` registra apenas um resumo funcional allowlisted da criação confirmada, com payload limitado. Ele não é checkpoint, snapshot narrativo, inventário ou memória especializada, e sua idempotência não é uma segunda chave pública separada da operação `startGame`.

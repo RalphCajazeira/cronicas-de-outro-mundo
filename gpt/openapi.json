@@ -140,8 +140,8 @@
     "/api/v1/game/start": {
       "post": {
         "operationId": "startGame",
-        "summary": "Criar Player, World, Campaign e protagonista de um novo jogo",
-        "description": "Use somente após loadGame confirmar ausência do escopo ou do protagonista. A operação é idempotente e recusa sobrescrever uma campanha com estado.",
+        "summary": "Criar um jogo estruturado em uma transação",
+        "description": "Após confirmação explícita, cria ou reutiliza Player/World sem atualizá-los, cria uma Campaign nova, protagonista, conteúdos, vínculos e o evento campaign-started. Reuse de conteúdo envia apenas mode, scope, code e contentType.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1023,6 +1023,174 @@
           }
         }
       },
+      "Appearance": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "summary": { "type": "string", "maxLength": 300 },
+          "apparentAge": { "type": "string", "maxLength": 300 },
+          "build": { "type": "string", "maxLength": 300 },
+          "height": { "type": "string", "maxLength": 300 },
+          "hair": { "type": "string", "maxLength": 300 },
+          "eyes": { "type": "string", "maxLength": 300 },
+          "skin": { "type": "string", "maxLength": 300 },
+          "clothing": { "type": "string", "maxLength": 300 },
+          "distinctiveFeatures": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 300 } }
+        },
+        "description": "Perfil fechado com no máximo 2048 bytes serializados."
+      },
+      "Personality": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "summary": { "type": "string", "maxLength": 300 },
+          "traits": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 300 } },
+          "values": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 300 } },
+          "motivations": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 300 } },
+          "fears": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 300 } },
+          "habits": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 300 } }
+        },
+        "description": "Perfil fechado com no máximo 2048 bytes serializados."
+      },
+      "Origin": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "summary"],
+        "properties": {
+          "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      },
+      "WorldConfiguration": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "genres", "setting", "era", "technologyLevel", "magicLevel", "worldTone"],
+        "properties": {
+          "schemaVersion": { "const": 1 },
+          "genres": { "type": "array", "minItems": 1, "maxItems": 5, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 100 } },
+          "setting": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "era": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "technologyLevel": {
+            "type": "object", "additionalProperties": false, "required": ["grade"],
+            "properties": {
+              "grade": { "type": "string", "enum": ["none", "primitive", "preindustrial", "industrial", "modern", "advanced", "posthuman", "custom"] },
+              "notes": { "type": "string", "minLength": 1, "maxLength": 1000 }
+            }
+          },
+          "magicLevel": {
+            "type": "object", "additionalProperties": false, "required": ["grade"],
+            "properties": {
+              "grade": { "type": "string", "enum": ["none", "latent", "rare", "common", "high", "ubiquitous", "custom"] },
+              "notes": { "type": "string", "minLength": 1, "maxLength": 1000 }
+            }
+          },
+          "worldTone": { "type": "array", "minItems": 1, "maxItems": 5, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 100 } },
+          "peoples": { "type": "array", "maxItems": 20, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 100 } },
+          "creatures": { "type": "array", "maxItems": 20, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 100 } },
+          "threats": { "type": "array", "maxItems": 20, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 100 } },
+          "cosmology": { "type": "string", "minLength": 1, "maxLength": 1500 },
+          "worldRules": { "type": "array", "maxItems": 12, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
+          "customPremise": { "type": "string", "minLength": 1, "maxLength": 2000 }
+        }
+      },
+      "DifficultyOverrides": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "errorTolerance": { "type": "integer", "minimum": 1, "maximum": 5 },
+          "opponentCunning": { "type": "integer", "minimum": 1, "maximum": 5 },
+          "resourceAvailability": { "type": "integer", "minimum": 1, "maximum": 5 },
+          "lethality": { "type": "integer", "minimum": 1, "maximum": 5 },
+          "failureSeverity": { "type": "integer", "minimum": 1, "maximum": 5 },
+          "narrativeSafetyNet": { "type": "integer", "minimum": 1, "maximum": 5 }
+        },
+        "description": "Parcial para presets normais; as seis dimensões são obrigatórias para custom."
+      },
+      "DifficultyInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["preset"],
+        "properties": {
+          "preset": { "type": "string", "enum": ["story", "easy", "standard", "hard", "brutal", "custom"] },
+          "overrides": { "$ref": "#/components/schemas/DifficultyOverrides" }
+        }
+      },
+      "ClassModel": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode", "startingClass", "progressionBasis", "description"],
+        "properties": {
+          "mode": { "type": "string", "enum": ["none", "identity", "mechanical"] },
+          "startingClass": { "type": "string", "enum": ["required", "optional", "unassigned"] },
+          "progressionBasis": { "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 100 } },
+          "description": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        },
+        "description": "Em classe mecânica inicial, protagonist.className é exatamente o nome público da definição class vinculada."
+      },
+      "CampaignConfiguration": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "difficulty", "progressionPace", "narrativeTone", "focus", "playerFreedom", "consequenceLevel", "classModel"],
+        "properties": {
+          "schemaVersion": { "const": 1 },
+          "difficulty": { "$ref": "#/components/schemas/DifficultyInput" },
+          "progressionPace": { "type": "string", "enum": ["very_fast", "fast", "standard", "slow", "very_slow", "custom"] },
+          "narrativeTone": { "type": "array", "minItems": 1, "maxItems": 5, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 100 } },
+          "focus": { "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 100 } },
+          "playerFreedom": { "type": "string", "enum": ["guided", "open", "sandbox", "custom"] },
+          "consequenceLevel": { "type": "string", "enum": ["forgiving", "moderate", "serious", "lasting", "severe", "custom"] },
+          "classModel": { "$ref": "#/components/schemas/ClassModel" },
+          "themes": { "type": "array", "maxItems": 20, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 100 } },
+          "excludedThemes": { "type": "array", "maxItems": 20, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 100 } },
+          "customRules": { "type": "array", "maxItems": 12, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 500 } }
+        }
+      },
+      "InitialContentDefinition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode", "scope", "code", "contentType"],
+        "properties": {
+          "mode": { "type": "string", "enum": ["create", "reuse"] },
+          "scope": { "type": "string", "enum": ["world", "campaign"] },
+          "code": { "$ref": "#/components/schemas/Code" },
+          "contentType": { "$ref": "#/components/schemas/ContentType" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "mechanics": { "$ref": "#/components/schemas/JsonObject" },
+          "requirements": { "$ref": "#/components/schemas/JsonObject" },
+          "presentation": { "$ref": "#/components/schemas/JsonObject" },
+          "tags": { "type": "array", "maxItems": 12, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 50 } },
+          "schemaVersion": { "type": "integer", "minimum": 1 },
+          "status": { "const": "active" },
+          "metadata": { "$ref": "#/components/schemas/JsonObject", "description": "Até 4096 bytes UTF-8, profundidade 5 e 30 chaves recursivas." },
+          "overridesWorldDefinition": { "type": "boolean" }
+        },
+        "description": "create exige a ficha completa. reuse aceita somente mode, scope=world, code e contentType."
+      },
+      "InitialActorContentLink": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["state", "rank", "progress", "mastery", "equipped", "quantity"],
+        "properties": {
+          "state": { "type": "string", "enum": ["locked", "learning", "known", "mastered"] },
+          "rank": { "type": "integer", "minimum": 0 },
+          "progress": { "type": "integer", "minimum": 0 },
+          "mastery": { "type": "integer", "minimum": 0 },
+          "equipped": { "type": "boolean" },
+          "quantity": { "type": "integer", "minimum": 1, "maximum": 999 },
+          "notes": { "type": ["string", "null"], "maxLength": 2000 },
+          "metadata": { "$ref": "#/components/schemas/JsonObject", "description": "Até 4096 bytes UTF-8, profundidade 5 e 30 chaves recursivas." }
+        }
+      },
+      "InitialContentPackage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["definition"],
+        "properties": {
+          "definition": { "$ref": "#/components/schemas/InitialContentDefinition" },
+          "protagonistLink": { "$ref": "#/components/schemas/InitialActorContentLink" }
+        }
+      },
       "InitialActorInput": {
         "type": "object",
         "additionalProperties": false,
@@ -1052,7 +1220,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Em classe mecânica inicial, deve coincidir exatamente com definition.name da classe vinculada."
           },
           "role": {
             "type": [
@@ -1064,7 +1233,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "maxLength": 3000
           },
           "level": {
             "type": "integer",
@@ -1103,18 +1273,21 @@
           "affinities": {
             "$ref": "#/components/schemas/JsonObject"
           },
+          "appearance": {
+            "$ref": "#/components/schemas/Appearance"
+          },
+          "personality": {
+            "$ref": "#/components/schemas/Personality"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/Origin"
+          },
           "metadata": {
-            "$ref": "#/components/schemas/JsonObject"
+            "$ref": "#/components/schemas/JsonObject",
+            "description": "Até 4096 bytes UTF-8, profundidade 5 e 30 chaves recursivas. Use origin no campo próprio."
           },
           "status": {
-            "type": "string",
-            "enum": [
-              "active",
-              "inactive",
-              "defeated",
-              "dead",
-              "archived"
-            ]
+            "const": "active"
           }
         }
       },
@@ -1123,40 +1296,54 @@
         "additionalProperties": false,
         "required": [
           "idempotencyKey",
+          "playerMode",
           "playerRef",
-          "playerDisplayName",
+          "worldMode",
           "worldRef",
-          "worldName",
           "campaignRef",
           "campaignName",
-          "protagonist"
+          "campaignConfiguration",
+          "protagonist",
+          "initialContentPackages",
+          "initialPremise"
         ],
         "properties": {
           "idempotencyKey": {
             "$ref": "#/components/schemas/IdempotencyKey"
+          },
+          "playerMode": {
+            "type": "string",
+            "enum": ["create", "reuse"]
           },
           "playerRef": {
             "$ref": "#/components/schemas/Code"
           },
           "playerDisplayName": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "worldMode": {
+            "type": "string",
+            "enum": ["create", "reuse"]
           },
           "worldRef": {
             "$ref": "#/components/schemas/Code"
           },
           "worldName": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 200
           },
           "worldDescription": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "maxLength": 3000
           },
-          "worldMetadata": {
-            "$ref": "#/components/schemas/JsonObject"
+          "worldConfiguration": {
+            "$ref": "#/components/schemas/WorldConfiguration"
           },
           "campaignRef": {
             "$ref": "#/components/schemas/Code"
@@ -1165,13 +1352,24 @@
             "type": "string",
             "minLength": 1
           },
-          "campaignMetadata": {
-            "$ref": "#/components/schemas/JsonObject"
+          "campaignConfiguration": {
+            "$ref": "#/components/schemas/CampaignConfiguration"
           },
           "protagonist": {
             "$ref": "#/components/schemas/InitialActorInput"
+          },
+          "initialContentPackages": {
+            "type": "array",
+            "maxItems": 24,
+            "items": { "$ref": "#/components/schemas/InitialContentPackage" }
+          },
+          "initialPremise": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
           }
-        }
+        },
+        "description": "Objeto fechado, limitado a 81920 bytes UTF-8. Metadata arbitrária soma no máximo 20480 bytes; campos condicionais são validados pelo backend."
       },
       "Health": {
         "type": "object",
@@ -1274,6 +1472,8 @@
           "attributes",
           "resistances",
           "affinities",
+          "appearance",
+          "personality",
           "status"
         ],
         "properties": {
@@ -1353,6 +1553,12 @@
           },
           "affinities": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "appearance": {
+            "$ref": "#/components/schemas/Appearance"
+          },
+          "personality": {
+            "$ref": "#/components/schemas/Personality"
           },
           "metadata": {
             "$ref": "#/components/schemas/JsonObject"
@@ -1439,6 +1645,12 @@
           },
           "affinities": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "appearance": {
+            "$ref": "#/components/schemas/Appearance"
+          },
+          "personality": {
+            "$ref": "#/components/schemas/Personality"
           },
           "metadata": {
             "$ref": "#/components/schemas/JsonObject"
@@ -1557,6 +1769,12 @@
           },
           "affinities": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "appearance": {
+            "$ref": "#/components/schemas/Appearance"
+          },
+          "personality": {
+            "$ref": "#/components/schemas/Personality"
           },
           "metadata": {
             "$ref": "#/components/schemas/JsonObject"
@@ -2117,6 +2335,18 @@
           }
         }
       },
+      "LinkedActorContent": {
+        "allOf": [
+          { "$ref": "#/components/schemas/ActorContent" },
+          {
+            "type": "object",
+            "required": ["actorRef"],
+            "properties": {
+              "actorRef": { "$ref": "#/components/schemas/Code" }
+            }
+          }
+        ]
+      },
       "PlayerState": {
         "type": "object",
         "additionalProperties": false,
@@ -2243,8 +2473,7 @@
           "linkedContent": {
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {}
+              "$ref": "#/components/schemas/LinkedActorContent"
             }
           },
           "recentEvents": {

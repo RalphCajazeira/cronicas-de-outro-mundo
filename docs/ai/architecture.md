@@ -55,7 +55,11 @@ No Render, investigar primeiro pelo texto `http_request_completed`, depois restr
 
 Respostas `400 INVALID_INPUT` incluem `retryable`, uma instrução curta e uma lista `issues` com `path`, `code` e mensagem de correção sem ecoar o valor rejeitado. O GPT corrige somente os campos indicados e tenta uma vez; autenticação, ausência, conflito e erro interno não autorizam retry automático. Esse retorno melhora a recuperação de payloads incompletos sem transformar falhas em loops ou escritas duplicadas.
 
-`startGame` cria Player, World, Campaign e protagonista em uma única transação idempotente e recusa campanha que já contenha estado. Assim o staging pode ser integralmente limpo, preservando apenas schema/migrations; `NOT_FOUND` em `loadGame` inicia a configuração e o GPT persiste todo o escopo inicial após confirmação do jogador. Reset de jogo permanece operação administrativa manual, nunca uma Action destrutiva exposta ao GPT.
+`startGame` cria ou reutiliza explicitamente Player e World sem atualizá-los, sempre cria uma Campaign nova e persiste em uma única transação idempotente as configurações `worldConfig`/`campaignConfig` de versão 1, protagonista completo, até 24 definições/vínculos iniciais e o evento técnico `campaign-started`. Configuração, aparência, personalidade, origem e limites são validados no backend; o perfil efetivo de dificuldade é calculado, nunca aceito do cliente. Não há migration, checkpoint, inventário por instância ou slots físicos. `NOT_FOUND` em `loadGame` inicia a configuração e reset continua administrativo, nunca uma Action destrutiva.
+
+Em classe mecânica inicial, `Actor.className` é exatamente o nome público da única definição `class` vinculada; definição reutilizada é comparada dentro da transação. Metadata arbitrária é medida em bytes UTF-8, limitada por objeto e agregada, enquanto as configurações versionadas seguem schemas próprios. O payload fechado de `campaign-started` tem no máximo 8 KB, é montado por allowlist e usa `GameEvent.idempotencyKey = null`: a idempotência pertence exclusivamente ao `IdempotencyRecord` da operação externa.
+
+Somente `P2002` cuja metadata estruturada identifica `IdempotencyRecord.key` é tratado como retry idempotente. A linha persistida ainda deve coincidir em operação/hash e conter resposta não vazia; registro ausente ou incompleto retorna conflito seguro, sem loop ou falso sucesso. Outras colisões únicas viram conflito de domínio seguro, sem nomes de constraints ou detalhes Prisma.
 
 ## Banco hospedado e deploy preparado
 

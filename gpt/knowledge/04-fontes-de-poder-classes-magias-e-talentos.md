@@ -4,6 +4,8 @@ Poder e progressão devem respeitar nível, contexto, requisitos, treino e estad
 
 Classes podem ser representadas pelo campo `className` do ator e, quando houver uma definição reutilizável, por conteúdo do tipo `class`. Habilidades, magias e talentos usam `ContentDefinition` dos tipos correspondentes e só pertencem ao ator após vínculo confirmado em `ActorContent`.
 
+O modelo da Campaign diferencia classes inexistentes, classes de identidade e classes mecânicas. Em `none`, `className` fica ausente e progressão não depende de classe. Em `identity`, `className` é somente rótulo narrativo e não concede benefício nem autoriza `requirements.className`. Em `mechanical`, a classe inicial usa exatamente uma definição `class` vinculada como conhecida ou dominada, e `className` coincide exatamente com o nome público dessa definição, nunca com seu code; outros requisitos devem preferir `requiredContent` com tipo e code estáveis.
+
 Uma ficha de poder pode descrever em `mechanics`, `requirements` e `presentation`, conforme aplicável:
 
 - ativação, categoria e elemento;

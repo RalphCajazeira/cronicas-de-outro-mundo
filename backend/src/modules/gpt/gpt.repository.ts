@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
-  ActorContentState, ActorStatus, ActorType, CampaignStatus, ContentStatus, ContentType, Prisma,
+  ActorContentState, ActorStatus, ActorType, CampaignStatus, ContentStatus, ContentType, Prisma, type ContentDefinition,
 } from '../../generated/prisma/client.js';
 import { prisma } from '../../shared/database/prisma.js';
 import { resolveBase, resolvePlayer, resolveScope, type DbClient } from '../../shared/database/game-scope.js';
@@ -13,26 +13,20 @@ import type {
   ListPlayerWorldsInput, ListWorldCampaignsInput, PatchActorInput, StartGameInput, UpsertActorInput, UpsertContentInput,
 } from './gpt.schemas.js';
 import type { ApiResult, GptRepository } from './gpt.types.js';
+import {
+  CAMPAIGN_STARTED_EVENT_MAX_BYTES, canonicalJsonEqual, canonicalize, jsonByteSize, resolveDifficulty,
+  type CampaignStartedPayload,
+} from './gpt.start-game.js';
+import { inspectIdempotencyRecord, isIdempotencyKeyConflict, isUniqueConflict } from './gpt.prisma-errors.js';
 
 const actorSelect = {
   id: true, code: true, name: true, actorType: true, species: true, className: true, role: true,
   description: true, level: true, xp: true, gold: true, health: true, maxHealth: true, mana: true,
   maxMana: true, attributes: true, resistances: true, affinities: true, metadata: true, status: true,
+  appearance: true, personality: true,
 } satisfies Prisma.ActorSelect;
 
 const contentInclude = { contentDefinition: true } satisfies Prisma.ActorContentInclude;
-
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).sort(([left], [right]) => {
-      if (left < right) return -1;
-      if (left > right) return 1;
-      return 0;
-    }).map(([key, item]) => [key, canonicalize(item)]));
-  }
-  return value;
-}
 
 function requestHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
@@ -40,10 +34,6 @@ function requestHash(value: unknown): string {
 
 function inputJson(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
-}
-
-function isUniqueConflict(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
 async function executeIdempotent(
@@ -62,9 +52,14 @@ async function executeIdempotent(
     });
   } catch (error) {
     if (!isUniqueConflict(error)) throw error;
+    if (!isIdempotencyKeyConflict(error)) throw new ConflictError('Resource already exists');
     const persisted = await prisma.idempotencyRecord.findUnique({ where: { key } });
-    if (persisted === null || persisted.operation !== operation || persisted.requestHash !== hash) throw new ConflictError('Idempotency key already used');
-    return persisted.response as ApiResult;
+    const inspection = inspectIdempotencyRecord(persisted, operation, hash);
+    if (inspection.kind === 'conflict') {
+      if (['operation', 'requestHash'].includes(inspection.reason)) throw new ConflictError('Idempotency key already used');
+      throw new ConflictError('Idempotency request is not complete');
+    }
+    return inspection.response;
   }
 }
 
@@ -74,6 +69,7 @@ function actorDto(actor: Record<string, unknown>) {
     className: actor.className, role: actor.role, description: actor.description, level: actor.level, xp: actor.xp,
     gold: actor.gold, health: actor.health, maxHealth: actor.maxHealth, mana: actor.mana, maxMana: actor.maxMana,
     attributes: actor.attributes, resistances: actor.resistances, affinities: actor.affinities, metadata: actor.metadata,
+    appearance: actor.appearance, personality: actor.personality,
     status: normalizeEnum(actor.status as string),
   };
 }
@@ -119,6 +115,8 @@ function actorUpdateData(input: UpsertActorInput | PatchActorInput): Prisma.Acto
   if (input.attributes !== undefined) data.attributes = inputJson(input.attributes);
   if (input.resistances !== undefined) data.resistances = inputJson(input.resistances);
   if (input.affinities !== undefined) data.affinities = inputJson(input.affinities);
+  if (input.appearance !== undefined) data.appearance = inputJson(input.appearance);
+  if (input.personality !== undefined) data.personality = inputJson(input.personality);
   if (input.metadata !== undefined) data.metadata = inputJson(input.metadata);
   if (input.status !== undefined) data.status = input.status.toUpperCase() as ActorStatus;
   return data;
@@ -133,7 +131,9 @@ function actorCreateData(
     level: input.level ?? 1, xp: input.xp ?? 0, gold: input.gold ?? 0, health: input.health ?? 1,
     maxHealth: input.maxHealth ?? 1, mana: input.mana ?? 0, maxMana: input.maxMana ?? 0,
     attributes: inputJson(input.attributes ?? {}), resistances: inputJson(input.resistances ?? {}),
-    affinities: inputJson(input.affinities ?? {}), metadata: inputJson(input.metadata ?? {}),
+    affinities: inputJson(input.affinities ?? {}), appearance: inputJson(input.appearance ?? {}),
+    personality: inputJson(input.personality ?? {}),
+    metadata: inputJson({ ...(input.metadata ?? {}), ...('origin' in input && input.origin !== undefined ? { origin: input.origin } : {}) }),
     status: (input.status ?? 'active').toUpperCase() as ActorStatus,
   };
   if (input.species !== undefined) data.species = input.species;
@@ -176,6 +176,58 @@ async function loadGameState(client: DbClient, input: LoadGameInput) {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function assertInitialEquipment(
+  definition: { contentType: ContentType; mechanics: Prisma.JsonValue },
+  link: StartGameInput['initialContentPackages'][number]['protagonistLink'],
+) {
+  if (link?.equipped !== true) return;
+  const mechanics = isRecord(definition.mechanics) ? definition.mechanics : {};
+  const behavior = mechanics.equipBehavior;
+  const type = normalizeEnum(definition.contentType);
+  const disallowed = type === 'race' || type === 'class'
+    || (type === 'status_effect' && mechanics.permanence === 'permanent')
+    || mechanics.passive === true || behavior === 'none';
+  const allowed: Record<string, string[]> = {
+    weapon: ['wieldable'], armor: ['wearable'], shield: ['wieldable', 'wearable'], item: ['readied', 'activatable'],
+    spell: ['prepared', 'activatable'], talent: ['activatable'], skill: ['activatable'],
+  };
+  if (disallowed || typeof behavior !== 'string' || !(allowed[type]?.includes(behavior) ?? false)) throw new ConflictError('Initial equipment is incompatible with the content definition');
+}
+
+function assertPersistedRequirements(
+  definition: { requirements: Prisma.JsonValue },
+  link: StartGameInput['initialContentPackages'][number]['protagonistLink'],
+  linkedKnown: Set<string>,
+  attributes: Record<string, unknown>,
+) {
+  if (link === undefined || !['known', 'mastered'].includes(link.state) || !isRecord(definition.requirements)) return;
+  const requiredContent = definition.requirements.requiredContent;
+  if (Array.isArray(requiredContent)) {
+    for (const required of requiredContent) {
+      if (!isRecord(required) || typeof required.contentType !== 'string' || typeof required.code !== 'string'
+        || !linkedKnown.has(`${required.contentType}:${required.code}`)) {
+        throw new ConflictError('Initial content requirements are not met');
+      }
+    }
+  }
+  const minimumAttributes = definition.requirements.minimumAttributes;
+  if (isRecord(minimumAttributes)) {
+    for (const [attribute, minimum] of Object.entries(minimumAttributes)) {
+      if (typeof minimum !== 'number' || typeof attributes[attribute] !== 'number' || attributes[attribute] < minimum) {
+        throw new ConflictError('Initial attribute requirements are not met');
+      }
+    }
+  }
+}
+
+function worldConfiguration(metadata: Prisma.JsonValue): unknown {
+  return isRecord(metadata) ? metadata.worldConfig : undefined;
+}
+
 export const prismaGptRepository: GptRepository = {
   async loadGame(input: LoadGameInput) {
     return loadGameState(prisma, input);
@@ -209,46 +261,155 @@ export const prismaGptRepository: GptRepository = {
 
   async startGame(input: StartGameInput) {
     return executeIdempotent(input.idempotencyKey, 'game.start', input, async (transaction) => {
-      const player = await transaction.player.upsert({
-        where: { slug: input.playerRef },
-        update: { displayName: input.playerDisplayName },
-        create: { slug: input.playerRef, displayName: input.playerDisplayName },
+      const existingPlayer = await transaction.player.findUnique({ where: { slug: input.playerRef } });
+      if (input.playerMode === 'create' && existingPlayer !== null) throw new ConflictError('Player already exists');
+      if (input.playerMode === 'reuse' && existingPlayer === null) throw new NotFoundError('Player');
+      if (existingPlayer !== null && input.playerDisplayName !== undefined && existingPlayer.displayName !== input.playerDisplayName) {
+        throw new ConflictError('Player display name does not match');
+      }
+      const player = existingPlayer ?? await transaction.player.create({
+        data: { slug: input.playerRef, displayName: input.playerDisplayName ?? '' },
       });
-      const world = await transaction.world.upsert({
+
+      const existingWorld = await transaction.world.findUnique({
         where: { playerId_code: { playerId: player.id, code: input.worldRef } },
-        update: {
-          name: input.worldName, metadata: inputJson(input.worldMetadata),
+      });
+      if (input.worldMode === 'create' && existingWorld !== null) throw new ConflictError('World already exists');
+      if (input.worldMode === 'reuse' && existingWorld === null) throw new NotFoundError('World');
+      if (existingWorld !== null) {
+        if (input.worldName !== undefined && existingWorld.name !== input.worldName) throw new ConflictError('World name does not match');
+        if (input.worldDescription !== undefined && existingWorld.description !== input.worldDescription) throw new ConflictError('World description does not match');
+        if (input.worldConfiguration !== undefined && !canonicalJsonEqual(worldConfiguration(existingWorld.metadata), input.worldConfiguration)) {
+          throw new ConflictError('World configuration does not match');
+        }
+      }
+      const world = existingWorld ?? await transaction.world.create({
+        data: {
+          playerId: player.id, code: input.worldRef, name: input.worldName ?? '',
           ...(input.worldDescription === undefined ? {} : { description: input.worldDescription }),
-        },
-        create: {
-          playerId: player.id, code: input.worldRef, name: input.worldName,
-          metadata: inputJson(input.worldMetadata),
-          ...(input.worldDescription === undefined ? {} : { description: input.worldDescription }),
+          metadata: inputJson({ worldConfig: input.worldConfiguration }),
         },
       });
+
       const existingCampaign = await transaction.campaign.findUnique({
         where: { worldId_code: { worldId: world.id, code: input.campaignRef } },
       });
-      if (existingCampaign !== null) {
-        const [actors, definitions, events] = await Promise.all([
-          transaction.actor.count({ where: { campaignId: existingCampaign.id } }),
-          transaction.contentDefinition.count({ where: { campaignId: existingCampaign.id } }),
-          transaction.gameEvent.count({ where: { campaignId: existingCampaign.id } }),
-        ]);
-        if (actors + definitions + events > 0) throw new ConflictError('Campaign already contains state');
-      }
-      const campaign = existingCampaign === null
-        ? await transaction.campaign.create({
-          data: {
-            worldId: world.id, code: input.campaignRef, name: input.campaignName,
-            status: CampaignStatus.ACTIVE, metadata: inputJson(input.campaignMetadata),
-          },
-        })
-        : await transaction.campaign.update({
-          where: { id: existingCampaign.id },
-          data: { name: input.campaignName, status: CampaignStatus.ACTIVE, currentTime: Prisma.DbNull, metadata: inputJson(input.campaignMetadata) },
+      if (existingCampaign !== null) throw new ConflictError('Campaign already exists');
+
+      const effectiveProfile = resolveDifficulty(input.campaignConfiguration.difficulty.preset, input.campaignConfiguration.difficulty.overrides);
+      const campaignConfig = {
+        ...input.campaignConfiguration,
+        difficulty: { ...input.campaignConfiguration.difficulty, overrides: input.campaignConfiguration.difficulty.overrides ?? {}, effectiveProfile },
+      };
+      const campaign = await transaction.campaign.create({
+        data: {
+          worldId: world.id, code: input.campaignRef, name: input.campaignName,
+          status: CampaignStatus.ACTIVE, metadata: inputJson({ campaignConfig }),
+        },
+      });
+      const protagonist = await transaction.actor.create({ data: actorCreateData(campaign.id, input.protagonist), select: actorSelect });
+
+      const resolvedPackages: Array<{
+        definition: ContentDefinition;
+        link: StartGameInput['initialContentPackages'][number]['protagonistLink'];
+        scope: 'world' | 'campaign';
+      }> = [];
+      for (const item of input.initialContentPackages) {
+        const definitionInput = item.definition;
+        const type = definitionInput.contentType.toUpperCase() as ContentType;
+        if (definitionInput.mode === 'reuse') {
+          const definition = await transaction.contentDefinition.findFirst({
+            where: { worldId: world.id, campaignId: null, contentType: type, code: definitionInput.code },
+          });
+          if (definition === null) throw new NotFoundError('Content');
+          resolvedPackages.push({ definition, link: item.protagonistLink, scope: definitionInput.scope });
+          continue;
+        }
+
+        const campaignId = definitionInput.scope === 'campaign' ? campaign.id : null;
+        const exact = await transaction.contentDefinition.findFirst({
+          where: { worldId: world.id, campaignId, contentType: type, code: definitionInput.code },
         });
-      await transaction.actor.create({ data: actorCreateData(campaign.id, input.protagonist) });
+        if (exact !== null) throw new ConflictError('Content definition already exists');
+        if (definitionInput.scope === 'campaign') {
+          const global = await transaction.contentDefinition.findFirst({
+            where: { worldId: world.id, campaignId: null, contentType: type, code: definitionInput.code },
+          });
+          if (global !== null && definitionInput.overridesWorldDefinition !== true) throw new ConflictError('Campaign content requires an explicit World override');
+          if (global === null && definitionInput.overridesWorldDefinition === true) throw new ConflictError('World content to override was not found');
+        }
+        const definition = await transaction.contentDefinition.create({
+          data: {
+            worldId: world.id, campaignId, code: definitionInput.code, contentType: type,
+            name: definitionInput.name ?? '', ...(definitionInput.description === undefined ? {} : { description: definitionInput.description }),
+            mechanics: inputJson(definitionInput.mechanics ?? {}), requirements: inputJson(definitionInput.requirements ?? {}),
+            presentation: inputJson(definitionInput.presentation ?? {}), tags: inputJson(definitionInput.tags ?? []),
+            schemaVersion: definitionInput.schemaVersion ?? 1, status: ContentStatus.ACTIVE,
+            metadata: inputJson(definitionInput.metadata ?? {}),
+          },
+        });
+        resolvedPackages.push({ definition, link: item.protagonistLink, scope: definitionInput.scope });
+      }
+
+      const linkedKnown = new Set(resolvedPackages.filter((item) => ['known', 'mastered'].includes(item.link?.state ?? ''))
+        .map((item) => `${normalizeEnum(item.definition.contentType)}:${item.definition.code}`));
+      if (input.campaignConfiguration.classModel.mode === 'mechanical'
+        && ['required', 'optional'].includes(input.campaignConfiguration.classModel.startingClass)) {
+        const linkedClasses = resolvedPackages.filter((item) => item.definition.contentType === ContentType.CLASS && item.link !== undefined);
+        if (linkedClasses.length === 1 && input.protagonist.className !== undefined && input.protagonist.className !== null
+          && linkedClasses[0]?.definition.name !== input.protagonist.className) {
+          throw new ConflictError('Mechanical class name does not match the persisted class definition');
+        }
+      }
+      const attributes = isRecord(protagonist.attributes) ? protagonist.attributes : {};
+      for (const item of resolvedPackages) {
+        if (item.link === undefined) continue;
+        assertInitialEquipment(item.definition, item.link);
+        assertPersistedRequirements(item.definition, item.link, linkedKnown, attributes);
+        await transaction.actorContent.create({
+          data: {
+            actorId: protagonist.id, contentDefinitionId: item.definition.id,
+            state: item.link.state.toUpperCase() as ActorContentState, rank: item.link.rank, progress: item.link.progress,
+            mastery: item.link.mastery, equipped: item.link.equipped, quantity: item.link.quantity,
+            ...(item.link.notes === undefined ? {} : { notes: item.link.notes }), metadata: inputJson(item.link.metadata ?? {}),
+          },
+        });
+      }
+
+      const effectiveWorldConfig = input.worldConfiguration ?? worldConfiguration(world.metadata);
+      const worldConfigRecord = isRecord(effectiveWorldConfig) ? effectiveWorldConfig : {};
+      const rawTechnologyGrade = isRecord(worldConfigRecord.technologyLevel) ? worldConfigRecord.technologyLevel.grade : null;
+      const rawMagicGrade = isRecord(worldConfigRecord.magicLevel) ? worldConfigRecord.magicLevel.grade : null;
+      const technologyGrade = typeof rawTechnologyGrade === 'string' ? rawTechnologyGrade : null;
+      const magicGrade = typeof rawMagicGrade === 'string' ? rawMagicGrade : null;
+      const eventPayload: CampaignStartedPayload = {
+        schemaVersion: 1, technical: true,
+        difficultyPreset: input.campaignConfiguration.difficulty.preset, difficultyProfile: effectiveProfile,
+        worldConfigSummary: {
+          schemaVersion: 1, genres: Array.isArray(worldConfigRecord.genres)
+            ? worldConfigRecord.genres.filter((genre): genre is string => typeof genre === 'string') : [],
+          technologyGrade, magicGrade,
+        },
+        campaignConfigSummary: {
+          schemaVersion: 1, progressionPace: input.campaignConfiguration.progressionPace,
+          narrativeTone: input.campaignConfiguration.narrativeTone, focus: input.campaignConfiguration.focus,
+          playerFreedom: input.campaignConfiguration.playerFreedom, consequenceLevel: input.campaignConfiguration.consequenceLevel,
+          classMode: input.campaignConfiguration.classModel.mode,
+        },
+        initialContent: resolvedPackages.map((item) => ({
+          scope: item.scope, contentType: normalizeEnum(item.definition.contentType), code: item.definition.code,
+          quantity: item.link?.quantity ?? 0, equipped: item.link?.equipped ?? false,
+        })),
+        initialPremise: input.initialPremise,
+      };
+      if (jsonByteSize(eventPayload) > CAMPAIGN_STARTED_EVENT_MAX_BYTES) throw new ConflictError('Campaign start event exceeds the safe size limit');
+
+      await transaction.gameEvent.create({
+        data: {
+          campaignId: campaign.id, actorId: protagonist.id, eventType: 'campaign-started', title: 'Campanha iniciada',
+          payload: inputJson(eventPayload),
+        },
+      });
       return loadGameState(transaction, { playerRef: input.playerRef, worldRef: input.worldRef, campaignRef: input.campaignRef });
     });
   },

@@ -43,8 +43,10 @@ Os arquivos em `legacy/supabase-gpt-v1/` são somente referência histórica e n
 4. colar integralmente `instructions.md`;
 5. enviar somente os nove arquivos oficiais de Knowledge;
 6. testar health, readiness, descoberta de mundos/campanhas, carga de estado com refs explícitas e demais leituras antes de qualquer escrita;
-7. em staging vazio, validar `loadGame` ausente, configuração e `startGame` antes de criar NPCs ou conteúdo;
+7. em staging vazio, validar `loadGame` ausente, conduzir a configuração Rápida/Guiada/Livre, revisar a proposta e usar uma única chamada `startGame` antes da primeira cena;
 8. provocar um `INVALID_INPUT` sem persistência e confirmar uma única correção guiada.
+
+Na criação estruturada, Player e World usam modos explícitos `create|reuse`, Campaign é sempre nova e conteúdo global reutilizado deve ser consultado antes com `getContent`. A Action envia no pacote reutilizado somente mode, scope, code e contentType; o backend não atualiza a definição existente. A resposta de `startGame` ainda deve ser confirmada por `loadGame`.
 
 `gpt/openapi.json` usa um domínio de exemplo no repositório; o backend publicado injeta a origem HTTPS real. O GPT nunca acessa Supabase, Prisma ou PostgreSQL diretamente.
 
