@@ -12,6 +12,8 @@ import { prismaContentRepository } from '../../src/modules/content/content.repos
 import { prismaGptRepository } from '../../src/modules/gpt/gpt.repository.js';
 import { canonicalize, jsonByteSize } from '../../src/modules/gpt/gpt.start-game.js';
 import { prismaReadinessCheck } from '../../src/modules/health/health.repository.js';
+import { ensureCoreV1RulesetVersion } from '../../src/modules/rules/ruleset.registry.js';
+import { CORE_V1_CONFIG_HASH, CORE_V1_CONFIG_SNAPSHOT } from '../../src/modules/rules/core-v1/core-v1.manifest.js';
 import { disconnectPrisma, prisma } from '../../src/shared/database/prisma.js';
 
 const config = parseConfig(process.env);
@@ -85,6 +87,16 @@ async function expectNoCreatedIntent(body: { playerRef: string; worldRef: string
   });
 }
 
+async function createAlternateRulesetVersion(suffix: string) {
+  const ruleset = await prisma.ruleset.create({ data: { code: `test-${suffix}`, name: `Test ${suffix}` } });
+  return prisma.rulesetVersion.create({
+    data: {
+      rulesetId: ruleset.id, code: `test-${suffix}-v1`, revision: 'TEST', schemaVersion: 1,
+      configHash: '0'.repeat(64), configSnapshot: { testVersion: suffix },
+    },
+  });
+}
+
 afterAll(async () => {
   await disconnectPrisma();
 });
@@ -106,12 +118,20 @@ describe('migration and PostgreSQL schema', () => {
     expect(migration[0]?.finished_at).toBeInstanceOf(Date);
   });
 
+  it('records the Phase 1C ruleset persistence migration as successfully applied', async () => {
+    const migration = await prisma.$queryRaw<Array<{ finished_at: Date | null }>>`
+      SELECT finished_at FROM "_prisma_migrations"
+      WHERE migration_name = '20260713174337_engine_v1_ruleset_persistence' AND rolled_back_at IS NULL
+    `;
+    expect(migration[0]?.finished_at).toBeInstanceOf(Date);
+  });
+
   it('contains every principal table', async () => {
     const rows = await prisma.$queryRaw<Array<{ table_name: string }>>`
       SELECT table_name FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_name IN ('Player', 'World', 'Campaign', 'Actor', 'ContentDefinition', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
+      WHERE table_schema = 'public' AND table_name IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ContentDefinition', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
     `;
-    expect(rows.map((row) => row.table_name).sort()).toEqual(['Actor', 'ActorContent', 'Campaign', 'ContentDefinition', 'GameEvent', 'IdempotencyRecord', 'Player', 'World']);
+    expect(rows.map((row) => row.table_name).sort()).toEqual(['Actor', 'ActorContent', 'Campaign', 'ContentDefinition', 'GameEvent', 'IdempotencyRecord', 'Player', 'Ruleset', 'RulesetVersion', 'World']);
   });
 
   it('contains the principal foreign keys', async () => {
@@ -121,6 +141,7 @@ describe('migration and PostgreSQL schema', () => {
     `;
     expect(rows.map((row) => row.constraint_name)).toEqual(expect.arrayContaining([
       'World_playerId_fkey', 'Campaign_worldId_fkey', 'Actor_campaignId_fkey',
+      'RulesetVersion_rulesetId_fkey', 'World_defaultRulesetVersionId_fkey', 'Campaign_rulesetVersionId_fkey',
       'ActorContent_actorId_fkey', 'ActorContent_contentDefinitionId_fkey',
     ]));
   });
@@ -137,12 +158,12 @@ describe('migration and PostgreSQL schema', () => {
     const tables = await prisma.$queryRaw<Array<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>>`
       SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relname IN ('Player', 'World', 'Campaign', 'Actor', 'ContentDefinition', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
+      WHERE n.nspname = 'public' AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ContentDefinition', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
     `;
-    expect(tables).toHaveLength(8);
+    expect(tables).toHaveLength(10);
     expect(tables.every((table) => table.relrowsecurity)).toBe(true);
     expect(tables.every((table) => !table.relforcerowsecurity)).toBe(true);
-    await expect(prisma.$queryRaw<Array<{ tablename: string }>>`SELECT tablename::text FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('Player', 'World', 'Campaign', 'Actor', 'ContentDefinition', 'ActorContent', 'GameEvent', 'IdempotencyRecord')`).resolves.toHaveLength(0);
+    await expect(prisma.$queryRaw<Array<{ tablename: string }>>`SELECT tablename::text FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ContentDefinition', 'ActorContent', 'GameEvent', 'IdempotencyRecord')`).resolves.toHaveLength(0);
   });
 
   it('does not grant table privileges to PUBLIC', async () => {
@@ -152,7 +173,7 @@ describe('migration and PostgreSQL schema', () => {
       JOIN pg_namespace n ON n.oid = c.relnamespace
       CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) privilege
       WHERE n.nspname = 'public'
-        AND c.relname IN ('Player', 'World', 'Campaign', 'Actor', 'ContentDefinition', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
+        AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'World', 'Campaign', 'Actor', 'ContentDefinition', 'ActorContent', 'GameEvent', 'IdempotencyRecord')
         AND privilege.grantee = 0
     `;
     expect(rows[0]?.count).toBe(0);
@@ -167,15 +188,16 @@ describe('migration and PostgreSQL schema', () => {
 
 describe('idempotent seed', () => {
   async function counts() {
-    const [players, worlds, campaigns, actors, definitions, links] = await Promise.all([
+    const [rulesets, rulesetVersions, players, worlds, campaigns, actors, definitions, links] = await Promise.all([
+      prisma.ruleset.count(), prisma.rulesetVersion.count(),
       prisma.player.count(), prisma.world.count(), prisma.campaign.count(), prisma.actor.count(),
       prisma.contentDefinition.count(), prisma.actorContent.count(),
     ]);
-    return { players, worlds, campaigns, actors, definitions, links };
+    return { rulesets, rulesetVersions, players, worlds, campaigns, actors, definitions, links };
   }
 
   it('creates the expected initial records', async () => {
-    await expect(counts()).resolves.toEqual({ players: 1, worlds: 1, campaigns: 1, actors: 2, definitions: 1, links: 1 });
+    await expect(counts()).resolves.toEqual({ rulesets: 1, rulesetVersions: 1, players: 1, worlds: 1, campaigns: 1, actors: 2, definitions: 1, links: 1 });
   });
 
   it('keeps counts and the Ralph content link unchanged on a second seed', async () => {
@@ -193,6 +215,59 @@ describe('idempotent seed', () => {
     expect(definitionCount).toBe(1);
     expect(ralph.content).toHaveLength(1);
     expect(ralph.content[0]).toMatchObject({ state: 'LEARNING', rank: 1, progress: 10, mastery: 0, notes: 'Treino inicial com Lyra' });
+  });
+});
+
+describe('ruleset persistence and database immutability', () => {
+  it('binds the seeded World and Campaign to the official immutable version', async () => {
+    const world = await prisma.world.findFirstOrThrow({
+      where: { code: 'elarion' },
+      include: { defaultRulesetVersion: { include: { ruleset: true } }, campaigns: true },
+    });
+    expect(world.defaultRulesetVersion).toMatchObject({
+      code: 'core-v1', revision: 'RC1.1', schemaVersion: 1, configHash: CORE_V1_CONFIG_HASH,
+      configSnapshot: CORE_V1_CONFIG_SNAPSHOT, ruleset: { code: 'core' },
+    });
+    expect(world.campaigns).toHaveLength(1);
+    expect(world.campaigns[0]?.rulesetVersionId).toBe(world.defaultRulesetVersionId);
+  });
+
+  it('enforces hash format and positive schema versions in PostgreSQL', async () => {
+    const ruleset = await prisma.ruleset.create({ data: { code: 'constraint-test', name: 'Constraint Test' } });
+    await expect(prisma.rulesetVersion.create({ data: {
+      rulesetId: ruleset.id, code: 'invalid-hash-v1', revision: 'TEST', schemaVersion: 1,
+      configHash: 'invalid', configSnapshot: {},
+    } })).rejects.toThrow();
+    await expect(prisma.rulesetVersion.create({ data: {
+      rulesetId: ruleset.id, code: 'invalid-schema-v1', revision: 'TEST', schemaVersion: 0,
+      configHash: '0'.repeat(64), configSnapshot: {},
+    } })).rejects.toThrow();
+    await expect(prisma.rulesetVersion.count({ where: { rulesetId: ruleset.id } })).resolves.toBe(0);
+  });
+
+  it('blocks every RulesetVersion update and delete in PostgreSQL', async () => {
+    const version = await prisma.rulesetVersion.findUniqueOrThrow({ where: { code: 'core-v1' } });
+    await expect(prisma.rulesetVersion.update({ where: { id: version.id }, data: { revision: 'changed' } }))
+      .rejects.toThrow(/RulesetVersion is immutable and cannot be updated/);
+    await expect(prisma.rulesetVersion.delete({ where: { id: version.id } }))
+      .rejects.toThrow(/RulesetVersion is immutable and cannot be deleted/);
+    await expect(prisma.rulesetVersion.findUniqueOrThrow({ where: { id: version.id } })).resolves.toMatchObject({
+      revision: 'RC1.1', configHash: CORE_V1_CONFIG_HASH,
+    });
+  });
+
+  it('accepts the same Campaign rulesetVersionId and rejects a real change', async () => {
+    const campaign = await prisma.campaign.findFirstOrThrow({ where: { code: 'main-campaign' } });
+    const alternate = await createAlternateRulesetVersion('campaign-immutability');
+    await expect(prisma.campaign.update({
+      where: { id: campaign.id }, data: { rulesetVersionId: campaign.rulesetVersionId },
+    })).resolves.toMatchObject({ rulesetVersionId: campaign.rulesetVersionId });
+    await expect(prisma.campaign.update({
+      where: { id: campaign.id }, data: { rulesetVersionId: alternate.id },
+    })).rejects.toThrow(/Campaign rulesetVersionId is immutable after creation/);
+    await expect(prisma.campaign.findUniqueOrThrow({ where: { id: campaign.id } })).resolves.toMatchObject({
+      rulesetVersionId: campaign.rulesetVersionId,
+    });
   });
 });
 
@@ -312,6 +387,19 @@ describe('GPT v1 persistence with real transactions', () => {
     await expect(prisma.idempotencyRecord.count({ where: { key: body.idempotencyKey } })).resolves.toBe(1);
     await expect(prisma.gameEvent.count({ where: { campaign: { code: body.campaignRef, world: { code: body.worldRef } }, eventType: 'campaign-started' } })).resolves.toBe(1);
     await expect(prisma.gameEvent.findFirstOrThrow({ where: { campaign: { code: body.campaignRef, world: { code: body.worldRef } }, eventType: 'campaign-started' } })).resolves.toMatchObject({ idempotencyKey: null });
+    const persistedWorld = await prisma.world.findFirstOrThrow({
+      where: { code: body.worldRef, player: { slug: body.playerRef } },
+      include: { defaultRulesetVersion: { select: { code: true, revision: true, configHash: true } } },
+    });
+    const persistedCampaign = await prisma.campaign.findUniqueOrThrow({
+      where: { worldId_code: { worldId: persistedWorld.id, code: body.campaignRef } },
+      include: { rulesetVersion: { select: { code: true, revision: true, configHash: true } } },
+    });
+    expect(persistedWorld.defaultRulesetVersion).toEqual({ code: 'core-v1', revision: 'RC1.1', configHash: CORE_V1_CONFIG_HASH });
+    expect(persistedCampaign.rulesetVersionId).toBe(persistedWorld.defaultRulesetVersionId);
+    expect(persistedCampaign.rulesetVersion).toEqual(persistedWorld.defaultRulesetVersion);
+    await expect(prisma.rulesetVersion.count({ where: { code: 'core-v1' } })).resolves.toBe(1);
+    expect(JSON.stringify(first.body)).not.toMatch(/rulesetVersionId|defaultRulesetVersionId|configSnapshot|[0-9a-f]{8}-[0-9a-f-]{27,}/i);
 
     const conflict = await post('/api/v1/game/start', { ...body, campaignName: 'Outra Campanha' });
     expect(conflict.status).toBe(409);
@@ -393,6 +481,32 @@ describe('GPT v1 persistence with real transactions', () => {
     expect(mismatch.status).toBe(409);
     expect(responseErrorMessage(mismatch)).toBe('Player display name does not match');
     await expect(prisma.player.findUniqueOrThrow({ where: { slug: 'new-player' } })).resolves.toMatchObject({ displayName: beforePlayer.displayName });
+  });
+
+  it('rejects reuse of a World bound to a non-core ruleset without changing it', async () => {
+    const alternate = await createAlternateRulesetVersion('incompatible-world');
+    const player = await prisma.player.create({ data: { slug: 'incompatible-player', displayName: 'Incompatible Player' } });
+    const world = await prisma.world.create({
+      data: {
+        playerId: player.id, defaultRulesetVersionId: alternate.id,
+        code: 'incompatible-world', name: 'Incompatible World',
+      },
+    });
+    const template = structuredStart('incompatible-binding');
+    const body = {
+      ...template,
+      playerMode: 'reuse', playerRef: player.slug, playerDisplayName: undefined,
+      worldMode: 'reuse', worldRef: world.code, worldName: undefined, worldDescription: undefined, worldConfiguration: undefined,
+      protagonist: { ...template.protagonist, code: player.slug },
+    };
+    const response = await post('/api/v1/game/start', body);
+    expect(response.status).toBe(409);
+    expect(responseErrorMessage(response)).toBe('World ruleset is not compatible with core-v1');
+    await expect(prisma.world.findUniqueOrThrow({ where: { id: world.id } })).resolves.toMatchObject({
+      defaultRulesetVersionId: alternate.id,
+    });
+    await expect(prisma.campaign.count({ where: { worldId: world.id } })).resolves.toBe(0);
+    await expect(prisma.idempotencyRecord.count({ where: { key: body.idempotencyKey } })).resolves.toBe(0);
   });
 
   it('matches className against the persisted public name of a reused mechanical class', async () => {
@@ -530,6 +644,8 @@ describe('GPT v1 persistence with real transactions', () => {
     const conflict = left.status === 409 ? left : right;
     expect(responseErrorMessage(conflict)).not.toBe('Idempotency key already used');
     await expect(prisma.campaign.count({ where: { world: { code: 'new-world' }, code: base.campaignRef } })).resolves.toBe(1);
+    await expect(prisma.ruleset.count({ where: { code: 'core' } })).resolves.toBe(1);
+    await expect(prisma.rulesetVersion.count({ where: { code: 'core-v1' } })).resolves.toBe(1);
   });
 
   it('rolls back a global ContentDefinition P2002 without misreporting idempotency', async () => {
@@ -623,7 +739,9 @@ describe('GPT v1 persistence with real transactions', () => {
 
     const player = await prisma.player.findUniqueOrThrow({ where: { slug: 'ralph' } });
     const world = await prisma.world.findUniqueOrThrow({ where: { playerId_code: { playerId: player.id, code: 'elarion' } } });
-    await prisma.campaign.create({ data: { worldId: world.id, code: 'empty-campaign', name: 'Empty Campaign' } });
+    await prisma.campaign.create({
+      data: { worldId: world.id, rulesetVersionId: world.defaultRulesetVersionId, code: 'empty-campaign', name: 'Empty Campaign' },
+    });
     const emptyResponse = await post('/api/v1/game/start', { ...campaignInNewWorld('empty'), playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'empty-campaign', protagonist: { ...campaignInNewWorld('empty').protagonist, code: 'ralph' } });
     expect(emptyResponse.status).toBe(409);
     await expect(prisma.campaign.findUniqueOrThrow({ where: { worldId_code: { worldId: world.id, code: 'empty-campaign' } } })).resolves.toMatchObject({ name: 'Empty Campaign', status: CampaignStatus.DRAFT });
@@ -719,17 +837,18 @@ describe('GPT v1 persistence with real transactions', () => {
   });
 
   it('isolates repeated world, campaign, actor and content codes across every public read', async () => {
+    const rulesetVersion = await prisma.$transaction((transaction) => ensureCoreV1RulesetVersion(transaction));
     const player = await prisma.player.create({ data: { slug: 'scope-player', displayName: 'Scope Player' } });
     const otherPlayer = await prisma.player.create({ data: { slug: 'other-player', displayName: 'Other Player' } });
     const [worldOne, worldTwo] = await Promise.all([
-      prisma.world.create({ data: { playerId: player.id, code: 'world-one', name: 'World One', description: 'Primeiro mundo' } }),
-      prisma.world.create({ data: { playerId: player.id, code: 'world-two', name: 'World Two', description: 'Segundo mundo' } }),
-      prisma.world.create({ data: { playerId: otherPlayer.id, code: 'foreign-world', name: 'Foreign World' } }),
+      prisma.world.create({ data: { playerId: player.id, defaultRulesetVersionId: rulesetVersion.id, code: 'world-one', name: 'World One', description: 'Primeiro mundo' } }),
+      prisma.world.create({ data: { playerId: player.id, defaultRulesetVersionId: rulesetVersion.id, code: 'world-two', name: 'World Two', description: 'Segundo mundo' } }),
+      prisma.world.create({ data: { playerId: otherPlayer.id, defaultRulesetVersionId: rulesetVersion.id, code: 'foreign-world', name: 'Foreign World' } }),
     ]);
     const [campaignOne, campaignTwo] = await Promise.all([
-      prisma.campaign.create({ data: { worldId: worldOne.id, code: 'shared-campaign', name: 'Campaign One', status: CampaignStatus.ACTIVE } }),
-      prisma.campaign.create({ data: { worldId: worldTwo.id, code: 'shared-campaign', name: 'Campaign Two', status: CampaignStatus.PAUSED } }),
-      prisma.campaign.create({ data: { worldId: worldOne.id, code: 'global-campaign', name: 'Global Fallback', status: CampaignStatus.DRAFT } }),
+      prisma.campaign.create({ data: { worldId: worldOne.id, rulesetVersionId: worldOne.defaultRulesetVersionId, code: 'shared-campaign', name: 'Campaign One', status: CampaignStatus.ACTIVE } }),
+      prisma.campaign.create({ data: { worldId: worldTwo.id, rulesetVersionId: worldTwo.defaultRulesetVersionId, code: 'shared-campaign', name: 'Campaign Two', status: CampaignStatus.PAUSED } }),
+      prisma.campaign.create({ data: { worldId: worldOne.id, rulesetVersionId: worldOne.defaultRulesetVersionId, code: 'global-campaign', name: 'Global Fallback', status: CampaignStatus.DRAFT } }),
     ]);
     const [actorOne, actorTwo] = await Promise.all([
       prisma.actor.create({ data: { campaignId: campaignOne.id, code: 'shared-hero', name: 'Hero One', actorType: ActorType.CHARACTER, health: 10, maxHealth: 10, mana: 2, maxMana: 2 } }),
@@ -814,8 +933,9 @@ describe('GPT v1 persistence with real transactions', () => {
 
   it('keeps the current Mundo Cardinal refs loadable with explicit scope', async () => {
     const player = await prisma.player.findUniqueOrThrow({ where: { slug: 'ralph' } });
-    const world = await prisma.world.create({ data: { playerId: player.id, code: 'mundo-cardinal', name: 'Mundo Cardinal' } });
-    const campaign = await prisma.campaign.create({ data: { worldId: world.id, code: 'harem-perfeito', name: 'Harém Perfeito', status: CampaignStatus.ACTIVE } });
+    const rulesetVersion = await prisma.$transaction((transaction) => ensureCoreV1RulesetVersion(transaction));
+    const world = await prisma.world.create({ data: { playerId: player.id, defaultRulesetVersionId: rulesetVersion.id, code: 'mundo-cardinal', name: 'Mundo Cardinal' } });
+    const campaign = await prisma.campaign.create({ data: { worldId: world.id, rulesetVersionId: world.defaultRulesetVersionId, code: 'harem-perfeito', name: 'Harém Perfeito', status: CampaignStatus.ACTIVE } });
     await prisma.actor.create({ data: { campaignId: campaign.id, code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER, health: 30, maxHealth: 30, mana: 15, maxMana: 15 } });
 
     const response = await post('/api/v1/game/load', { playerRef: 'ralph', worldRef: 'mundo-cardinal', campaignRef: 'harem-perfeito' });

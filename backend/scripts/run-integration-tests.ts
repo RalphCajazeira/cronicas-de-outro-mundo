@@ -1,7 +1,11 @@
 import 'dotenv/config';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import process from 'node:process';
+import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
+import { PrismaClient } from '../src/generated/prisma/client.js';
+import { ensureCoreV1RulesetVersion } from '../src/modules/rules/ruleset.registry.js';
 import { createAdminUrl, resolveTestDatabaseConfig } from '../tests/support/test-database.js';
 
 const { Client } = pg;
@@ -26,9 +30,91 @@ async function recreateTestDatabase(adminUrl: URL): Promise<void> {
   }
 }
 
+function migrationSql(name: string): string {
+  return readFileSync(new URL(`../prisma/migrations/${name}/migration.sql`, import.meta.url), 'utf8');
+}
+
+async function verifyCleanSlatePrecondition(databaseUrl: URL, adminUrl: URL): Promise<void> {
+  await recreateTestDatabase(adminUrl);
+  const client = new Client({ connectionString: databaseUrl.toString() });
+  await client.connect();
+  try {
+    await client.query(migrationSql('20260711183000_init'));
+    await client.query(migrationSql('20260711223000_production_gpt_security'));
+    await client.query(`
+      INSERT INTO "Player" ("id", "slug", "displayName", "updatedAt")
+      VALUES ('00000000-0000-0000-0000-000000000001', 'precondition-player', 'Precondition Player', CURRENT_TIMESTAMP)
+    `);
+    await client.query(`
+      INSERT INTO "World" ("id", "playerId", "code", "name", "updatedAt")
+      VALUES ('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001', 'precondition-world', 'Precondition World', CURRENT_TIMESTAMP)
+    `);
+    await client.query(`
+      INSERT INTO "Campaign" ("id", "worldId", "code", "name", "updatedAt")
+      VALUES ('00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000002', 'precondition-campaign', 'Precondition Campaign', CURRENT_TIMESTAMP)
+    `);
+
+    let rejected = false;
+    try {
+      await client.query(migrationSql('20260713174337_engine_v1_ruleset_persistence'));
+    } catch (error) {
+      rejected = error instanceof Error
+        && error.message.includes('Phase 1C migration requires empty World and Campaign tables; clear functional data before rollout');
+    }
+    if (!rejected) throw new Error('Phase 1C clean-slate precondition was not enforced');
+
+    const persisted = await client.query<{ worlds: number; campaigns: number }>(`
+      SELECT
+        (SELECT count(*)::int FROM "World") AS worlds,
+        (SELECT count(*)::int FROM "Campaign") AS campaigns
+    `);
+    if (persisted.rows[0]?.worlds !== 1 || persisted.rows[0]?.campaigns !== 1) {
+      throw new Error('Phase 1C clean-slate precondition changed functional data');
+    }
+  } finally {
+    await client.end();
+  }
+  console.info('Phase 1C clean-slate precondition verified safely');
+}
+
+async function verifyRulesetRegistryTransactions(databaseUrl: URL): Promise<void> {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl.toString(), max: 5 }) });
+  try {
+    let rolledBack = false;
+    try {
+      await prisma.$transaction(async (transaction) => {
+        await ensureCoreV1RulesetVersion(transaction);
+        throw new Error('intentional ruleset registry rollback');
+      });
+    } catch (error) {
+      rolledBack = error instanceof Error && error.message === 'intentional ruleset registry rollback';
+    }
+    if (!rolledBack || await prisma.ruleset.count() !== 0 || await prisma.rulesetVersion.count() !== 0) {
+      throw new Error('Ruleset registry transaction did not roll back completely');
+    }
+
+    const versions = await Promise.all([
+      prisma.$transaction((transaction) => ensureCoreV1RulesetVersion(transaction)),
+      prisma.$transaction((transaction) => ensureCoreV1RulesetVersion(transaction)),
+    ]);
+    const [rulesets, persistedVersions] = await Promise.all([
+      prisma.ruleset.count({ where: { code: 'core' } }),
+      prisma.rulesetVersion.count({ where: { code: 'core-v1' } }),
+    ]);
+    if (rulesets !== 1 || persistedVersions !== 1 || versions[0].id !== versions[1].id) {
+      throw new Error('Concurrent ruleset registry creation was not idempotent');
+    }
+  } finally {
+    await prisma.$disconnect();
+  }
+  console.info('Phase 1C registry rollback and concurrency verified safely');
+}
+
 async function main(): Promise<void> {
   const config = resolveTestDatabaseConfig(process.env);
-  await recreateTestDatabase(createAdminUrl(config.directUrl));
+  const adminUrl = createAdminUrl(config.directUrl);
+  await verifyCleanSlatePrecondition(config.directUrl, adminUrl);
+  await recreateTestDatabase(adminUrl);
   console.info('Local test database recreated safely');
 
   const environment: NodeJS.ProcessEnv = {
@@ -40,6 +126,7 @@ async function main(): Promise<void> {
   };
 
   runNpm(['exec', '--', 'prisma', 'migrate', 'deploy'], environment);
+  await verifyRulesetRegistryTransactions(config.databaseUrl);
   runNpm(['run', 'prisma:seed'], environment);
   runNpm(['exec', '--', 'vitest', 'run', '--config', 'vitest.integration.config.ts'], environment);
 }

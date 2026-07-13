@@ -1,4 +1,7 @@
 import {
+  CORE_V1_AREA_PER_TARGET_DAMAGE_CAP_BPS,
+  CORE_V1_AREA_TOTAL_DAMAGE_CAP_BPS,
+  CORE_V1_HYBRID_STANDARD_COST_BPS,
   CORE_V1_NPC_INVENTORY_LIMITS,
   CORE_V1_NPC_RESOURCE_MULTIPLIERS,
   CORE_V1_NPC_THREAT_MULTIPLIER_BPS,
@@ -63,13 +66,13 @@ export function validateAreaDamageProposal(input: unknown): ValidationResult<Are
   let totalLimit: number;
   try {
     perTargetScaled = safeIntegerMultiply(input.perTargetExpectedDamage, 10000, 'area per-target scaled damage');
-    perTargetLimit = safeIntegerMultiply(input.singleTargetEquivalentDamage, 6000, 'area per-target limit');
+    perTargetLimit = safeIntegerMultiply(input.singleTargetEquivalentDamage, CORE_V1_AREA_PER_TARGET_DAMAGE_CAP_BPS, 'area per-target limit');
     totalScaled = safeIntegerMultiply(
       safeIntegerMultiply(input.perTargetExpectedDamage, input.expectedTargetCount, 'area total damage'),
       10000,
       'area total scaled damage',
     );
-    totalLimit = safeIntegerMultiply(input.singleTargetEquivalentDamage, 15000, 'area total limit');
+    totalLimit = safeIntegerMultiply(input.singleTargetEquivalentDamage, CORE_V1_AREA_TOTAL_DAMAGE_CAP_BPS, 'area total limit');
   } catch {
     return invalid('$', 'SAFE_INTEGER', 'Area damage calculation must remain within safe integer limits');
   }
@@ -100,8 +103,8 @@ export function getHybridCost(tier: number): { mana: number; sp: number } {
   const mana = getManaCostBand(tier).standard;
   const sp = getSpCostBand(tier).standard;
   return {
-    mana: ceilDiv(safeIntegerMultiply(mana, 6000, 'hybrid mana cost'), 10000),
-    sp: ceilDiv(safeIntegerMultiply(sp, 6000, 'hybrid SP cost'), 10000),
+    mana: ceilDiv(safeIntegerMultiply(mana, CORE_V1_HYBRID_STANDARD_COST_BPS, 'hybrid mana cost'), 10000),
+    sp: ceilDiv(safeIntegerMultiply(sp, CORE_V1_HYBRID_STANDARD_COST_BPS, 'hybrid SP cost'), 10000),
   };
 }
 

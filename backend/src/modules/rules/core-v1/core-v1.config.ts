@@ -27,6 +27,9 @@ export const CORE_V1_ATTRIBUTE_SOFT_CAP = 20;
 export const CORE_V1_ATTRIBUTE_HARD_CAP = 30;
 export const CORE_V1_MAX_DAMAGE_COMPONENTS = 6;
 export const CORE_V1_MASTERY_XP = 2000;
+export const CORE_V1_AREA_PER_TARGET_DAMAGE_CAP_BPS = 6000;
+export const CORE_V1_AREA_TOTAL_DAMAGE_CAP_BPS = 15000;
+export const CORE_V1_HYBRID_STANDARD_COST_BPS = 6000;
 
 export const CORE_V1_ATTRIBUTE_PRESETS = Object.freeze({
   balanced: Object.freeze({

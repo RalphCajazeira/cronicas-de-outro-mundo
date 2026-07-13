@@ -8,6 +8,7 @@ import { ConflictError, NotFoundError } from '../../shared/errors/app-error.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import { scopedActorKey } from '../actors/actors.repository.js';
 import { findScopedContent } from '../content/content.repository.js';
+import { ensureCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
 import type {
   CreateEventInput, ListCampaignActorsInput, LoadGameInput, ManageActorContentInput,
   ListPlayerWorldsInput, ListWorldCampaignsInput, PatchActorInput, StartGameInput, UpsertActorInput, UpsertContentInput,
@@ -261,6 +262,7 @@ export const prismaGptRepository: GptRepository = {
 
   async startGame(input: StartGameInput) {
     return executeIdempotent(input.idempotencyKey, 'game.start', input, async (transaction) => {
+      const officialRulesetVersion = await ensureCoreV1RulesetVersion(transaction);
       const existingPlayer = await transaction.player.findUnique({ where: { slug: input.playerRef } });
       if (input.playerMode === 'create' && existingPlayer !== null) throw new ConflictError('Player already exists');
       if (input.playerMode === 'reuse' && existingPlayer === null) throw new NotFoundError('Player');
@@ -273,10 +275,19 @@ export const prismaGptRepository: GptRepository = {
 
       const existingWorld = await transaction.world.findUnique({
         where: { playerId_code: { playerId: player.id, code: input.worldRef } },
+        include: {
+          defaultRulesetVersion: { select: { code: true, revision: true, configHash: true } },
+        },
       });
       if (input.worldMode === 'create' && existingWorld !== null) throw new ConflictError('World already exists');
       if (input.worldMode === 'reuse' && existingWorld === null) throw new NotFoundError('World');
       if (existingWorld !== null) {
+        if (existingWorld.defaultRulesetVersionId !== officialRulesetVersion.id
+          || existingWorld.defaultRulesetVersion.code !== officialRulesetVersion.code
+          || existingWorld.defaultRulesetVersion.revision !== officialRulesetVersion.revision
+          || existingWorld.defaultRulesetVersion.configHash !== officialRulesetVersion.configHash) {
+          throw new ConflictError('World ruleset is not compatible with core-v1');
+        }
         if (input.worldName !== undefined && existingWorld.name !== input.worldName) throw new ConflictError('World name does not match');
         if (input.worldDescription !== undefined && existingWorld.description !== input.worldDescription) throw new ConflictError('World description does not match');
         if (input.worldConfiguration !== undefined && !canonicalJsonEqual(worldConfiguration(existingWorld.metadata), input.worldConfiguration)) {
@@ -285,7 +296,8 @@ export const prismaGptRepository: GptRepository = {
       }
       const world = existingWorld ?? await transaction.world.create({
         data: {
-          playerId: player.id, code: input.worldRef, name: input.worldName ?? '',
+          playerId: player.id, defaultRulesetVersionId: officialRulesetVersion.id,
+          code: input.worldRef, name: input.worldName ?? '',
           ...(input.worldDescription === undefined ? {} : { description: input.worldDescription }),
           metadata: inputJson({ worldConfig: input.worldConfiguration }),
         },
@@ -303,7 +315,8 @@ export const prismaGptRepository: GptRepository = {
       };
       const campaign = await transaction.campaign.create({
         data: {
-          worldId: world.id, code: input.campaignRef, name: input.campaignName,
+          worldId: world.id, rulesetVersionId: world.defaultRulesetVersionId,
+          code: input.campaignRef, name: input.campaignName,
           status: CampaignStatus.ACTIVE, metadata: inputJson({ campaignConfig }),
         },
       });
