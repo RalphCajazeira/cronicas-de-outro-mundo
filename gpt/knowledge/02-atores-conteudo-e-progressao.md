@@ -2,7 +2,9 @@
 
 ## Persistência estruturada atual
 
-`Actor` representa personagem ou figura individual relevante. Possui `code` estável, identidade básica, ficha mecânica, descrição, metadados e estado. Os tipos atuais são `character`, `npc`, `creature`, `companion` e `spirit`.
+`Actor` representa personagem ou figura individual relevante. Possui `code` estável, identidade básica, descrição, metadados, estado e ficha mecânica autoritativa calculada pelo backend. Os tipos atuais são `character`, `npc`, `creature`, `companion` e `spirit`.
+
+A ficha pública contém nove `primaryAttributes`, recursos atuais/máximos de HP, Mana e SP, `secondaryAttributes`, `mechanicsStateVersion` e ruleset. O GPT propõe os atributos iniciais e, para NPC/criatura, nível 1–20; não propõe máximos nem derivados. Recursos começam cheios e ainda não existe operação de gasto, cura ou dano.
 
 `ContentDefinition` representa conteúdo reutilizável no mundo ou em uma campanha. Tipos atuais incluem habilidade, magia, arma, armadura, escudo, item, talento, material, classe, raça, localização, facção, modelo de missão, efeito de estado, receita, modelo de criatura e outros.
 

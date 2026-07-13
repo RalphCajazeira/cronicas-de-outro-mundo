@@ -32,3 +32,18 @@ O futuro rollout em staging deve confirmar e limpar os dados funcionais por oper
 Depois de publicada, uma migration aplicada não é editada nem removida. Rollback operacional prefere código anterior compatível ou nova migration corretiva revisada. O plano estrutural, válido apenas antes de existirem dados funcionais compatíveis, remove triggers/funções, FKs/índices, os dois campos de vínculo e então as tabelas de ruleset; nunca apaga dados silenciosamente.
 
 Status: implementada e validada na Fase 1C; revisão e integração rastreadas pelo PR correspondente
+
+## Fase 1D — ficha mecânica de Actor
+
+Models:
+
+- `ActorAttribute`: um registro por Actor/código oficial, com base, ganho e XP separados;
+- `ActorResource`: um valor atual por Actor/tipo `hp|mana|sp`, sem máximo independente;
+- `ActorDerivedSnapshot`: snapshot único e recomputável de máximos/derivados, ligado obrigatoriamente à `RulesetVersion`;
+- `Actor.mechanicsStateVersion`: contador positivo, iniciado em 1 e copiado pelo snapshot.
+
+A migration `20260713190000_engine_v1_actor_mechanics` falha antes do DDL quando encontra qualquer Actor. Ela não faz backfill, dual-read, dual-write, fallback, `DELETE` ou `TRUNCATE`; remove as sete colunas mecânicas legadas somente após o guard, cria enums fechados, checks de caps/valores/versões/hash, unicidades 9/3/1, FKs cascade para estado pertencente ao Actor, FK restrita para `RulesetVersion` e a postura RLS/revogações vigente.
+
+Máximos nunca são persistência independente em `ActorResource`. O snapshot usa `inputHash` SHA-256 canônico e é validado/recalculado pelo backend, não por trigger. O rollout remoto futuro continua exigindo limpeza funcional explícita e o gate manual normal; staging/Supabase não foram acessados.
+
+Status: implementada e validada na Fase 1D; revisão e integração rastreadas pelo PR correspondente

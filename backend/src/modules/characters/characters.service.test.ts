@@ -2,12 +2,14 @@ import { ActorStatus, ActorType } from '../../generated/prisma/client.js';
 import { describe, expect, it } from 'vitest';
 import type { ActorRecord, ActorRepository } from '../actors/actors.types.js';
 import { createCharactersService } from './characters.service.js';
+import { actorMechanicalSheetFixture } from '../../../tests/support/actor-mechanics-fixture.js';
 const scope = { playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' };
 
 function actor(actorType: ActorType): ActorRecord {
   return { id: '7e7b7cbe-5767-47de-a0b5-4b7bc9365c89', code: 'ralph', name: 'Ralph', actorType, species: null,
-    className: null, level: 1, xp: 0, gold: 0, health: 20, maxHealth: 20, mana: 10, maxMana: 10,
-    attributes: {}, resistances: {}, affinities: {}, appearance: {}, personality: {}, status: ActorStatus.ACTIVE };
+    className: null, role: null, description: null, level: 1, xp: 0, gold: 0,
+    appearance: {}, personality: {}, metadata: {}, status: ActorStatus.ACTIVE,
+    mechanicalSheet: actorMechanicalSheetFixture() };
 }
 
 function repository(actorType: ActorType): ActorRepository {

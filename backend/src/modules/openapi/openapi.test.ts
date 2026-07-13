@@ -209,6 +209,26 @@ describe('official OpenAPI contract', () => {
     expect(contract.components.schemas.LinkedActorContent).toBeDefined();
   });
 
+  it('publishes the authoritative actor mechanical sheet without writable derived fields', () => {
+    const primary = contract.components.schemas.PrimaryAttributes;
+    expect(primary?.additionalProperties).toBe(false);
+    expect(primary?.required).toEqual([
+      'strength', 'vitality', 'agility', 'dexterity', 'intelligence', 'wisdom', 'perception', 'willpower', 'luck',
+    ]);
+    for (const schemaName of ['ActorResources', 'SecondaryAttributes', 'ActorMechanicalSheet']) {
+      expect(contract.components.schemas[schemaName]?.additionalProperties, schemaName).toBe(false);
+    }
+    expect(contract.components.schemas.Actor?.required).toEqual(expect.arrayContaining([
+      'primaryAttributes', 'resources', 'secondaryAttributes', 'mechanicsStateVersion', 'ruleset',
+    ]));
+    const forbidden = ['health', 'maxHealth', 'mana', 'maxMana', 'attributes', 'resistances', 'affinities', 'inputHash', 'rulesetVersionId'];
+    expect(forbidden.every((field) => contract.components.schemas.InitialActorInput?.properties?.[field] === undefined)).toBe(true);
+    expect(forbidden.every((field) => contract.components.schemas.ActorPatchInput?.properties?.[field] === undefined)).toBe(true);
+    expect(forbidden.every((field) => contract.components.schemas.ActorUpsertInput?.properties?.[field] === undefined)).toBe(true);
+    expect(contract.components.schemas.InitialActorInput?.required).toContain('primaryAttributes');
+    expect(contract.components.schemas.ActorUpsertInput?.required).toContain('primaryAttributes');
+  });
+
   it('contains neither legacy endpoints nor sensitive infrastructure', () => {
     const serialized = JSON.stringify(contract);
     expect(Object.keys(contract.paths).every((path) => !/rpg-gpt|rpg-state|rpg-combat|functions\/v1/i.test(path))).toBe(true);

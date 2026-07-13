@@ -5,10 +5,9 @@ import type { ActorContentRecord, ActorRecord, ActorRepository } from './actors.
 
 export function normalizeActor(actor: ActorRecord) {
   return { code: actor.code, name: actor.name, actorType: normalizeEnum(actor.actorType), species: actor.species,
-    className: actor.className, level: actor.level, xp: actor.xp, gold: actor.gold, health: actor.health,
-    maxHealth: actor.maxHealth, mana: actor.mana, maxMana: actor.maxMana, attributes: actor.attributes,
-    resistances: actor.resistances, affinities: actor.affinities, appearance: actor.appearance,
-    personality: actor.personality, status: normalizeEnum(actor.status) };
+    className: actor.className, role: actor.role, description: actor.description, level: actor.level,
+    xp: actor.xp, gold: actor.gold, appearance: actor.appearance, personality: actor.personality,
+    metadata: actor.metadata, status: normalizeEnum(actor.status), ...actor.mechanicalSheet };
 }
 
 export function normalizeActorContent(item: ActorContentRecord) {

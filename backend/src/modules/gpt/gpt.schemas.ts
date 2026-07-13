@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { codeSchema } from '../actors/actors.schemas.js';
 import { contentTypeSchema } from '../content/content.schemas.js';
+import { validateInitialPrimaryAttributes, type PrimaryAttributes } from '../rules/core-v1/index.js';
 import {
   METADATA_MAX_BYTES, METADATA_TOTAL_MAX_BYTES, PROFILE_MAX_BYTES, START_GAME_MAX_BYTES,
   difficultyPresets, hasDangerousJsonKey, jsonByteSize, jsonDepth, jsonKeyCount,
@@ -138,16 +139,20 @@ export const listPlayerWorldsSchema = z.strictObject({ playerRef: codeSchema });
 export const listWorldCampaignsSchema = z.strictObject({ playerRef: codeSchema, worldRef: codeSchema });
 export const listCampaignActorsSchema = z.strictObject({ playerRef: codeSchema, worldRef: codeSchema, campaignRef: codeSchema });
 
-const actorMechanicsFields = {
+export const primaryAttributesSchema: z.ZodType<PrimaryAttributes> = z.unknown().transform((value, context) => {
+  const validation = validateInitialPrimaryAttributes(value);
+  if (validation.ok) return validation.value;
+  validation.issues.forEach((issue) => {
+    const path = issue.path.split('.').slice(1);
+    context.addIssue({ code: 'custom', path, message: issue.message });
+  });
+  return z.NEVER;
+});
+
+const actorNarrativeFields = {
   role: z.string().trim().min(1).max(100).nullable().optional(),
   description: z.string().trim().min(1).max(5_000).nullable().optional(),
-  level: z.number().int().min(1).max(10_000).optional(),
-  xp: z.number().int().min(0).optional(), gold: z.number().int().min(0).optional(),
-  health: z.number().int().min(0).optional(), maxHealth: z.number().int().min(1).optional(),
-  mana: z.number().int().min(0).optional(), maxMana: z.number().int().min(0).optional(),
-  attributes: limitedJsonObject(20).optional(), resistances: limitedJsonObject(20).optional(), affinities: limitedJsonObject(20).optional(),
   appearance: appearanceSchema.optional(), personality: personalitySchema.optional(), metadata: limitedJsonObject().optional(),
-  status: actorStatusSchema.optional(),
 };
 
 const initialProtagonistSchema = z.strictObject({
@@ -156,17 +161,11 @@ const initialProtagonistSchema = z.strictObject({
   actorType: z.literal('character'),
   species: z.string().trim().min(1).max(100).nullable().optional(),
   className: z.string().trim().min(1).max(100).nullable().optional(),
-  ...actorMechanicsFields,
+  primaryAttributes: primaryAttributesSchema,
+  ...actorNarrativeFields,
   description: z.string().trim().min(1).max(3_000).nullable().optional(),
-  status: z.literal('active').optional(),
   origin: originSchema.optional(),
 }).superRefine((value, context) => {
-  if (value.health !== undefined && value.maxHealth !== undefined && value.health > value.maxHealth) {
-    context.addIssue({ code: 'custom', path: ['health'], message: 'Must not exceed maxHealth' });
-  }
-  if (value.mana !== undefined && value.maxMana !== undefined && value.mana > value.maxMana) {
-    context.addIssue({ code: 'custom', path: ['mana'], message: 'Must not exceed maxMana' });
-  }
   if (value.metadata !== undefined && Object.hasOwn(value.metadata, 'origin')) {
     context.addIssue({ code: 'custom', path: ['metadata', 'origin'], message: 'Use protagonist.origin instead of metadata.origin' });
   }
@@ -339,7 +338,7 @@ export const startGameSchema = z.strictObject({
       if (condition !== permanent) context.addIssue({ code: 'custom', path: ['initialContentPackages', index, 'definition'], message: 'Permanent conditions require metadata.category=condition and mechanics.permanence=permanent' });
     }
     validateEquipped(item, index, context);
-    if (isInitiallyKnown(item.protagonistLink?.state)) validateKnownRequirements(item, index, linkedKnown, value.protagonist.attributes ?? {}, context);
+    if (isInitiallyKnown(item.protagonistLink?.state)) validateKnownRequirements(item, index, linkedKnown, value.protagonist.primaryAttributes, context);
   });
 
   if (classModel.mode === 'mechanical' && classModel.startingClass === 'required') {
@@ -378,10 +377,18 @@ export const startGameSchema = z.strictObject({
 
 export const upsertActorSchema = z.strictObject({
   ...scopeFields, idempotencyKey: idempotencyKeySchema, code: codeSchema, name: z.string().trim().min(1).max(200), actorType: actorTypeSchema,
-  species: z.string().trim().min(1).max(100).nullable().optional(), className: z.string().trim().min(1).max(100).nullable().optional(), ...actorMechanicsFields,
+  species: z.string().trim().min(1).max(100).nullable().optional(), className: z.string().trim().min(1).max(100).nullable().optional(),
+  level: z.number().int().min(1).max(20).optional(), primaryAttributes: primaryAttributesSchema, ...actorNarrativeFields,
 });
 
-export const patchActorSchema = z.strictObject({ ...scopeFields, idempotencyKey: idempotencyKeySchema, ...actorMechanicsFields }).refine(
+export const patchActorSchema = z.strictObject({
+  ...scopeFields,
+  idempotencyKey: idempotencyKeySchema,
+  name: z.string().trim().min(1).max(200).optional(),
+  species: z.string().trim().min(1).max(100).nullable().optional(),
+  className: z.string().trim().min(1).max(100).nullable().optional(),
+  ...actorNarrativeFields,
+}).refine(
   (value) => Object.keys(value).some((key) => !['playerRef', 'worldRef', 'campaignRef', 'idempotencyKey'].includes(key)),
   { message: 'At least one approved actor field is required' },
 );

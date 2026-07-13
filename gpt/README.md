@@ -48,6 +48,8 @@ Os arquivos em `legacy/supabase-gpt-v1/` são somente referência histórica e n
 
 Na criação estruturada, Player e World usam modos explícitos `create|reuse`, Campaign é sempre nova e conteúdo global reutilizado deve ser consultado antes com `getContent`. A Action envia no pacote reutilizado somente mode, scope, code e contentType; o backend não atualiza a definição existente. A resposta de `startGame` ainda deve ser confirmada por `loadGame`.
 
+A criação de Actor envia somente os nove `primaryAttributes` mecânicos permitidos; HP/Mana/SP máximos e todos os derivados são calculados pelo backend. Estes arquivos estão apenas versionados no repositório nesta fase: a configuração do GPT ao vivo permanece pendente.
+
 `gpt/openapi.json` usa um domínio de exemplo no repositório; o backend publicado injeta a origem HTTPS real. O GPT nunca acessa Supabase, Prisma ou PostgreSQL diretamente.
 
 ## Manutenção

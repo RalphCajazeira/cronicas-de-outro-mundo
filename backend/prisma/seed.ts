@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { ActorContentState, ActorStatus, ActorType, CampaignStatus, ContentStatus, ContentType, PrismaClient } from '../src/generated/prisma/client.js';
+import { createActorMechanicalState, loadActorMechanicalSheet } from '../src/modules/actors/actor-mechanics.service.js';
+import { getInitialAttributePreset } from '../src/modules/rules/core-v1/index.js';
 import { ensureCoreV1RulesetVersion } from '../src/modules/rules/ruleset.registry.js';
 
 const connectionString = process.env.DATABASE_URL;
@@ -27,12 +29,22 @@ async function main() {
     const ralph = await transaction.actor.upsert({
       where: { campaignId_code: { campaignId: campaign.id, code: 'ralph' } },
       update: {},
-      create: { campaignId: campaign.id, code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER, className: 'Aventureiro', level: 1, health: 20, maxHealth: 20, mana: 10, maxMana: 10, attributes: { strength: 5, agility: 6, intelligence: 5, vitality: 5 }, status: ActorStatus.ACTIVE },
+      create: { campaignId: campaign.id, code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER, className: 'Aventureiro', level: 1, status: ActorStatus.ACTIVE },
     });
-    await transaction.actor.upsert({
+    if (await transaction.actorAttribute.count({ where: { actorId: ralph.id } }) === 0) {
+      await createActorMechanicalState(transaction, { actorId: ralph.id, primaryAttributes: getInitialAttributePreset('physical') });
+    } else {
+      await loadActorMechanicalSheet(transaction, ralph.id);
+    }
+    const lyra = await transaction.actor.upsert({
       where: { campaignId_code: { campaignId: campaign.id, code: 'lyra' } }, update: {},
-      create: { campaignId: campaign.id, code: 'lyra', name: 'Lyra', actorType: ActorType.SPIRIT, species: 'Raposa espiritual', role: 'Guia', level: 1, health: 14, maxHealth: 14, mana: 18, maxMana: 18, attributes: { strength: 2, agility: 8, intelligence: 7, vitality: 4 }, affinities: { wind: 1 }, status: ActorStatus.ACTIVE },
+      create: { campaignId: campaign.id, code: 'lyra', name: 'Lyra', actorType: ActorType.SPIRIT, species: 'Raposa espiritual', role: 'Guia', level: 1, status: ActorStatus.ACTIVE },
     });
+    if (await transaction.actorAttribute.count({ where: { actorId: lyra.id } }) === 0) {
+      await createActorMechanicalState(transaction, { actorId: lyra.id, primaryAttributes: getInitialAttributePreset('magical') });
+    } else {
+      await loadActorMechanicalSheet(transaction, lyra.id);
+    }
     const breezeStep = await transaction.contentDefinition.upsert({
       where: { worldId_campaignId_contentType_code: { worldId: world.id, campaignId: campaign.id, contentType: ContentType.SKILL, code: 'wind_breeze_step' } },
       update: {},

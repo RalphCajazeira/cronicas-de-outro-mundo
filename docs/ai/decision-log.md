@@ -1,5 +1,23 @@
 # Decision Log
 
+## 2026-07-13 — Fase 1D de persistência autoritativa da ficha de atores
+
+Decisão:
+- retirar de `Actor` os campos livres `health`, `maxHealth`, `mana`, `maxMana`, `attributes`, `resistances` e `affinities`;
+- persistir exatamente nove `ActorAttribute`, três `ActorResource` atuais e um `ActorDerivedSnapshot` por ator;
+- manter máximos e derivados exclusivamente como resultados do `core-v1`, com snapshot auditável ligado à `RulesetVersion` e hash SHA-256 canônico dos inputs;
+- usar contadores inteiros de estado, recomputação transacional única e leitura que detecta contagem inválida, drift, ruleset incompatível e snapshot stale;
+- tornar `startGame` autoritativo para protagonista nível 1/XP 0 e restringir criação de demais atores a nível 1–20; patch comum passa a aceitar apenas identidade/narrativa;
+- exigir clean slate de Actor na migration, sem backfill, limpeza, conversão, fallback ou colunas paralelas;
+- manter gasto/cura/dano, inventário, equipamento, progressão, cenas, combate, deploy e atualização do GPT ao vivo fora desta fase.
+
+Impacto:
+- o GPT propõe somente os nove atributos, nível permitido e conteúdo narrativo; recursos máximos e derivados deixam de ser autoridade do cliente;
+- respostas públicas entregam `primaryAttributes`, recursos current/max, derivados, versão mecânica e identidade do ruleset, sem UUIDs ou hash;
+- rollout remoto futuro requer limpeza funcional deliberada antes da migration e atualização posterior da Action/GPT.
+
+Status: implementada e validada na Fase 1D; revisão e integração rastreadas pelo PR correspondente
+
 ## 2026-07-13 — Fase 1C de persistência e vínculo imutável do ruleset
 
 Decisão:

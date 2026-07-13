@@ -2,12 +2,13 @@ import { ActorStatus, ActorType } from '../../generated/prisma/client.js';
 import { describe, expect, it } from 'vitest';
 import { createActorsService } from './actors.service.js';
 import type { ActorRecord, ActorRepository } from './actors.types.js';
+import { actorMechanicalSheetFixture } from '../../../tests/support/actor-mechanics-fixture.js';
 
 const actor: ActorRecord = {
   id: '7e7b7cbe-5767-47de-a0b5-4b7bc9365c89', code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER,
-  species: null, className: 'Aventureiro', level: 1, xp: 0, gold: 0, health: 20, maxHealth: 20,
-  mana: 10, maxMana: 10, attributes: { strength: 5 }, resistances: {}, affinities: {}, status: ActorStatus.ACTIVE,
-  appearance: { eyes: 'green' }, personality: { traits: ['calm'] },
+  species: null, className: 'Aventureiro', role: null, description: null, level: 1, xp: 0, gold: 0,
+  status: ActorStatus.ACTIVE, appearance: { eyes: 'green' }, personality: { traits: ['calm'] }, metadata: {},
+  mechanicalSheet: actorMechanicalSheetFixture(),
 };
 const scope = { playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' };
 
@@ -19,6 +20,7 @@ describe('actors service', () => {
   it('returns a found actor as a normalized DTO', async () => {
     await expect(createActorsService(repository()).get(scope, 'ralph')).resolves.toEqual(expect.objectContaining({
       code: 'ralph', actorType: 'character', appearance: { eyes: 'green' }, personality: { traits: ['calm'] }, status: 'active',
+      mechanicsStateVersion: 1, ruleset: { code: 'core-v1', revision: 'RC1.1' },
     }));
   });
 

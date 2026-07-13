@@ -29,7 +29,7 @@ const allowedStringFields = [
   'actorRef', 'actorType', 'campaignRef', 'code', 'contentRef', 'contentType', 'eventType',
   'operation', 'playerMode', 'playerRef', 'preset', 'state', 'status', 'worldMode', 'worldRef',
 ] as const;
-const allowedNumberFields = ['equipped', 'level', 'mastery', 'progress', 'quantity', 'rank', 'removed'] as const;
+const allowedNumberFields = ['equipped', 'mastery', 'mechanicsStateVersion', 'progress', 'quantity', 'rank', 'removed'] as const;
 const sensitiveKeyPattern = /authorization|cookie|key|password|secret|token/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -64,6 +64,18 @@ function addAllowedScalars(source: Record<string, unknown>, target: Record<strin
   }
 }
 
+function addMechanicalSummary(source: Record<string, unknown>, target: Record<string, AuditValue>): void {
+  if (isRecord(source.primaryAttributes)) target.attributeCount = Object.keys(source.primaryAttributes).length;
+  if (isRecord(source.resources)) {
+    target.resourceTypes = Object.keys(source.resources).filter((type) => ['hp', 'mana', 'sp'].includes(type)).sort();
+  }
+  if (isRecord(source.secondaryAttributes)) target.derivedSnapshotPresent = true;
+  if (isRecord(source.ruleset)) {
+    const rulesetCode = safeString(source.ruleset.code);
+    if (rulesetCode !== undefined) target.rulesetCode = rulesetCode;
+  }
+}
+
 function fingerprint(value: unknown): { fingerprint: string; length: number } | undefined {
   if (typeof value !== 'string') return undefined;
   return { fingerprint: createHash('sha256').update(value).digest('hex').slice(0, 12), length: value.length };
@@ -78,6 +90,7 @@ function summarizeRequest(request: Request): Record<string, AuditValue> {
   if (!isRecord(request.body)) return summary;
   const body: Record<string, AuditValue> = { keys: safeKeys(request.body) };
   addAllowedScalars(request.body, body);
+  addMechanicalSummary(request.body, body);
 
   const idempotency = fingerprint(request.body.idempotencyKey);
   if (idempotency !== undefined) body.idempotency = idempotency;
@@ -92,6 +105,7 @@ function summarizeRequest(request: Request): Record<string, AuditValue> {
   if (isRecord(request.body.protagonist)) {
     const protagonist: Record<string, AuditValue> = { keys: safeKeys(request.body.protagonist) };
     addAllowedScalars(request.body.protagonist, protagonist);
+    addMechanicalSummary(request.body.protagonist, protagonist);
     body.protagonist = protagonist;
   }
   if (Array.isArray(request.body.initialContentPackages)) {
@@ -132,6 +146,8 @@ function summarizeResponse(body: unknown): Record<string, AuditValue> {
 
   const summary: Record<string, AuditValue> = { kind: 'object', keys: safeKeys(body) };
   addAllowedScalars(body, summary);
+  addMechanicalSummary(body, summary);
+  if (isRecord(body.protagonist)) addMechanicalSummary(body.protagonist, summary);
   if (Array.isArray(body.mainActors)) summary.mainActorCount = body.mainActors.length;
   if (Array.isArray(body.linkedContent)) summary.linkedContentCount = body.linkedContent.length;
   if (Array.isArray(body.recentEvents)) summary.recentEventCount = body.recentEvents.length;
