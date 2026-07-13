@@ -12,7 +12,7 @@ import {
   assertInteger, assertIntegerInRange, roundHalfUp, safeIntegerAdd, safeIntegerMultiply, safeIntegerSum,
 } from './core-v1.math.js';
 import { applyTickMultiplier } from './core-v1.temporal.js';
-import { addTicks, assertCombatTick, assertTick } from './core-v1.ticks.js';
+import { addTicks, assertCombatTick, assertTick, validateCooldown } from './core-v1.ticks.js';
 
 const zones = Object.freeze(['engaged', 'near', 'medium', 'far', 'out_of_range'] as const);
 const multiTargetKinds = new Set<MultiTargetActionDefinition['actionKind']>([
@@ -243,6 +243,7 @@ export function scheduleChannelPulseEvents(
 export function getReactionDefinition(kind: ReactionKind): ReactionDefinition {
   const definition = CORE_V1_REACTION_DEFINITIONS[kind];
   if (definition === undefined) throw new TypeError('reaction kind is invalid');
+  validateCooldown(definition.cooldown);
   return { ...definition };
 }
 

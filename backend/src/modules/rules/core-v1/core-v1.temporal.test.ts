@@ -15,6 +15,7 @@ import {
   getRepresentativeTemporalProfile,
   getTemporalProfile,
   tickToDecimalString,
+  validateCooldown,
 } from './index.js';
 import {
   CORE_V1_REPRESENTATIVE_TEMPORAL_PROFILES, CORE_V1_TEMPORAL_PROFILES,
@@ -34,6 +35,8 @@ describe('core-v1 bigint ticks', () => {
     expect(() => advanceCombatTick(100n, 99n)).toThrow('past');
     expect(() => advanceCombatTick(0n, 1_000_000_001n)).toThrow('supported maximum');
     expect(() => tickToDecimalString(1 as never)).toThrow('bigint');
+    expect(validateCooldown(100n)).toBe(100n);
+    expect(() => validateCooldown(99n)).toThrow('at least 100');
   });
 });
 

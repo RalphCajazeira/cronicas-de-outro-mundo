@@ -51,6 +51,12 @@ export function tickToDecimalString(tick: CombatTick): string {
   return tick.toString(10);
 }
 
+export function validateCooldown(cooldown: CombatTick): CombatTick {
+  assertTick(cooldown, 'cooldown');
+  if (cooldown < 100n) throw new RangeError('cooldown must be at least 100 ticks');
+  return cooldown;
+}
+
 export function ceilDivBigInt(dividend: bigint, divisor: bigint, name = 'bigint division'): bigint {
   if (dividend < 0n) throw new RangeError(`${name} dividend must not be negative`);
   if (divisor <= 0n) throw new RangeError(`${name} divisor must be positive`);

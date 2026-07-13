@@ -4,6 +4,7 @@ import {
   calculateActionEconomyFactorBps,
   calculateAdjustedThreat,
   calculateEncounterThreat,
+  calculateNpcEncounterThreat,
   calculatePhysicalActionTimes,
   calculateReferenceCycle,
   calculateTemporalSlots,
@@ -44,6 +45,8 @@ describe('core-v1 temporal encounter economy', () => {
     expect(calculateAdjustedThreat(baseThreat, 12500)).toBe(200000);
     expect(calculateEncounterThreat([npcBaseThreatBps('standard', 1), npcBaseThreatBps('minion', 1)], [{ cycle: 1000n }], [{ cycle: 800n }]))
       .toMatchObject({ baseThreat: 12500, actionEconomyFactorBps: 12500, adjustedThreat: 15625 });
+    expect(calculateNpcEncounterThreat('boss', 2, [{ cycle: 1000n }], [{ cycle: 1000n }]))
+      .toEqual({ baseThreat: 160000, actionEconomyFactorBps: 10000, adjustedThreat: 160000 });
   });
 
   it('rejects empty/zero slots, invalid cycles and unsafe threat overflow', () => {

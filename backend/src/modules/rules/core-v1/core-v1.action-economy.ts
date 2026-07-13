@@ -2,6 +2,8 @@ import {
   CORE_V1_ENCOUNTER_WINDOW_TICKS, CORE_V1_TEMPORAL_XP_WINDOW_TICKS,
 } from './core-v1.action-economy.config.js';
 import type { TemporalSlotInput } from './core-v1.action-economy.types.js';
+import { npcBaseThreatBps } from './core-v1.content.js';
+import type { NpcRole } from './core-v1.types.js';
 import {
   assertIntegerInRange, clamp, roundHalfUp, safeIntegerAdd, safeIntegerMultiply, safeIntegerSum,
 } from './core-v1.math.js';
@@ -85,6 +87,17 @@ export function calculateEncounterThreat(
   if (!Array.isArray(runtimeBaseThreats) || baseThreats.length === 0) throw new RangeError('at least one base threat is required');
   baseThreats.forEach((value) => assertIntegerInRange(value, 0, Number.MAX_SAFE_INTEGER, 'baseThreat'));
   const baseThreat = safeIntegerSum(baseThreats, 'base threat total');
+  const actionEconomyFactorBps = calculateActionEconomyFactorBps(partySlots, hostileSlots);
+  return { baseThreat, actionEconomyFactorBps, adjustedThreat: calculateAdjustedThreat(baseThreat, actionEconomyFactorBps) };
+}
+
+export function calculateNpcEncounterThreat(
+  role: NpcRole,
+  tier: number,
+  partySlots: readonly TemporalSlotInput[],
+  hostileSlots: readonly TemporalSlotInput[],
+): { readonly baseThreat: number; readonly actionEconomyFactorBps: number; readonly adjustedThreat: number } {
+  const baseThreat = npcBaseThreatBps(role, tier);
   const actionEconomyFactorBps = calculateActionEconomyFactorBps(partySlots, hostileSlots);
   return { baseThreat, actionEconomyFactorBps, adjustedThreat: calculateAdjustedThreat(baseThreat, actionEconomyFactorBps) };
 }
