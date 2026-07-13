@@ -5,8 +5,10 @@ import {
   startGameSchema, upsertActorSchema, upsertContentSchema,
 } from './gpt.schemas.js';
 import { jsonByteSize, jsonDepth, jsonKeyCount } from './gpt.start-game.js';
+import { getInitialAttributePreset } from '../rules/core-v1/index.js';
 
 const scope = { playerRef: 'ralph', worldRef: 'mundo-cardinal', campaignRef: 'harem-perfeito' };
+const primaryAttributes = getInitialAttributePreset('balanced');
 
 function validStartGame() {
   return {
@@ -24,9 +26,9 @@ function validStartGame() {
       classModel: { mode: 'identity' as const, startingClass: 'optional' as const, progressionBasis: ['content'], description: 'Classes são identidades.' },
     },
     protagonist: {
-      code: 'ralph', name: 'Ralph', actorType: 'character' as const, className: 'Explorador', health: 20, maxHealth: 20,
-      mana: 10, maxMana: 10, attributes: { intellect: 5 }, appearance: { eyes: 'verdes' }, personality: { traits: ['calmo'] },
-      origin: { label: 'Viajante', summary: 'Chegou de terras distantes.' }, status: 'active' as const,
+      code: 'ralph', name: 'Ralph', actorType: 'character' as const, className: 'Explorador', primaryAttributes,
+      appearance: { eyes: 'verdes' }, personality: { traits: ['calmo'] },
+      origin: { label: 'Viajante', summary: 'Chegou de terras distantes.' },
     },
     initialContentPackages: [], initialPremise: 'O protagonista chega à fronteira do reino.',
   };
@@ -45,8 +47,8 @@ function createSkill(code = 'quiet-step') {
 
 describe('GPT API schemas', () => {
   it('requires explicit scope and accepts normalized enums', () => {
-    const actor = upsertActorSchema.parse({ ...scope, idempotencyKey: 'actor-schema-001', code: 'lyra', name: 'Lyra', actorType: 'spirit', status: 'active' });
-    expect(actor).toMatchObject({ ...scope, actorType: 'spirit', status: 'active' });
+    const actor = upsertActorSchema.parse({ ...scope, idempotencyKey: 'actor-schema-001', code: 'lyra', name: 'Lyra', actorType: 'spirit', primaryAttributes });
+    expect(actor).toMatchObject({ ...scope, actorType: 'spirit', primaryAttributes });
     expect(upsertActorSchema.safeParse({ idempotencyKey: 'actor-schema-002', code: 'lyra', name: 'Lyra', actorType: 'spirit' }).success).toBe(false);
   });
 
@@ -55,8 +57,8 @@ describe('GPT API schemas', () => {
     const scopedInputs = [
       [loadGameSchema, scope], [listCampaignActorsSchema, scope], [getContentSchema, { ...scope, contentType: 'skill' }],
       [startGameSchema, start],
-      [upsertActorSchema, { ...scope, idempotencyKey: 'actor-scope-001', code: 'lyra', name: 'Lyra', actorType: 'spirit' }],
-      [patchActorSchema, { ...scope, idempotencyKey: 'patch-scope-001', health: 10 }],
+      [upsertActorSchema, { ...scope, idempotencyKey: 'actor-scope-001', code: 'lyra', name: 'Lyra', actorType: 'spirit', primaryAttributes }],
+      [patchActorSchema, { ...scope, idempotencyKey: 'patch-scope-001', name: 'Lyra' }],
       [upsertContentSchema, { ...scope, idempotencyKey: 'content-scope-001', contentType: 'skill', code: 'step', name: 'Step', description: 'Movement.', mechanics: {}, requirements: {}, presentation: {}, tags: [], schemaVersion: 1, status: 'active' }],
       [manageActorContentSchema, { ...scope, operation: 'list' }],
       [createEventSchema, { ...scope, eventType: 'scene', title: 'Scene', payload: {}, idempotencyKey: 'event-scope-001' }],
@@ -81,9 +83,9 @@ describe('GPT API schemas', () => {
     const base = validStartGame();
     expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, code: 'other' } }).success).toBe(false);
     expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, health: 21 } }).success).toBe(false);
-    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, mana: 11 } }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, maxMana: 11 } }).success).toBe(false);
     expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, metadata: { origin: {} } } }).success).toBe(false);
-    expect(upsertActorSchema.safeParse({ ...scope, idempotencyKey: 'appearance-001', code: 'lyra', name: 'Lyra', actorType: 'npc', appearance: { unexpected: true } }).success).toBe(false);
+    expect(upsertActorSchema.safeParse({ ...scope, idempotencyKey: 'appearance-001', code: 'lyra', name: 'Lyra', actorType: 'npc', primaryAttributes, appearance: { unexpected: true } }).success).toBe(false);
     expect(patchActorSchema.safeParse({ ...scope, idempotencyKey: 'personality-001', personality: { traits: Array.from({ length: 9 }, () => 'trait') } }).success).toBe(false);
   });
 
@@ -148,7 +150,7 @@ describe('GPT API schemas', () => {
     const passive = { ...skill, definition: { ...skill.definition, mechanics: { equipBehavior: 'none', passive: true } }, protagonistLink: { ...skill.protagonistLink, equipped: true } };
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [passive] }).success).toBe(false);
     const dependent = createSkill('dependent');
-    dependent.definition.requirements = { requiredContent: [{ contentType: 'skill', code: 'missing' }], minimumAttributes: { intellect: 6 } };
+    dependent.definition.requirements = { requiredContent: [{ contentType: 'skill', code: 'missing' }], minimumAttributes: { intelligence: 6 } };
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [dependent] }).success).toBe(false);
   });
 
@@ -212,13 +214,28 @@ describe('GPT API schemas', () => {
   });
 
   it('allows only approved actor patch fields and requires complete standalone content definitions', () => {
-    expect(patchActorSchema.safeParse({ ...scope, idempotencyKey: 'actor-patch-001', health: 10, appearance: { hair: 'black' } }).success).toBe(true);
+    expect(patchActorSchema.safeParse({ ...scope, idempotencyKey: 'actor-patch-001', name: 'Novo Nome', appearance: { hair: 'black' } }).success).toBe(true);
+    for (const field of ['health', 'maxHealth', 'mana', 'maxMana', 'sp', 'primaryAttributes', 'attributes', 'resistances', 'affinities', 'level', 'xp', 'gold']) {
+      expect(patchActorSchema.safeParse({ ...scope, idempotencyKey: `reject-${field}-001`, [field]: field === 'primaryAttributes' ? primaryAttributes : 10 }).success).toBe(false);
+    }
     expect(patchActorSchema.safeParse({ ...scope, idempotencyKey: 'actor-patch-002', campaignId: 'forbidden' }).success).toBe(false);
     const content = { ...scope, idempotencyKey: 'content-schema-001', contentType: 'skill', code: 'quiet-step', name: 'Passo Silencioso', description: 'Movimento discreto.', mechanics: {}, requirements: {}, presentation: {}, tags: [], schemaVersion: 1, status: 'active' };
     expect(upsertContentSchema.safeParse(content).success).toBe(true);
     const { mechanics: _mechanics, ...incomplete } = content;
     void _mechanics;
     expect(upsertContentSchema.safeParse(incomplete).success).toBe(false);
+  });
+
+  it('reuses core-v1 creation validation for all nine primary attributes', () => {
+    const base = validStartGame();
+    const total89 = { ...primaryAttributes, luck: 9 };
+    const total91 = { ...primaryAttributes, luck: 11 };
+    const unknown = { ...primaryAttributes, courage: 10 };
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, primaryAttributes } }).success).toBe(true);
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, primaryAttributes: total89 } }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, primaryAttributes: total91 } }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, primaryAttributes: unknown } }).success).toBe(false);
+    expect(startGameSchema.safeParse({ ...base, protagonist: { ...base.protagonist, primaryAttributes, criticalChanceBps: 2500 } }).success).toBe(false);
   });
 
   it('requires idempotency only for actor-content writes', () => {

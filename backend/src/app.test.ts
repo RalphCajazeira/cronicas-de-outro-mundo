@@ -9,9 +9,13 @@ import type { GptRepository } from './modules/gpt/gpt.types.js';
 import type { ReadinessCheck } from './modules/health/health.routes.js';
 import { getOfficialContract } from './modules/openapi/openapi.routes.js';
 import type { AuditLogWriter, HttpAuditRecord } from './shared/http/request-audit.js';
+import { actorMechanicalSheetFixture } from '../tests/support/actor-mechanics-fixture.js';
+import { getInitialAttributePreset } from './modules/rules/core-v1/index.js';
 
 const config: AppConfig = { NODE_ENV: 'test', HOST: '0.0.0.0', PORT: 3000, DATABASE_URL: 'postgresql://test:test@localhost:5432/test', DIRECT_URL: 'postgresql://test:test@localhost:5432/test', RPG_API_KEY: 'test-key' };
-const actor = { id: '7e7b7cbe-5767-47de-a0b5-4b7bc9365c89', code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER, species: null, className: 'Aventureiro', level: 1, xp: 0, gold: 0, health: 20, maxHealth: 20, mana: 10, maxMana: 10, attributes: { strength: 5 }, resistances: {}, affinities: {}, appearance: {}, personality: {}, status: ActorStatus.ACTIVE };
+const primaryAttributes = getInitialAttributePreset('balanced');
+const mechanicalSheet = actorMechanicalSheetFixture(primaryAttributes);
+const actor = { id: '7e7b7cbe-5767-47de-a0b5-4b7bc9365c89', code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER, species: null, className: 'Aventureiro', role: null, description: null, level: 1, xp: 0, gold: 0, appearance: {}, personality: {}, metadata: {}, status: ActorStatus.ACTIVE, mechanicalSheet };
 const contentItem = { state: 'LEARNING', rank: 1, progress: 10, mastery: 0, equipped: false, quantity: 1, notes: 'Treino inicial com Lyra', contentDefinition: { code: 'wind_breeze_step', name: 'Passo da Brisa', contentType: 'SKILL', description: 'Movimento pelo vento.', mechanics: { effect: 'mobility' }, requirements: { level: 1 }, presentation: { element: 'wind' }, tags: ['wind'], schemaVersion: 1, status: 'ACTIVE' } };
 const definition: ContentDefinition = { id: 'b41c2a1c-e2d2-4498-a7be-1f07cd85de1a', worldId: 'e2dc20e8-51dc-47d2-a5be-b841d08fa610', campaignId: null, code: 'wind_breeze_step', name: 'Passo da Brisa', contentType: ContentType.SKILL, description: null, mechanics: {}, requirements: {}, presentation: {}, tags: ['wind'], schemaVersion: 1, status: ContentStatus.ACTIVE, metadata: {}, createdAt: new Date(), updatedAt: new Date() };
 const scope = { playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' };
@@ -30,7 +34,7 @@ const startGameBody = {
     classModel: { mode: 'identity', startingClass: 'optional', progressionBasis: ['content'], description: 'Identidade narrativa.' },
   },
   protagonist: {
-    code: 'ralph', name: 'Ralph', actorType: 'character', health: 20, maxHealth: 20, mana: 10, maxMana: 10,
+    code: 'ralph', name: 'Ralph', actorType: 'character', primaryAttributes,
     appearance: { summary: 'Descrição privada.' }, personality: { summary: 'Personalidade privada.' },
   },
   initialContentPackages: [{
@@ -58,7 +62,7 @@ function appWith(
     startGame: (input) => Promise.resolve({ player: { ref: input.playerRef }, world: { ref: input.worldRef }, campaign: { ref: input.campaignRef }, protagonist: input.protagonist }),
     listCampaignActors: () => Promise.resolve([{ code: 'ralph', actorType: 'character' }]),
     upsertActor: (input) => Promise.resolve({ code: input.code, name: input.name, actorType: input.actorType }),
-    patchActor: (actorRef, input) => Promise.resolve({ code: actorRef, health: input.health }),
+    patchActor: (actorRef, input) => Promise.resolve({ code: actorRef, name: input.name }),
     upsertContent: (input) => Promise.resolve({ code: input.code, contentType: input.contentType }),
     manageActorContent: (_actorRef, input) => Promise.resolve({ operation: input.operation, state: input.changes?.state ?? 'known' }),
     createEvent: (input) => Promise.resolve({ eventType: input.eventType, title: input.title }),
@@ -96,7 +100,7 @@ describe('HTTP API', () => {
   });
   it('rejects a private route without x-rpg-key', async () => { expect((await request(appWith()).get(`/api/v1/characters/ralph?${scopeQuery}`)).status).toBe(401); });
   it('rejects a private route with the wrong x-rpg-key', async () => { expect((await request(appWith()).get(`/api/v1/characters/ralph?${scopeQuery}`).set('x-rpg-key', 'wrong-key')).status).toBe(401); });
-  it('reaches the controller with a valid key and normalizes a character', async () => { const response = await request(appWith()).get(`/api/v1/characters/ralph?${scopeQuery}`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toEqual({ code: 'ralph', name: 'Ralph', actorType: 'character', species: null, className: 'Aventureiro', level: 1, xp: 0, gold: 0, health: 20, maxHealth: 20, mana: 10, maxMana: 10, attributes: { strength: 5 }, resistances: {}, affinities: {}, appearance: {}, personality: {}, status: 'active' }); expect(response.body).not.toHaveProperty('id'); });
+  it('reaches the controller with a valid key and normalizes a character', async () => { const response = await request(appWith()).get(`/api/v1/characters/ralph?${scopeQuery}`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toEqual({ code: 'ralph', name: 'Ralph', actorType: 'character', species: null, className: 'Aventureiro', role: null, description: null, level: 1, xp: 0, gold: 0, appearance: {}, personality: {}, metadata: {}, status: 'active', ...mechanicalSheet }); expect(response.body).not.toHaveProperty('id'); expect(JSON.stringify(response.body)).not.toMatch(/inputHash|rulesetVersionId|[0-9a-f]{8}-[0-9a-f-]{27}/); });
   it('validates an invalid characterRef', async () => { expect((await request(appWith()).get(`/api/v1/characters/not%20valid?${scopeQuery}`).set('x-rpg-key', 'test-key')).status).toBe(400); });
   it('returns 404 for a missing character', async () => { const repository: ActorRepository = { findByReference: () => Promise.resolve(null), listContent: () => Promise.resolve(null) }; expect((await request(appWith(repository)).get(`/api/v1/characters/missing?${scopeQuery}`).set('x-rpg-key', 'test-key')).status).toBe(404); });
   it('normalizes character content', async () => { const response = await request(appWith()).get(`/api/v1/characters/ralph/content?${scopeQuery}`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toEqual([expect.objectContaining({ code: 'wind_breeze_step', contentType: 'skill', state: 'learning', status: 'active', progress: 10, notes: 'Treino inicial com Lyra', mechanics: { effect: 'mobility' } })]); expect(JSON.stringify(response.body)).not.toContain('contentDefinition'); });
@@ -146,21 +150,26 @@ describe('HTTP API', () => {
       playerMode: 'create', worldMode: 'create', playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign',
       difficultyPreset: 'standard',
       initialContent: { packageCount: 1, linkCount: 1, equippedCount: 1, contentTypes: { weapon: 1 } },
+      protagonist: { attributeCount: 9 },
     } });
+    expect(records[0]?.response).toMatchObject({ attributeCount: 9 });
     const serialized = JSON.stringify(records);
     expect(serialized).not.toContain('Premissa narrativa privada');
     expect(serialized).not.toContain('Descrição privada');
     expect(serialized).not.toContain('Personalidade privada');
     expect(serialized).not.toContain('secret mechanics');
     expect(serialized).not.toContain('start-game-http-001');
+    expect(serialized).not.toContain('"strength"');
   });
   it('lists campaign actors and supports actor upsert and approved patch fields', async () => {
     const list = await request(appWith()).get('/api/v1/campaigns/main-campaign/actors?playerRef=ralph&worldRef=elarion').set('x-rpg-key', 'test-key');
-    const upsert = await request(appWith()).post('/api/v1/actors/upsert').set('x-rpg-key', 'test-key').send({ ...scope, idempotencyKey: 'actor-create-001', code: 'orin', name: 'Orin', actorType: 'npc' });
-    const patchResponse = await request(appWith()).patch('/api/v1/actors/orin').set('x-rpg-key', 'test-key').send({ ...scope, idempotencyKey: 'actor-patch-001', health: 7 });
+    const upsert = await request(appWith()).post('/api/v1/actors/upsert').set('x-rpg-key', 'test-key').send({ ...scope, idempotencyKey: 'actor-create-001', code: 'orin', name: 'Orin', actorType: 'npc', primaryAttributes });
+    const patchResponse = await request(appWith()).patch('/api/v1/actors/orin').set('x-rpg-key', 'test-key').send({ ...scope, idempotencyKey: 'actor-patch-001', name: 'Orin Renomeado' });
+    const rejectedMechanicalPatch = await request(appWith()).patch('/api/v1/actors/orin').set('x-rpg-key', 'test-key').send({ ...scope, idempotencyKey: 'actor-patch-002', health: 7 });
     expect(list.body).toEqual([{ code: 'ralph', actorType: 'character' }]);
     expect(upsert.body).toMatchObject({ code: 'orin', actorType: 'npc' });
-    expect(patchResponse.body).toMatchObject({ code: 'orin', health: 7 });
+    expect(patchResponse.body).toMatchObject({ code: 'orin', name: 'Orin Renomeado' });
+    expect(rejectedMechanicalPatch.status).toBe(400);
   });
   it('rejects arbitrary actor relation fields', async () => {
     const response = await request(appWith()).patch('/api/v1/actors/ralph').set('x-rpg-key', 'test-key').send({ ...scope, idempotencyKey: 'actor-patch-002', campaignId: 'forbidden' });

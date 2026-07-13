@@ -77,6 +77,49 @@ async function verifyCleanSlatePrecondition(databaseUrl: URL, adminUrl: URL): Pr
   console.info('Phase 1C clean-slate precondition verified safely');
 }
 
+async function verifyActorCleanSlatePrecondition(databaseUrl: URL, adminUrl: URL): Promise<void> {
+  await recreateTestDatabase(adminUrl);
+  const client = new Client({ connectionString: databaseUrl.toString() });
+  await client.connect();
+  try {
+    await client.query(migrationSql('20260711183000_init'));
+    await client.query(migrationSql('20260711223000_production_gpt_security'));
+    await client.query(migrationSql('20260713174337_engine_v1_ruleset_persistence'));
+    await client.query(`
+      INSERT INTO "Ruleset" ("id", "code", "name")
+      VALUES ('10000000-0000-0000-0000-000000000001', 'precondition-core', 'Precondition Core');
+      INSERT INTO "RulesetVersion" ("id", "rulesetId", "code", "revision", "schemaVersion", "configHash", "configSnapshot")
+      VALUES ('10000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', 'precondition-v1', 'test', 1, repeat('0', 64), '{}');
+      INSERT INTO "Player" ("id", "slug", "displayName", "updatedAt")
+      VALUES ('10000000-0000-0000-0000-000000000003', 'actor-precondition-player', 'Actor Precondition Player', CURRENT_TIMESTAMP);
+      INSERT INTO "World" ("id", "playerId", "defaultRulesetVersionId", "code", "name", "updatedAt")
+      VALUES ('10000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000002', 'actor-precondition-world', 'Actor Precondition World', CURRENT_TIMESTAMP);
+      INSERT INTO "Campaign" ("id", "worldId", "rulesetVersionId", "code", "name", "updatedAt")
+      VALUES ('10000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000002', 'actor-precondition-campaign', 'Actor Precondition Campaign', CURRENT_TIMESTAMP);
+      INSERT INTO "Actor" ("id", "campaignId", "code", "name", "actorType", "health", "maxHealth", "mana", "maxMana", "updatedAt")
+      VALUES ('10000000-0000-0000-0000-000000000006', '10000000-0000-0000-0000-000000000005', 'actor-precondition', 'Actor Precondition', 'NPC', 10, 10, 5, 5, CURRENT_TIMESTAMP);
+    `);
+
+    let rejected = false;
+    try {
+      await client.query(migrationSql('20260713190000_engine_v1_actor_mechanics'));
+    } catch (error) {
+      rejected = error instanceof Error
+        && error.message.includes('Phase 1D migration requires an empty Actor table; clear functional data before rollout');
+    }
+    if (!rejected) throw new Error('Phase 1D clean-slate precondition was not enforced');
+    const persisted = await client.query<{ actors: number; health: number }>(`
+      SELECT count(*)::int AS actors, min("health")::int AS health FROM "Actor"
+    `);
+    if (persisted.rows[0]?.actors !== 1 || persisted.rows[0]?.health !== 10) {
+      throw new Error('Phase 1D clean-slate precondition changed functional Actor data');
+    }
+  } finally {
+    await client.end();
+  }
+  console.info('Phase 1D clean-slate precondition verified safely');
+}
+
 async function verifyRulesetRegistryTransactions(databaseUrl: URL): Promise<void> {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl.toString(), max: 5 }) });
   try {
@@ -114,6 +157,7 @@ async function main(): Promise<void> {
   const config = resolveTestDatabaseConfig(process.env);
   const adminUrl = createAdminUrl(config.directUrl);
   await verifyCleanSlatePrecondition(config.directUrl, adminUrl);
+  await verifyActorCleanSlatePrecondition(config.directUrl, adminUrl);
   await recreateTestDatabase(adminUrl);
   console.info('Local test database recreated safely');
 
@@ -126,6 +170,11 @@ async function main(): Promise<void> {
   };
 
   runNpm(['exec', '--', 'prisma', 'migrate', 'deploy'], environment);
+  runNpm(['exec', '--', 'prisma', 'migrate', 'status'], environment);
+  runNpm([
+    'exec', '--', 'prisma', 'migrate', 'diff', '--from-config-datasource',
+    '--to-schema=prisma/schema.prisma', '--exit-code',
+  ], environment);
   await verifyRulesetRegistryTransactions(config.databaseUrl);
   runNpm(['run', 'prisma:seed'], environment);
   runNpm(['exec', '--', 'vitest', 'run', '--config', 'vitest.integration.config.ts'], environment);

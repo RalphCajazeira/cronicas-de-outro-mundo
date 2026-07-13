@@ -32,6 +32,24 @@ enum ActorStatus {
   ARCHIVED
 }
 
+enum ActorAttributeCode {
+  STRENGTH     @map("strength")
+  VITALITY     @map("vitality")
+  AGILITY      @map("agility")
+  DEXTERITY    @map("dexterity")
+  INTELLIGENCE @map("intelligence")
+  WISDOM       @map("wisdom")
+  PERCEPTION   @map("perception")
+  WILLPOWER    @map("willpower")
+  LUCK         @map("luck")
+}
+
+enum ActorResourceType {
+  HP   @map("hp")
+  MANA @map("mana")
+  SP   @map("sp")
+}
+
 enum ContentType {
   SKILL
   SPELL
@@ -95,6 +113,7 @@ model RulesetVersion {
   ruleset        Ruleset    @relation(fields: [rulesetId], references: [id], onDelete: Restrict)
   defaultWorlds  World[]    @relation("WorldDefaultRulesetVersion")
   campaigns      Campaign[] @relation("CampaignRulesetVersion")
+  actorSnapshots ActorDerivedSnapshot[]
 
   @@index([rulesetId])
 }
@@ -140,37 +159,96 @@ model Campaign {
 }
 
 model Actor {
-  id          String         @id @default(uuid()) @db.Uuid
-  campaignId  String         @db.Uuid
-  code        String
-  name        String
-  actorType   ActorType
-  species     String?
-  className   String?
-  role        String?
-  description String?
-  level       Int            @default(1)
-  xp          Int            @default(0)
-  gold        Int            @default(0)
-  health      Int
-  maxHealth   Int
-  mana        Int
-  maxMana     Int
-  attributes  Json           @default("{}")
-  resistances Json           @default("{}")
-  affinities  Json           @default("{}")
-  appearance  Json           @default("{}")
-  personality Json           @default("{}")
-  metadata    Json           @default("{}")
-  status      ActorStatus    @default(ACTIVE)
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
-  campaign    Campaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  content     ActorContent[]
-  events      GameEvent[]
+  id                      String                @id @default(uuid()) @db.Uuid
+  campaignId              String                @db.Uuid
+  code                    String
+  name                    String
+  actorType               ActorType
+  species                 String?
+  className               String?
+  role                    String?
+  description             String?
+  level                   Int                   @default(1)
+  xp                      Int                   @default(0)
+  gold                    Int                   @default(0)
+  mechanicsStateVersion  Int                   @default(1)
+  appearance              Json                  @default("{}")
+  personality             Json                  @default("{}")
+  metadata                Json                  @default("{}")
+  status                  ActorStatus           @default(ACTIVE)
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  campaign                Campaign              @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  attributes              ActorAttribute[]
+  resources               ActorResource[]
+  derivedSnapshot         ActorDerivedSnapshot?
+  content                 ActorContent[]
+  events                  GameEvent[]
 
   @@unique([campaignId, code])
   @@index([campaignId, actorType, status])
+}
+
+model ActorAttribute {
+  id          String             @id @default(uuid()) @db.Uuid
+  actorId     String             @db.Uuid
+  code        ActorAttributeCode
+  baseValue   Int
+  earnedValue Int                @default(0)
+  xp          Int                @default(0)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  actor       Actor              @relation(fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@unique([actorId, code])
+}
+
+model ActorResource {
+  id           String            @id @default(uuid()) @db.Uuid
+  actorId      String            @db.Uuid
+  type         ActorResourceType
+  current      Int
+  stateVersion Int               @default(1)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  actor        Actor             @relation(fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@unique([actorId, type])
+}
+
+model ActorDerivedSnapshot {
+  id                            String         @id @default(uuid()) @db.Uuid
+  actorId                       String         @unique @db.Uuid
+  rulesetVersionId              String         @db.Uuid
+  mechanicsStateVersion         Int
+  maxHp                         Int
+  maxMana                       Int
+  maxSp                         Int
+  actorPhysicalPower            Int
+  actorMagicalPower             Int
+  physicalDefense               Int
+  magicalDefense                Int
+  accuracy                      Int
+  evasion                       Int
+  baseAttackSpeedBps            Int
+  baseCastingSpeedBps           Int
+  criticalChanceBps             Int
+  criticalDamageBps             Int
+  movementSpeed                 Int
+  carryingCapacity              Int
+  physicalResistanceBps         Int
+  magicalResistanceBps          Int
+  elementalResistanceSnapshot  Json           @default("{}")
+  hpRegen                       Int
+  manaRegen                     Int
+  spRegen                       Int
+  inputHash                     String         @db.Char(64)
+  createdAt                     DateTime       @default(now())
+  updatedAt                     DateTime       @updatedAt
+  actor                         Actor          @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  rulesetVersion                RulesetVersion @relation(fields: [rulesetVersionId], references: [id], onDelete: Restrict)
+
+  @@index([rulesetVersionId])
 }
 
 model ContentDefinition {

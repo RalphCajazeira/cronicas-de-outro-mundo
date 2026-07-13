@@ -7,6 +7,7 @@ import { resolveBase, resolvePlayer, resolveScope, type DbClient } from '../../s
 import { ConflictError, NotFoundError } from '../../shared/errors/app-error.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import { scopedActorKey } from '../actors/actors.repository.js';
+import { createActorMechanicalState, loadActorMechanicalSheet } from '../actors/actor-mechanics.service.js';
 import { findScopedContent } from '../content/content.repository.js';
 import { ensureCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
 import type {
@@ -22,8 +23,7 @@ import { inspectIdempotencyRecord, isIdempotencyKeyConflict, isUniqueConflict } 
 
 const actorSelect = {
   id: true, code: true, name: true, actorType: true, species: true, className: true, role: true,
-  description: true, level: true, xp: true, gold: true, health: true, maxHealth: true, mana: true,
-  maxMana: true, attributes: true, resistances: true, affinities: true, metadata: true, status: true,
+  description: true, level: true, xp: true, gold: true, metadata: true, status: true,
   appearance: true, personality: true,
 } satisfies Prisma.ActorSelect;
 
@@ -64,14 +64,13 @@ async function executeIdempotent(
   }
 }
 
-function actorDto(actor: Record<string, unknown>) {
+async function actorDto(client: DbClient, actor: Record<string, unknown>) {
+  const mechanicalSheet = await loadActorMechanicalSheet(client, actor.id as string);
   return {
     code: actor.code, name: actor.name, actorType: normalizeEnum(actor.actorType as string), species: actor.species,
     className: actor.className, role: actor.role, description: actor.description, level: actor.level, xp: actor.xp,
-    gold: actor.gold, health: actor.health, maxHealth: actor.maxHealth, mana: actor.mana, maxMana: actor.maxMana,
-    attributes: actor.attributes, resistances: actor.resistances, affinities: actor.affinities, metadata: actor.metadata,
-    appearance: actor.appearance, personality: actor.personality,
-    status: normalizeEnum(actor.status as string),
+    gold: actor.gold, metadata: actor.metadata, appearance: actor.appearance, personality: actor.personality,
+    status: normalizeEnum(actor.status as string), ...mechanicalSheet,
   };
 }
 
@@ -100,26 +99,14 @@ async function findActor(client: DbClient, campaignId: string, reference: string
 
 function actorUpdateData(input: UpsertActorInput | PatchActorInput): Prisma.ActorUpdateInput {
   const data: Prisma.ActorUpdateInput = {};
-  if ('name' in input) data.name = input.name;
-  if ('actorType' in input) data.actorType = input.actorType.toUpperCase() as ActorType;
+  if ('name' in input && input.name !== undefined) data.name = input.name;
   if ('species' in input && input.species !== undefined) data.species = input.species;
   if ('className' in input && input.className !== undefined) data.className = input.className;
   if (input.role !== undefined) data.role = input.role;
   if (input.description !== undefined) data.description = input.description;
-  if (input.level !== undefined) data.level = input.level;
-  if (input.xp !== undefined) data.xp = input.xp;
-  if (input.gold !== undefined) data.gold = input.gold;
-  if (input.health !== undefined) data.health = input.health;
-  if (input.maxHealth !== undefined) data.maxHealth = input.maxHealth;
-  if (input.mana !== undefined) data.mana = input.mana;
-  if (input.maxMana !== undefined) data.maxMana = input.maxMana;
-  if (input.attributes !== undefined) data.attributes = inputJson(input.attributes);
-  if (input.resistances !== undefined) data.resistances = inputJson(input.resistances);
-  if (input.affinities !== undefined) data.affinities = inputJson(input.affinities);
   if (input.appearance !== undefined) data.appearance = inputJson(input.appearance);
   if (input.personality !== undefined) data.personality = inputJson(input.personality);
   if (input.metadata !== undefined) data.metadata = inputJson(input.metadata);
-  if (input.status !== undefined) data.status = input.status.toUpperCase() as ActorStatus;
   return data;
 }
 
@@ -129,13 +116,11 @@ function actorCreateData(
 ): Prisma.ActorUncheckedCreateInput {
   const data: Prisma.ActorUncheckedCreateInput = {
     campaignId, code: input.code, name: input.name, actorType: input.actorType.toUpperCase() as ActorType,
-    level: input.level ?? 1, xp: input.xp ?? 0, gold: input.gold ?? 0, health: input.health ?? 1,
-    maxHealth: input.maxHealth ?? 1, mana: input.mana ?? 0, maxMana: input.maxMana ?? 0,
-    attributes: inputJson(input.attributes ?? {}), resistances: inputJson(input.resistances ?? {}),
-    affinities: inputJson(input.affinities ?? {}), appearance: inputJson(input.appearance ?? {}),
+    level: 'level' in input ? input.level ?? 1 : 1, xp: 0, gold: 0,
+    appearance: inputJson(input.appearance ?? {}),
     personality: inputJson(input.personality ?? {}),
     metadata: inputJson({ ...(input.metadata ?? {}), ...('origin' in input && input.origin !== undefined ? { origin: input.origin } : {}) }),
-    status: (input.status ?? 'active').toUpperCase() as ActorStatus,
+    status: ActorStatus.ACTIVE,
   };
   if (input.species !== undefined) data.species = input.species;
   if (input.className !== undefined) data.className = input.className;
@@ -160,18 +145,18 @@ function linkUpdateData(input: ManageActorContentInput): Prisma.ActorContentUpda
 
 async function loadGameState(client: DbClient, input: LoadGameInput) {
   const { player, world, campaign } = await resolveScope(client, input);
-  const [actors, links, events] = await Promise.all([
-    client.actor.findMany({ where: { campaignId: campaign.id }, select: actorSelect, orderBy: [{ role: 'asc' }, { name: 'asc' }, { code: 'asc' }], take: 50 }),
-    client.actorContent.findMany({ where: { actor: { campaignId: campaign.id } }, include: { ...contentInclude, actor: { select: { code: true } } }, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], take: 100 }),
-    client.gameEvent.findMany({ where: { campaignId: campaign.id }, include: { actor: { select: { code: true } } }, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], take: 20 }),
-  ]);
+  const actors = await client.actor.findMany({ where: { campaignId: campaign.id }, select: actorSelect, orderBy: [{ role: 'asc' }, { name: 'asc' }, { code: 'asc' }], take: 50 });
+  const links = await client.actorContent.findMany({ where: { actor: { campaignId: campaign.id } }, include: { ...contentInclude, actor: { select: { code: true } } }, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], take: 100 });
+  const events = await client.gameEvent.findMany({ where: { campaignId: campaign.id }, include: { actor: { select: { code: true } } }, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], take: 20 });
   const protagonist = actors.find((actor) => actor.code === player.slug && actor.actorType === ActorType.CHARACTER) ?? null;
+  const actorDtos = new Map<string, Record<string, unknown>>();
+  for (const actor of actors) actorDtos.set(actor.id, await actorDto(client, actor));
   return {
     player: { ref: player.slug, displayName: player.displayName },
     world: { ref: world.code, name: world.name, description: world.description, metadata: world.metadata },
     campaign: { ref: campaign.code, name: campaign.name, status: normalizeEnum(campaign.status), currentTime: campaign.currentTime, metadata: campaign.metadata },
-    protagonist: protagonist === null ? null : actorDto(protagonist),
-    mainActors: actors.filter((actor) => actor.id !== protagonist?.id).map(actorDto),
+    protagonist: protagonist === null ? null : actorDtos.get(protagonist.id) ?? null,
+    mainActors: actors.filter((actor) => actor.id !== protagonist?.id).map((actor) => actorDtos.get(actor.id) ?? {}),
     linkedContent: links.map((link) => ({ actorRef: link.actor.code, ...actorContentDto(link) })),
     recentEvents: events.map((event) => ({ actorRef: event.actor?.code ?? null, eventType: event.eventType, title: event.title, payload: event.payload, createdAt: event.createdAt.toISOString() })),
   };
@@ -321,6 +306,10 @@ export const prismaGptRepository: GptRepository = {
         },
       });
       const protagonist = await transaction.actor.create({ data: actorCreateData(campaign.id, input.protagonist), select: actorSelect });
+      await createActorMechanicalState(transaction, {
+        actorId: protagonist.id,
+        primaryAttributes: input.protagonist.primaryAttributes,
+      });
 
       const resolvedPackages: Array<{
         definition: ContentDefinition;
@@ -374,7 +363,7 @@ export const prismaGptRepository: GptRepository = {
           throw new ConflictError('Mechanical class name does not match the persisted class definition');
         }
       }
-      const attributes = isRecord(protagonist.attributes) ? protagonist.attributes : {};
+      const attributes = input.protagonist.primaryAttributes;
       for (const item of resolvedPackages) {
         if (item.link === undefined) continue;
         assertInitialEquipment(item.definition, item.link);
@@ -430,19 +419,28 @@ export const prismaGptRepository: GptRepository = {
   async listCampaignActors(input: ListCampaignActorsInput) {
     const { campaign } = await resolveScope(prisma, input);
     const actors = await prisma.actor.findMany({ where: { campaignId: campaign.id }, select: actorSelect, orderBy: [{ name: 'asc' }, { code: 'asc' }] });
-    return actors.map(actorDto);
+    return Promise.all(actors.map((actor) => actorDto(prisma, actor)));
   },
 
   async upsertActor(input: UpsertActorInput) {
     return executeIdempotent(input.idempotencyKey, 'actors.upsert', input, async (transaction) => {
       const { campaign } = await resolveScope(transaction, input);
-      const actor = await transaction.actor.upsert({
+      const existing = await transaction.actor.findUnique({
         where: { campaignId_code: { campaignId: campaign.id, code: input.code } },
-        update: actorUpdateData(input),
-        create: actorCreateData(campaign.id, input),
         select: actorSelect,
       });
-      return actorDto(actor);
+      if (existing === null) {
+        const actor = await transaction.actor.create({ data: actorCreateData(campaign.id, input), select: actorSelect });
+        await createActorMechanicalState(transaction, { actorId: actor.id, primaryAttributes: input.primaryAttributes });
+        return actorDto(transaction, actor);
+      }
+      const existingSheet = await loadActorMechanicalSheet(transaction, existing.id);
+      if (existing.actorType !== input.actorType.toUpperCase() || (input.level !== undefined && existing.level !== input.level)
+        || !canonicalJsonEqual(existingSheet.primaryAttributes, input.primaryAttributes)) {
+        throw new ConflictError('Actor mechanics cannot be changed by upsertActor');
+      }
+      const actor = await transaction.actor.update({ where: { id: existing.id }, data: actorUpdateData(input), select: actorSelect });
+      return actorDto(transaction, actor);
     });
   },
 
@@ -451,7 +449,7 @@ export const prismaGptRepository: GptRepository = {
       const { campaign } = await resolveScope(transaction, input);
       const actor = await findActor(transaction, campaign.id, actorRef);
       const updated = await transaction.actor.update({ where: { id: actor.id }, data: actorUpdateData(input), select: actorSelect });
-      return actorDto(updated);
+      return actorDto(transaction, updated);
     });
   },
 

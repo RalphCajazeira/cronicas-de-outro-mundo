@@ -21,6 +21,7 @@ Projeto de RPG narrativo reiniciado como nova versão, com o sistema anterior ar
 - OpenAPI 3.1 ativo em `gpt/openapi.json` e `/openapi.json`; artefatos atuais do GPT separados do legado.
 - Idempotência transacional persistida no PostgreSQL, readiness segura e migration incremental de RLS/revogações.
 - `Ruleset(core)` e `RulesetVersion(core-v1/RC1.1)` persistem manifesto canônico e hash SHA-256; todo World recebe um default obrigatório e toda Campaign copia um vínculo imutável na criação.
+- A ficha mecânica de Actor é autoritativa no backend: nove atributos normalizados, HP/Mana/SP atuais e snapshot derivado recomputável pelo `core-v1`; clientes nunca enviam máximos ou derivados.
 - Auditoria HTTP estruturada com `x-request-id`, resumos seguros de requisição/resposta e caminhos de validação, sem headers ou payloads sensíveis.
 - Blueprint Render de staging nativo Node, Free em `virginia`, branch `develop`, sem Docker, sem pre-deploy e sem deploy automático.
 
@@ -32,7 +33,7 @@ Projeto de RPG narrativo reiniciado como nova versão, com o sistema anterior ar
 
 ## Fases futuras
 
-Frontend React, integração GPT, combate, inventário físico, comércio, equipamentos por slot, efeitos, lojas, facções, relações, memórias detalhadas, viagens, clima e snapshots.
+Frontend React, integração GPT ao vivo, combate, inventário físico, comércio, equipamentos por slot, efeitos, lojas, facções, relações, memórias detalhadas, viagens, clima e snapshots narrativos.
 
 ## Segurança
 

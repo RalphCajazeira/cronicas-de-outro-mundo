@@ -47,6 +47,16 @@ A migration da Fase 1C é clean-slate e falha antes do DDL quando encontra World
 
 Os coeficientes calibráveis permanecem associados à identidade `core-v1`/futura `RulesetVersion` e exigirão telemetria antes de nova versão. Nenhum número publicado deve ser alterado retroativamente para replays existentes.
 
+### Fase 1D — estado mecânico autoritativo de atores
+
+`Actor` preserva identidade, narrativa, nível, XP, ouro e `mechanicsStateVersion`, mas não contém mais recursos, atributos ou derivados livres. `ActorAttribute` persiste exatamente os nove valores-base, ganho futuro separado e XP da trilha; `ActorResource` persiste somente o valor atual e sua versão para `hp`, `mana` e `sp`; `ActorDerivedSnapshot` mantém um cache auditável, único, ligado à `RulesetVersion` e identificado por SHA-256 canônico dos inputs mecânicos.
+
+`createActorMechanicalState`, `recomputeActorDerivedSnapshot` e `loadActorMechanicalSheet` formam a única orquestração de persistência. A validação inicial reutiliza integralmente `validateInitialPrimaryAttributes`; máximos e derivados reutilizam `calculateResourceMaximums` e `calculateSecondaryAttributes`. O snapshot nunca contém fórmula e a leitura recalcula hash e resultados, exige 9 atributos/3 recursos, compara versão e ruleset e falha com erro sanitizado diante de estado incompleto ou stale.
+
+`startGame` cria o protagonista em nível 1/XP 0 e todo o estado 9/3/1 na transação idempotente existente. `upsertActor` cria NPCs/atores em nível 1–20 com a mesma autoridade e só atualiza narrativa quando as entradas mecânicas coincidem; `updateActor` é exclusivamente narrativo. Recursos começam cheios. Gasto, cura, regeneração aplicada, inventário, equipamento, cenas e combate continuam fora do escopo.
+
+A migration da Fase 1D exige `Actor` vazio antes de qualquer DDL incompatível, não apaga nem converte dados, remove `health`, `maxHealth`, `mana`, `maxMana`, `attributes`, `resistances` e `affinities`, instala constraints/FKs/RLS e mantém rollout remoto e GPT ao vivo pendentes.
+
 ## Arquitetura de testes
 
 ```text

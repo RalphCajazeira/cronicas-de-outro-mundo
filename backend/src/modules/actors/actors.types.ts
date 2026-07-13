@@ -1,12 +1,12 @@
 import type { ActorStatus, ActorType, Prisma } from '../../generated/prisma/client.js';
 import type { CampaignReference } from '../../shared/database/game-scope.js';
+import type { ActorMechanicalSheet } from './actor-mechanics.service.js';
 
 export interface ActorRecord {
   id: string; code: string; name: string; actorType: ActorType; species: string | null;
-  className: string | null; level: number; xp: number; gold: number; health: number;
-  maxHealth: number; mana: number; maxMana: number; attributes: Prisma.JsonValue;
-  resistances: Prisma.JsonValue; affinities: Prisma.JsonValue; appearance: Prisma.JsonValue;
-  personality: Prisma.JsonValue; status: ActorStatus;
+  className: string | null; role: string | null; description: string | null; level: number;
+  xp: number; gold: number; appearance: Prisma.JsonValue; personality: Prisma.JsonValue;
+  metadata: Prisma.JsonValue; status: ActorStatus; mechanicalSheet: ActorMechanicalSheet;
 }
 
 export interface ActorRepository {

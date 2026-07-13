@@ -1191,13 +1191,90 @@
           "protagonistLink": { "$ref": "#/components/schemas/InitialActorContentLink" }
         }
       },
+      "PrimaryAttributes": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["strength", "vitality", "agility", "dexterity", "intelligence", "wisdom", "perception", "willpower", "luck"],
+        "properties": {
+          "strength": { "type": "integer", "minimum": 4, "maximum": 16 },
+          "vitality": { "type": "integer", "minimum": 4, "maximum": 16 },
+          "agility": { "type": "integer", "minimum": 4, "maximum": 16 },
+          "dexterity": { "type": "integer", "minimum": 4, "maximum": 16 },
+          "intelligence": { "type": "integer", "minimum": 4, "maximum": 16 },
+          "wisdom": { "type": "integer", "minimum": 4, "maximum": 16 },
+          "perception": { "type": "integer", "minimum": 4, "maximum": 16 },
+          "willpower": { "type": "integer", "minimum": 4, "maximum": 16 },
+          "luck": { "type": "integer", "minimum": 4, "maximum": 16 }
+        },
+        "description": "Os nove atributos são obrigatórios e a alocação inicial deve totalizar exatamente 90 pontos."
+      },
+      "ActorResources": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["hp", "mana", "sp"],
+        "properties": {
+          "hp": {
+            "type": "object", "additionalProperties": false, "required": ["current", "max"],
+            "properties": { "current": { "type": "integer", "minimum": 0 }, "max": { "type": "integer", "minimum": 1 } }
+          },
+          "mana": {
+            "type": "object", "additionalProperties": false, "required": ["current", "max"],
+            "properties": { "current": { "type": "integer", "minimum": 0 }, "max": { "type": "integer", "minimum": 0 } }
+          },
+          "sp": {
+            "type": "object", "additionalProperties": false, "required": ["current", "max"],
+            "properties": { "current": { "type": "integer", "minimum": 0 }, "max": { "type": "integer", "minimum": 0 } }
+          }
+        }
+      },
+      "SecondaryAttributes": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["actorPhysicalPower", "actorMagicalPower", "physicalDefense", "magicalDefense", "accuracy", "evasion", "baseAttackSpeedBps", "baseCastingSpeedBps", "criticalChanceBps", "criticalDamageBps", "movementSpeed", "carryingCapacity", "physicalResistanceBps", "magicalResistanceBps", "elementalResistanceBps", "hpRegen", "manaRegen", "spRegen"],
+        "properties": {
+          "actorPhysicalPower": { "type": "integer", "minimum": 0 },
+          "actorMagicalPower": { "type": "integer", "minimum": 0 },
+          "physicalDefense": { "type": "integer", "minimum": 0 },
+          "magicalDefense": { "type": "integer", "minimum": 0 },
+          "accuracy": { "type": "integer", "minimum": 0 },
+          "evasion": { "type": "integer", "minimum": 0 },
+          "baseAttackSpeedBps": { "type": "integer", "minimum": 1 },
+          "baseCastingSpeedBps": { "type": "integer", "minimum": 1 },
+          "criticalChanceBps": { "type": "integer", "minimum": 0 },
+          "criticalDamageBps": { "type": "integer", "minimum": 0 },
+          "movementSpeed": { "type": "integer", "minimum": 0 },
+          "carryingCapacity": { "type": "integer", "minimum": 0 },
+          "physicalResistanceBps": { "type": "integer" },
+          "magicalResistanceBps": { "type": "integer" },
+          "elementalResistanceBps": { "type": "object", "properties": {}, "additionalProperties": { "type": "integer" } },
+          "hpRegen": { "type": "integer", "minimum": 0 },
+          "manaRegen": { "type": "integer", "minimum": 0 },
+          "spRegen": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "ActorMechanicalSheet": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["primaryAttributes", "resources", "secondaryAttributes", "mechanicsStateVersion", "ruleset"],
+        "properties": {
+          "primaryAttributes": { "$ref": "#/components/schemas/PrimaryAttributes" },
+          "resources": { "$ref": "#/components/schemas/ActorResources" },
+          "secondaryAttributes": { "$ref": "#/components/schemas/SecondaryAttributes" },
+          "mechanicsStateVersion": { "type": "integer", "minimum": 1 },
+          "ruleset": {
+            "type": "object", "additionalProperties": false, "required": ["code", "revision"],
+            "properties": { "code": { "type": "string" }, "revision": { "type": "string" } }
+          }
+        }
+      },
       "InitialActorInput": {
         "type": "object",
         "additionalProperties": false,
         "required": [
           "code",
           "name",
-          "actorType"
+          "actorType",
+          "primaryAttributes"
         ],
         "properties": {
           "code": {
@@ -1236,42 +1313,8 @@
             ],
             "maxLength": 3000
           },
-          "level": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "xp": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "gold": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "health": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "maxHealth": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "mana": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "maxMana": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "attributes": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
-          "resistances": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
-          "affinities": {
-            "$ref": "#/components/schemas/JsonObject"
+          "primaryAttributes": {
+            "$ref": "#/components/schemas/PrimaryAttributes"
           },
           "appearance": {
             "$ref": "#/components/schemas/Appearance"
@@ -1285,9 +1328,6 @@
           "metadata": {
             "$ref": "#/components/schemas/JsonObject",
             "description": "Até 4096 bytes UTF-8, profundidade 5 e 30 chaves recursivas. Use origin no campo próprio."
-          },
-          "status": {
-            "const": "active"
           }
         }
       },
@@ -1465,13 +1505,11 @@
           "level",
           "xp",
           "gold",
-          "health",
-          "maxHealth",
-          "mana",
-          "maxMana",
-          "attributes",
-          "resistances",
-          "affinities",
+          "primaryAttributes",
+          "resources",
+          "secondaryAttributes",
+          "mechanicsStateVersion",
+          "ruleset",
           "appearance",
           "personality",
           "status"
@@ -1529,30 +1567,13 @@
             "type": "integer",
             "minimum": 0
           },
-          "health": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "maxHealth": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "mana": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "maxMana": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "attributes": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
-          "resistances": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
-          "affinities": {
-            "$ref": "#/components/schemas/JsonObject"
+          "primaryAttributes": { "$ref": "#/components/schemas/PrimaryAttributes" },
+          "resources": { "$ref": "#/components/schemas/ActorResources" },
+          "secondaryAttributes": { "$ref": "#/components/schemas/SecondaryAttributes" },
+          "mechanicsStateVersion": { "type": "integer", "minimum": 1 },
+          "ruleset": {
+            "type": "object", "additionalProperties": false, "required": ["code", "revision"],
+            "properties": { "code": { "type": "string" }, "revision": { "type": "string" } }
           },
           "appearance": {
             "$ref": "#/components/schemas/Appearance"
@@ -1578,217 +1599,46 @@
       "ActorPatchInput": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "playerRef",
-          "worldRef",
-          "campaignRef",
-          "idempotencyKey"
-        ],
+        "required": ["playerRef", "worldRef", "campaignRef", "idempotencyKey"],
         "properties": {
-          "playerRef": {
-            "$ref": "#/components/schemas/Code"
-          },
-          "worldRef": {
-            "$ref": "#/components/schemas/Code"
-          },
-          "campaignRef": {
-            "$ref": "#/components/schemas/Code"
-          },
-          "idempotencyKey": {
-            "$ref": "#/components/schemas/IdempotencyKey"
-          },
-          "role": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "description": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "level": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "xp": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "gold": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "health": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "maxHealth": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "mana": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "maxMana": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "attributes": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
-          "resistances": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
-          "affinities": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
-          "appearance": {
-            "$ref": "#/components/schemas/Appearance"
-          },
-          "personality": {
-            "$ref": "#/components/schemas/Personality"
-          },
-          "metadata": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "active",
-              "inactive",
-              "defeated",
-              "dead",
-              "archived"
-            ]
-          }
+          "playerRef": { "$ref": "#/components/schemas/Code" },
+          "worldRef": { "$ref": "#/components/schemas/Code" },
+          "campaignRef": { "$ref": "#/components/schemas/Code" },
+          "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "species": { "type": ["string", "null"], "maxLength": 100 },
+          "className": { "type": ["string", "null"], "maxLength": 100 },
+          "role": { "type": ["string", "null"], "maxLength": 100 },
+          "description": { "type": ["string", "null"], "maxLength": 5000 },
+          "appearance": { "$ref": "#/components/schemas/Appearance" },
+          "personality": { "$ref": "#/components/schemas/Personality" },
+          "metadata": { "$ref": "#/components/schemas/JsonObject" }
         }
       },
       "ActorUpsertInput": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "playerRef",
-          "worldRef",
-          "campaignRef",
-          "code",
-          "name",
-          "actorType",
-          "idempotencyKey"
-        ],
+        "required": ["playerRef", "worldRef", "campaignRef", "code", "name", "actorType", "primaryAttributes", "idempotencyKey"],
         "properties": {
-          "playerRef": {
-            "$ref": "#/components/schemas/Code"
-          },
-          "worldRef": {
-            "$ref": "#/components/schemas/Code"
-          },
-          "campaignRef": {
-            "$ref": "#/components/schemas/Code"
-          },
-          "idempotencyKey": {
-            "$ref": "#/components/schemas/IdempotencyKey"
-          },
-          "code": {
-            "$ref": "#/components/schemas/Code"
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1
-          },
+          "playerRef": { "$ref": "#/components/schemas/Code" },
+          "worldRef": { "$ref": "#/components/schemas/Code" },
+          "campaignRef": { "$ref": "#/components/schemas/Code" },
+          "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" },
+          "code": { "$ref": "#/components/schemas/Code" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 200 },
           "actorType": {
             "type": "string",
-            "enum": [
-              "character",
-              "npc",
-              "creature",
-              "companion",
-              "spirit"
-            ]
+            "enum": ["character", "npc", "creature", "companion", "spirit"]
           },
-          "species": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "className": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "role": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "description": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "level": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "xp": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "gold": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "health": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "maxHealth": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "mana": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "maxMana": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "attributes": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
-          "resistances": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
-          "affinities": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
-          "appearance": {
-            "$ref": "#/components/schemas/Appearance"
-          },
-          "personality": {
-            "$ref": "#/components/schemas/Personality"
-          },
-          "metadata": {
-            "$ref": "#/components/schemas/JsonObject"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "active",
-              "inactive",
-              "defeated",
-              "dead",
-              "archived"
-            ]
-          }
+          "species": { "type": ["string", "null"], "maxLength": 100 },
+          "className": { "type": ["string", "null"], "maxLength": 100 },
+          "role": { "type": ["string", "null"], "maxLength": 100 },
+          "description": { "type": ["string", "null"], "maxLength": 5000 },
+          "level": { "type": "integer", "minimum": 1, "maximum": 20 },
+          "primaryAttributes": { "$ref": "#/components/schemas/PrimaryAttributes" },
+          "appearance": { "$ref": "#/components/schemas/Appearance" },
+          "personality": { "$ref": "#/components/schemas/Personality" },
+          "metadata": { "$ref": "#/components/schemas/JsonObject" }
         }
       },
       "Content": {
