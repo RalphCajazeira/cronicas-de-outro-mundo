@@ -23,3 +23,5 @@ Peso e equipamento alteram `mechanicsStateVersion`, recompõem o snapshot e pode
 Interprete valores confirmados de modo coerente com espécie, classe, experiência, condição e contexto. Campos omitidos preservam o estado apenas conforme o contrato da operação; nunca substitua ficha conhecida por padrão genérico.
 
 Mudanças permanentes só existem após confirmação. `updateActor` é narrativo e não altera nível, XP, atributos, recursos ou derivados. Dano, cura, gasto e efeitos só mudam após sucesso de `resolveActorEffect`; falha, conflito ou mera inferência narrativa não alteram a ficha. Máximo aumentado não cura, máximo reduzido pode clampá-la, e HP zero não altera `Actor.status` automaticamente.
+
+Durante a simulação pura de encounter, o participante carrega versões da ficha, recursos, efeitos, action slots, zona e um `combatState` interno. `incapacitated_candidate` e sugestões de vitória/derrota não alteram `Actor.status`; sem uma futura confirmação persistida, esses valores são apenas resultado determinístico do núcleo e não uma mudança oficial da ficha.

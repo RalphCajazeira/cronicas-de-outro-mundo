@@ -211,3 +211,19 @@ Efeitos persistidos usam origem pública determinística, versão de conteúdo e
 O contrato deliberadamente não implementa recursos customizados persistidos, seleção multi-target, timeline/turnos/encontros, reaction/block runtime, cooldown, periodic ticks ou upkeep. HP zero retorna `defeatedCandidate`, mas não altera `Actor.status`. OpenAPI e instruções locais já descrevem a Action futura; o GPT ao vivo, staging e deploy não foram alterados.
 
 Status: implementada e validada na Fase 1J; revisão e integração rastreadas pelo PR correspondente
+
+### Fase 1K — núcleo puro de orquestração de encontros
+
+`core-v1-encounter-v1`, schema 1, compõe a economia de ações RC1.1, targeting canônico, inventário/equipamento e `core-v1-effects-v1` sem alterar qualquer manifesto publicado. `CoreV1EncounterState` usa somente refs públicas, ticks `bigint`, versões inteiras, participantes/relações ordenados, action slots existentes, a event queue da Fase 1B e cópias defensivas. Não há UUID, relógio de parede, RNG interno, metadata livre ou persistência.
+
+O targeting fechado resolve self, single/weapon, multi-target, area, chain e cleave. Selectors são limitados a self, explicit, nearest hostile, lowest HP hostile e nearest ally; relações vêm da composição autoritativa, HP relativo usa aritmética inteira e empates usam zona, `stableOrder` e ref. Area/cleave recebem candidatos espaciais pré-resolvidos e chain recebe ranges fechados entre candidatos, sem grid ou geometria livre.
+
+A compilação de intenção valida slot, conteúdo versionado, inventário/equipamento, custo, velocidade e targets; então agenda start, preparação, efeitos independentes, casting/channel, upkeep e recovery na fila existente. Eventos do mesmo tick são processados sequencialmente e revalidados depois de cada mudança. Multi-target cobra custo e efeitos self uma vez, mas chama `resolveCoreV1EffectSequence` separadamente por alvo com rolls injetados e estado atualizado.
+
+Reações preservam tempos, penalidades e cooldowns RC1.1, uma defesa em depth 1 e contra-ataque terminal em depth 2. Como não há fórmula publicada para sucesso de block/dodge/interrupt/counter, `ReactionOutcomeResolver` é uma fronteira interna determinística; blockValue e completeBlock também precisam vir de contexto autoritativo. Casting reutiliza reserva/progresso/interrupção antes/depois de 50%, channel pulses e recovery; movimento reutiliza zonas, terreno, encumbrance e custo conceitual de SP; combos e action plans mantêm caps e stop conditions fechados.
+
+Os limites operacionais são 64 participantes, 16 alvos, 256 eventos agendados, 32 eventos por lote, 5 ações por plano, 8 eventos internos por combo, avanço de 5000 ticks por lote e tick máximo de 1.000.000.000. O resultado de lote contém snapshots before/after, eventos, resoluções, mudanças, invalidações, ready actors, stop reason e continuação, sempre sem referências aos objetos de entrada.
+
+Esta fase não adiciona Prisma, migration, Combat/ActorCombatState/ScheduledCombatEvent persistidos, HTTP, OpenAPI, token de continuação, RNG persistido, progressão, XP, loot, deploy ou integração com o GPT. A Fase 1L deverá criar o adaptador autoritativo de produção/persistência, inclusive rolls e confirmação do encerramento sugerido pelo núcleo.
+
+Status: implementada e validada na Fase 1K; revisão e integração rastreadas pelo PR correspondente
