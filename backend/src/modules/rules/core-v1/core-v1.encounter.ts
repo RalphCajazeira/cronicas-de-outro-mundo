@@ -1777,7 +1777,9 @@ export function processNextCoreV1EncounterEvent(
         ? [event.actionRef]
         : [],
       invalidatedEvents: [{ event, reason: invalidReason }],
-      stopReason: invalidReason === 'NO_VALID_TARGET' ? 'no_valid_target' : null,
+      stopReason: terminalState === 'invalidated'
+        ? 'new_intent_required'
+        : invalidReason === 'NO_VALID_TARGET' ? 'no_valid_target' : null,
     });
   }
   const processedEvents = [event];
@@ -2049,7 +2051,7 @@ function planStopReason(
   if (conditions.has('stateVersionChanged') && before.stateVersion !== report.encounterAfter.stateVersion) return 'state_version_changed';
   if (conditions.has('processingLimit') && report.continuationRequired) return 'processing_limit';
   if (conditions.has('newPlayerIntentRequired') && report.stopReason === 'new_intent_required') return 'new_intent_required';
-  return report.stopReason === 'encounter_completed' ? 'encounter_completed' : null;
+  return report.stopReason;
 }
 
 function refreshPlanTargetingContext(

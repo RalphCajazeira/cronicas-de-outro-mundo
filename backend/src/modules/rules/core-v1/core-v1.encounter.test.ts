@@ -531,6 +531,7 @@ describe('core-v1 action compile, timeline and effects composition', () => {
     };
     const invalidated = expectOk(processNextCoreV1EncounterEvent(targetRemoved, runtime));
     expect(invalidated.invalidatedEvents.some((entry) => entry.event.type === 'action_effect')).toBe(true);
+    expect(invalidated.stopReason).toBe('new_intent_required');
     expect(invalidated.encounterAfter.activeActions[0]?.state).toBe('invalidated');
     const readied = expectOk(processNextCoreV1EncounterEvent(invalidated.encounterAfter, runtime));
     expect(readied.encounterAfter.activeActions).toEqual([]);
@@ -580,6 +581,7 @@ describe('core-v1 action compile, timeline and effects composition', () => {
     };
     const invalidated = expectOk(processNextCoreV1EncounterEvent(sourceRemoved, runtime));
     expect(invalidated.invalidatedEvents[0]?.reason).toBe('STATE_CHANGED');
+    expect(invalidated.stopReason).toBe('new_intent_required');
     expect(invalidated.encounterAfter.activeActions[0]?.state).toBe('invalidated');
     const readied = expectOk(processNextCoreV1EncounterEvent(invalidated.encounterAfter, runtime));
     expect(readied.encounterAfter.activeActions).toEqual([]);
