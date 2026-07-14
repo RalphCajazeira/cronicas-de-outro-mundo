@@ -248,6 +248,56 @@ function intent(overrides: Partial<CoreV1EncounterActionIntent> = {}): CoreV1Enc
   };
 }
 
+function sourceInvalidationWithRemainingEffects(includeAlly: boolean) {
+  const state = readyEncounter([
+    participant('hero', 'party'),
+    ...(includeAlly ? [participant('ally', 'party')] : []),
+    participant('enemy', 'hostile'),
+    participant('enemy-two', 'hostile'),
+    participant('enemy-three', 'hostile'),
+  ]);
+  const profile: CoreV1MechanicalContentProfile = {
+    ...strikeProfile,
+    code: 'triple-strike',
+    name: 'Triple Strike',
+    effects: [{
+      type: 'damage',
+      targeting: {
+        type: 'multi_target', rangeBand: 'engaged', maxTargets: 3,
+        damageMultiplierPerTargetBps: [3400, 3300, 3300],
+      },
+      damageComponents: [{
+        id: 'triple-hit', channel: 'physical', element: null,
+        baseDamage: 8, scaling: 'full', canCrit: true,
+      }],
+    }],
+  };
+  const compiled = expectOk(compileCoreV1EncounterAction({
+    encounter: state,
+    intent: intent({
+      contentRef: { scope: 'world', contentType: 'skill', code: 'triple-strike', versionNumber: 1 },
+      requestedTargetRefs: ['enemy', 'enemy-two', 'enemy-three'],
+    }),
+    definition: definition(profile),
+    targetingContext: { candidates: candidates(state) },
+  }));
+  const scheduled = expectOk(scheduleCoreV1EncounterAction(state, compiled));
+  const started = expectOk(processNextCoreV1EncounterEvent(scheduled, runtime));
+  const firstEffect = expectOk(processNextCoreV1EncounterEvent(started.encounterAfter, runtime));
+  const sourceRemoved = {
+    ...firstEffect.encounterAfter,
+    participants: firstEffect.encounterAfter.participants.map((entry) => entry.actorRef === 'hero'
+      ? { ...entry, combatState: 'removed' as const }
+      : entry),
+  };
+  return { actionRef: compiled.actionRef, firstEffect, sourceRemoved };
+}
+
+function remainingExecutionEvents(state: CoreV1EncounterState, actionRef: string) {
+  return state.scheduledEvents.filter((event) => event.actionRef === actionRef
+    && ['action_effect', 'movement_effect', 'channel_pulse', 'upkeep_due'].includes(event.type));
+}
+
 describe('core-v1 encounter state and initiative', () => {
   it('creates an empty pure encounter with versioned identity and defensive copies', () => {
     const input = encounterInput([]);
@@ -618,6 +668,59 @@ describe('core-v1 action compile, timeline and effects composition', () => {
     expect(batch.stopReason).toBe('new_intent_required');
     expect(batch.continuationRequired).toBe(true);
     expect(batch.resolvedActions).not.toContain(actionRef);
+  });
+
+  it('defers encounter completion while an invalidated source still has execution events', () => {
+    const { actionRef, firstEffect, sourceRemoved } = sourceInvalidationWithRemainingEffects(false);
+    const intermediate = expectOk(processNextCoreV1EncounterEvent(sourceRemoved, runtime));
+    expect(firstEffect.effectResolutions).toHaveLength(1);
+    expect(intermediate.invalidatedEvents[0]?.reason).toBe('STATE_CHANGED');
+    expect(intermediate.encounterAfter.completionCandidate).toBe('hostile_victory_candidate');
+    expect(intermediate.stopReason).not.toBe('encounter_completed');
+    expect(intermediate.stopReason).toBeNull();
+    expect(intermediate.continuationRequired).toBe(false);
+    expect(intermediate.resolvedActions).not.toContain(actionRef);
+    expect(intermediate.encounterAfter.activeActions.find((action) => action.actionRef === actionRef)?.state)
+      .toBe('active');
+    expect(remainingExecutionEvents(intermediate.encounterAfter, actionRef)).toHaveLength(1);
+  });
+
+  it('terminalizes the action before promoting completion on its final invalid event', () => {
+    const { actionRef, sourceRemoved } = sourceInvalidationWithRemainingEffects(false);
+    const intermediate = expectOk(processNextCoreV1EncounterEvent(sourceRemoved, runtime));
+    const terminal = expectOk(processNextCoreV1EncounterEvent(intermediate.encounterAfter, runtime));
+    expect(terminal.invalidatedEvents[0]?.reason).toBe('STATE_CHANGED');
+    expect(terminal.encounterAfter.activeActions.find((action) => action.actionRef === actionRef)?.state)
+      .toBe('invalidated');
+    expect(terminal.resolvedActions).not.toContain(actionRef);
+    expect(terminal.stopReason).toBe('encounter_completed');
+    expect(terminal.continuationRequired).toBe(false);
+    expect(terminal.encounterAfter.completionCandidate).toBe('hostile_victory_candidate');
+    expect(remainingExecutionEvents(terminal.encounterAfter, actionRef)).toEqual([]);
+  });
+
+  it('drains all invalid execution events before a completed batch is reported', () => {
+    const { actionRef, sourceRemoved } = sourceInvalidationWithRemainingEffects(false);
+    const batch = expectOk(processCoreV1EncounterBatch(sourceRemoved, runtime));
+    expect(batch.invalidatedEvents.filter((entry) => entry.reason === 'STATE_CHANGED')).toHaveLength(2);
+    expect(batch.encounterAfter.activeActions.find((action) => action.actionRef === actionRef)?.state)
+      .toBe('invalidated');
+    expect(batch.resolvedActions).not.toContain(actionRef);
+    expect(batch.stopReason).toBe('encounter_completed');
+    expect(batch.continuationRequired).toBe(false);
+    expect(batch.encounterAfter.completionCandidate).toBe('hostile_victory_candidate');
+    expect(remainingExecutionEvents(batch.encounterAfter, actionRef)).toEqual([]);
+  });
+
+  it('requires a new intent only after draining invalid execution events when an ally remains', () => {
+    const { actionRef, sourceRemoved } = sourceInvalidationWithRemainingEffects(true);
+    const batch = expectOk(processCoreV1EncounterBatch(sourceRemoved, runtime));
+    expect(batch.invalidatedEvents.filter((entry) => entry.reason === 'STATE_CHANGED')).toHaveLength(2);
+    expect(batch.resolvedActions).not.toContain(actionRef);
+    expect(batch.stopReason).toBe('new_intent_required');
+    expect(batch.continuationRequired).toBe(true);
+    expect(batch.encounterAfter.completionCandidate).toBeNull();
+    expect(remainingExecutionEvents(batch.encounterAfter, actionRef)).toEqual([]);
   });
 
   it('reports no_valid_target when an untouched target is removed while the encounter stays open', () => {
@@ -1424,6 +1527,54 @@ describe('core-v1 reactions, casting, movement, combos and plans', () => {
     expect(result.resolvedActions).not.toContain(heroAction.actionRef);
     expect(result.encounterAfter.activeActions.find((action) => action.actionRef === heroAction.actionRef)?.state)
       .toBe('invalidated');
+  });
+
+  it('completes an action plan only after a source-invalidated action drains all execution events', () => {
+    const { actionRef, sourceRemoved } = sourceInvalidationWithRemainingEffects(false);
+    const selfProfile: CoreV1MechanicalContentProfile = {
+      ...strikeProfile,
+      code: 'focus',
+      name: 'Focus',
+      cost: { type: 'none' },
+      effects: [{
+        type: 'restore_resource', resource: 'sp', amount: 1,
+        targeting: { type: 'self', rangeBand: 'self' },
+      }],
+    };
+    const firstIntent = intent({
+      intentRef: 'enemy-plan-first', sourceActorRef: 'enemy',
+      targetSelector: 'self', requestedTargetRefs: [],
+      contentRef: { scope: 'world', contentType: 'skill', code: 'focus', versionNumber: 1 },
+    });
+    const secondIntent = { ...firstIntent, intentRef: 'enemy-plan-followup' };
+    const result = expectOk(applyCoreV1EncounterActionPlan({
+      encounter: sourceRemoved,
+      plan: {
+        planRef: 'enemy-plan-terminalization', actorRef: 'enemy',
+        expectedStateVersion: sourceRemoved.stateVersion,
+        intents: [firstIntent, secondIntent], stopConditions: [],
+      },
+      definitions: {
+        [firstIntent.intentRef]: definition(selfProfile, { allowedRelations: ['self'] }),
+        [secondIntent.intentRef]: definition(selfProfile, { allowedRelations: ['self'] }),
+      },
+      targetingContexts: {
+        [firstIntent.intentRef]: { candidates: candidates(sourceRemoved, {}, 'enemy') },
+        [secondIntent.intentRef]: { candidates: candidates(sourceRemoved, {}, 'enemy') },
+      },
+      runtime,
+    }));
+    const invalidatedAction = result.encounterAfter.activeActions
+      .find((action) => action.actionRef === actionRef);
+    expect(result.invalidatedEvents.filter((entry) => entry.reason === 'STATE_CHANGED')).toHaveLength(2);
+    expect(result.stopReason).toBe('encounter_completed');
+    expect(result.continuationRequired).toBe(false);
+    expect(result.encounterAfter.completionCandidate).toBe('hostile_victory_candidate');
+    expect(invalidatedAction?.state).toBe('invalidated');
+    expect(result.resolvedActions).not.toContain(invalidatedAction?.actionRef);
+    expect(remainingExecutionEvents(result.encounterAfter, invalidatedAction?.actionRef ?? '')).toEqual([]);
+    expect(result.encounterAfter.activeActions.some((action) => action.intentRef === secondIntent.intentRef))
+      .toBe(false);
   });
 
   it('always stops plans for processing limits, missing intents and encounter completion', () => {
