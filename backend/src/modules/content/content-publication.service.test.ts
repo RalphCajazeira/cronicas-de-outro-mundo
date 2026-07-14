@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CORE_V1_CONTENT_PROFILE_HASH } from '../rules/core-v1/core-v1.content-profile.manifest.js';
 import { activeSkillProfile, publishedContentFixture } from '../../../tests/support/content-fixture.js';
-import { calculateContentHash, calculateInventorySpecHash, publicContentDto } from './content-publication.service.js';
+import { calculateContentHash, calculateEffectBindingHash, calculateInventorySpecHash, publicContentDto } from './content-publication.service.js';
 
 function hashInput() {
   const profile = activeSkillProfile();
@@ -35,6 +35,17 @@ describe('versioned content publication primitives', () => {
     };
     expect(calculateInventorySpecHash(spec)).toBe('49c5bb0da0c7f5522ad354e1d4564a83fc77c0225eadb273e1f193d023f39b4e');
     expect(calculateInventorySpecHash({ ...spec, unitWeight: 11 })).not.toBe(calculateInventorySpecHash(spec));
+  });
+
+  it('hashes exact status bindings independently and canonically', () => {
+    expect(calculateEffectBindingHash([])).toBe('4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945');
+    const apply = [{
+      effectIndex: 1, bindingKind: 'apply_status' as const,
+      target: { scope: 'campaign' as const, contentType: 'status_effect' as const, code: 'burning', versionNumber: 1 },
+    }];
+    expect(calculateEffectBindingHash(apply)).toMatch(/^[0-9a-f]{64}$/);
+    expect(calculateEffectBindingHash(apply)).not.toBe(calculateEffectBindingHash([{ ...apply[0]!, target: { ...apply[0]!.target, versionNumber: 2 } }]));
+    expect(calculateEffectBindingHash([{ ...apply[0]!, bindingKind: 'remove_status' }])).not.toBe(calculateEffectBindingHash(apply));
   });
 
   it.each(['name', 'description', 'profile', 'presentation', 'tags', 'metadata'] as const)(

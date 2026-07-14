@@ -12,6 +12,7 @@ import {
   calculateResourceMaximums,
   calculateSecondaryAttributes,
   getInitialAttributePreset,
+  getCoreV1ContentElements,
 } from '../rules/core-v1/index.js';
 import {
   createActorMechanicsInputHash,
@@ -50,7 +51,7 @@ function mechanicalRecord() {
     primaryAttributes,
     calculationInputs: {
       weaponFamilyRank: 0, magicSchoolRank: 0, accuracyRank: 0, evasionRank: 0,
-      encumbrancePenaltyBps: 0, totalCarriedWeight: 0, equipment: [],
+      encumbrancePenaltyBps: 0, totalCarriedWeight: 0, equipment: [], effectsStateVersion: 1, activeEffects: [],
     },
   });
   return {
@@ -58,8 +59,10 @@ function mechanicalRecord() {
     level: 1,
     mechanicsStateVersion: 1,
     inventoryStateVersion: 1,
+    effectsStateVersion: 1,
     campaign: {
       rulesetVersionId,
+      engineTick: 0n,
       rulesetVersion: {
         id: rulesetVersionId,
         rulesetId: '10000000-0000-0000-0000-000000000003',
@@ -81,7 +84,7 @@ function mechanicalRecord() {
     ],
     derivedSnapshot: {
       id: '30000000-0000-0000-0000-000000000001', actorId, rulesetVersionId,
-      mechanicsStateVersion: 1, ...maximums,
+      mechanicsStateVersion: 1, effectsStateVersion: 1, ...maximums,
       inventoryStateVersion: 1,
       actorPhysicalPower: secondary.actorPhysicalPower,
       actorMagicalPower: secondary.actorMagicalPower,
@@ -97,7 +100,7 @@ function mechanicalRecord() {
       carryingCapacity: secondary.carryingCapacity,
       physicalResistanceBps: secondary.physicalResistanceBps,
       magicalResistanceBps: secondary.magicalResistanceBps,
-      elementalResistanceSnapshot: { default: secondary.elementalResistanceBps },
+      elementalResistanceSnapshot: Object.fromEntries(getCoreV1ContentElements().map((element) => [element, secondary.elementalResistanceBps])),
       hpRegen: secondary.hpRegen,
       manaRegen: secondary.manaRegen,
       spRegen: secondary.spRegen,
@@ -116,8 +119,10 @@ function mechanicalRecord() {
       },
       totalCarriedWeight: 0,
       modifiers: [],
+      defense: { physicalImmune: false, magicalImmune: false, immuneElements: [], elementalResistanceBps: {} },
       equipmentHashInput: [],
     },
+    activeEffectInputs: { activeEffects: [], modifiers: [], hashInput: [] },
   };
 }
 
@@ -127,10 +132,14 @@ function project(record = mechanicalRecord()) {
   return projectActorMechanicalSheet(record as unknown as MechanicalRecord);
 }
 
+function stringifyWithBigInts(value: unknown): string {
+  return JSON.stringify(value, (_key: string, item: unknown): unknown => typeof item === 'bigint' ? item.toString(10) : item);
+}
+
 describe('actor mechanical state', () => {
   it('maps all nine attributes and returns the official public projection without mutating persistence', () => {
     const record = mechanicalRecord();
-    const before = JSON.stringify(record);
+    const before = stringifyWithBigInts(record);
     const sheet = project(record);
     expect(Object.keys(sheet.primaryAttributes)).toEqual([
       'strength', 'vitality', 'agility', 'dexterity', 'intelligence', 'wisdom', 'perception', 'willpower', 'luck',
@@ -140,7 +149,7 @@ describe('actor mechanical state', () => {
     expect(sheet.resources.sp.current).toBe(sheet.resources.sp.max);
     expect(sheet).not.toHaveProperty('inputHash');
     expect(sheet).not.toHaveProperty('rulesetVersionId');
-    expect(JSON.stringify(record)).toBe(before);
+    expect(stringifyWithBigInts(record)).toBe(before);
   });
 
   it('creates a deterministic SHA-256 hash from canonical mechanical inputs', () => {
@@ -153,6 +162,7 @@ describe('actor mechanical state', () => {
       calculationInputs: {
         weaponFamilyRank: 0 as const, magicSchoolRank: 0 as const, accuracyRank: 0 as const,
         evasionRank: 0 as const, encumbrancePenaltyBps: 0, totalCarriedWeight: 0, equipment: [],
+        effectsStateVersion: 1, activeEffects: [],
       },
     };
     const hash = createActorMechanicsInputHash(input);
@@ -168,6 +178,7 @@ describe('actor mechanical state', () => {
     record.inventoryInputs.equipmentHashInput = [{
       entryRef: 'strength-harness', contentType: 'item', code: 'strength-harness', versionNumber: 1,
       inventorySpecHash: 'a'.repeat(64), passiveModifiers: [{ target: 'strength', amount: 1, sourceRule: 'equipped_content' }],
+      defense: null,
     }] as never;
     const base = getInitialAttributePreset('balanced');
     const effective = calculateEffectiveAttributes(base, { strength: [{ source, value: 1 }] });
@@ -184,7 +195,7 @@ describe('actor mechanical state', () => {
       criticalChanceBps: secondary.criticalChanceBps, criticalDamageBps: secondary.criticalDamageBps,
       movementSpeed: secondary.movementSpeed, carryingCapacity: secondary.carryingCapacity,
       physicalResistanceBps: secondary.physicalResistanceBps, magicalResistanceBps: secondary.magicalResistanceBps,
-      elementalResistanceSnapshot: { default: secondary.elementalResistanceBps },
+      elementalResistanceSnapshot: Object.fromEntries(getCoreV1ContentElements().map((element) => [element, secondary.elementalResistanceBps])),
       hpRegen: secondary.hpRegen, manaRegen: secondary.manaRegen, spRegen: secondary.spRegen,
       inputHash: createActorMechanicsInputHash({
         ruleset: { code: CORE_V1_VERSION_CODE, revision: CORE_V1_REVISION, configHash: CORE_V1_CONFIG_HASH },
@@ -192,6 +203,7 @@ describe('actor mechanical state', () => {
         calculationInputs: {
           weaponFamilyRank: 0, magicSchoolRank: 0, accuracyRank: 0, evasionRank: 0,
           encumbrancePenaltyBps: 0, totalCarriedWeight: 0, equipment: record.inventoryInputs.equipmentHashInput,
+          effectsStateVersion: 1, activeEffects: [],
         },
       }),
     });

@@ -1,12 +1,16 @@
 import type { ActorStatus, ActorType, ContentProfileMode, ContentStatus, ContentType, Prisma } from '../../generated/prisma/client.js';
 import type { CampaignReference } from '../../shared/database/game-scope.js';
 import type { ActorMechanicalSheet } from './actor-mechanics.service.js';
+import type { loadActorInventorySummary } from '../inventory/inventory.service.js';
+import type { loadActorActiveEffectSummary } from '../effects/effect-state.service.js';
 
 export interface ActorRecord {
   id: string; code: string; name: string; actorType: ActorType; species: string | null;
   className: string | null; role: string | null; description: string | null; level: number;
   xp: number; gold: number; appearance: Prisma.JsonValue; personality: Prisma.JsonValue;
   metadata: Prisma.JsonValue; status: ActorStatus; mechanicalSheet: ActorMechanicalSheet;
+  inventorySummary: Awaited<ReturnType<typeof loadActorInventorySummary>>;
+  activeEffectSummary: Awaited<ReturnType<typeof loadActorActiveEffectSummary>>;
 }
 
 export interface ActorRepository {
@@ -26,6 +30,7 @@ export interface ActorContentRecord {
     description: string | null; profile: Prisma.JsonValue | null; presentation: Prisma.JsonValue;
     tags: Prisma.JsonValue; metadata: Prisma.JsonValue; contentHash: string; createdAt: Date;
     inventoryRulesVersionId: string | null; inventorySpec: Prisma.JsonValue | null; inventorySpecHash: string | null;
+    effectBindingHash: string;
     rulesetVersion: { code: string; revision: string };
     contentProfileVersion: { code: string; schemaVersion: number };
   };

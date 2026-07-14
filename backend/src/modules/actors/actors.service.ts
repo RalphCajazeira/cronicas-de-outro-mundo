@@ -8,7 +8,8 @@ export function normalizeActor(actor: ActorRecord) {
   return { code: actor.code, name: actor.name, actorType: normalizeEnum(actor.actorType), species: actor.species,
     className: actor.className, role: actor.role, description: actor.description, level: actor.level,
     xp: actor.xp, gold: actor.gold, appearance: actor.appearance, personality: actor.personality,
-    metadata: actor.metadata, status: normalizeEnum(actor.status), ...actor.mechanicalSheet };
+    metadata: actor.metadata, status: normalizeEnum(actor.status), ...actor.mechanicalSheet,
+    inventorySummary: actor.inventorySummary, activeEffectSummary: actor.activeEffectSummary };
 }
 
 export function normalizeActorContent(item: ActorContentRecord) {

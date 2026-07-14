@@ -3,6 +3,7 @@ import { actorRefSchema } from '../actors/actors.schemas.js';
 import {
   createEventSchema, listCampaignActorsSchema, listPlayerWorldsSchema, listWorldCampaignsSchema, loadGameSchema, manageActorContentSchema, manageActorInventorySchema, startGameSchema,
   patchActorSchema, upsertActorSchema, upsertContentSchema,
+  resolveActorEffectSchema,
 } from './gpt.schemas.js';
 import { createGptService } from './gpt.service.js';
 import type { GptRepository } from './gpt.types.js';
@@ -51,6 +52,9 @@ export function createGptRouter(repository: GptRepository) {
   });
   router.post('/events', async (request, response, next) => {
     try { response.json(await service.createEvent(createEventSchema.parse(request.body))); } catch (error) { next(error); }
+  });
+  router.post('/actors/effects/resolve', async (request, response, next) => {
+    try { response.json(await service.resolveActorEffect(resolveActorEffectSchema.parse(request.body))); } catch (error) { next(error); }
   });
   return router;
 }

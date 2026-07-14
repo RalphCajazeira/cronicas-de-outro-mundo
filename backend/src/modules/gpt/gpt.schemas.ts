@@ -467,6 +467,60 @@ export const createEventSchema = z.strictObject({
   payload: jsonObjectSchema, idempotencyKey: idempotencyKeySchema,
 });
 
+const effectContentReferenceSchema = z.strictObject({
+  contentType: z.enum(['weapon', 'armor', 'shield', 'clothing', 'spell', 'skill', 'talent', 'item', 'consumable', 'status_effect']),
+  code: codeSchema,
+  versionNumber: z.number().int().positive(),
+});
+
+const expectedActorEffectStateSchema = z.strictObject({
+  mechanicsStateVersion: z.number().int().positive(),
+  inventoryStateVersion: z.number().int().positive(),
+  effectsStateVersion: z.number().int().positive(),
+  resourceStateVersions: z.strictObject({
+    hp: z.number().int().positive(),
+    mana: z.number().int().positive(),
+    sp: z.number().int().positive(),
+  }),
+});
+
+export const resolveActorEffectSchema = z.strictObject({
+  ...scopeFields,
+  operation: z.enum(['get', 'execute_content', 'use_consumable']),
+  sourceActorRef: codeSchema,
+  targetActorRef: codeSchema.optional(),
+  contentRef: effectContentReferenceSchema.optional(),
+  inventoryEntryRef: codeSchema.optional(),
+  weaponEntryRef: codeSchema.optional(),
+  expectedSourceState: expectedActorEffectStateSchema.optional(),
+  expectedTargetState: expectedActorEffectStateSchema.optional(),
+  idempotencyKey: idempotencyKeySchema.optional(),
+}).superRefine((value, context) => {
+  if (value.operation === 'get') {
+    for (const field of ['targetActorRef', 'contentRef', 'inventoryEntryRef', 'weaponEntryRef', 'expectedSourceState', 'expectedTargetState', 'idempotencyKey'] as const) {
+      if (value[field] !== undefined) context.addIssue({ code: 'custom', path: [field], message: 'Not allowed for get' });
+    }
+    return;
+  }
+  for (const field of ['targetActorRef', 'expectedSourceState', 'idempotencyKey'] as const) {
+    if (value[field] === undefined) context.addIssue({ code: 'custom', path: [field], message: 'Required for write operations' });
+  }
+  if (value.targetActorRef !== undefined && value.targetActorRef !== value.sourceActorRef && value.expectedTargetState === undefined) {
+    context.addIssue({ code: 'custom', path: ['expectedTargetState'], message: 'Required when the target differs from the source actor' });
+  }
+  if (value.targetActorRef === value.sourceActorRef && value.expectedTargetState !== undefined) {
+    context.addIssue({ code: 'custom', path: ['expectedTargetState'], message: 'Self targeting uses expectedSourceState only' });
+  }
+  if (value.operation === 'execute_content') {
+    if (value.contentRef === undefined) context.addIssue({ code: 'custom', path: ['contentRef'], message: 'Required for execute_content' });
+    if (value.inventoryEntryRef !== undefined) context.addIssue({ code: 'custom', path: ['inventoryEntryRef'], message: 'Not allowed for execute_content' });
+  } else {
+    if (value.inventoryEntryRef === undefined) context.addIssue({ code: 'custom', path: ['inventoryEntryRef'], message: 'Required for use_consumable' });
+    if (value.contentRef !== undefined) context.addIssue({ code: 'custom', path: ['contentRef'], message: 'Not allowed for use_consumable' });
+    if (value.weaponEntryRef !== undefined) context.addIssue({ code: 'custom', path: ['weaponEntryRef'], message: 'Not allowed for use_consumable' });
+  }
+});
+
 export type LoadGameInput = z.infer<typeof loadGameSchema>;
 export type ListPlayerWorldsInput = z.infer<typeof listPlayerWorldsSchema>;
 export type ListWorldCampaignsInput = z.infer<typeof listWorldCampaignsSchema>;
@@ -478,3 +532,4 @@ export type UpsertContentInput = z.infer<typeof upsertContentSchema>;
 export type ManageActorContentInput = z.infer<typeof manageActorContentSchema>;
 export type ManageActorInventoryInput = z.infer<typeof manageActorInventorySchema>;
 export type CreateEventInput = z.infer<typeof createEventSchema>;
+export type ResolveActorEffectInput = z.infer<typeof resolveActorEffectSchema>;

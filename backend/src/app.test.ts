@@ -16,7 +16,13 @@ import { actorContentFixture, publishedContentFixture, skillPublicationInput } f
 const config: AppConfig = { NODE_ENV: 'test', HOST: '0.0.0.0', PORT: 3000, DATABASE_URL: 'postgresql://test:test@localhost:5432/test', DIRECT_URL: 'postgresql://test:test@localhost:5432/test', RPG_API_KEY: 'test-key' };
 const primaryAttributes = getInitialAttributePreset('balanced');
 const mechanicalSheet = actorMechanicalSheetFixture(primaryAttributes);
-const actor = { id: '7e7b7cbe-5767-47de-a0b5-4b7bc9365c89', code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER, species: null, className: 'Aventureiro', role: null, description: null, level: 1, xp: 0, gold: 0, appearance: {}, personality: {}, metadata: {}, status: ActorStatus.ACTIVE, mechanicalSheet };
+const actor = {
+  id: '7e7b7cbe-5767-47de-a0b5-4b7bc9365c89', code: 'ralph', name: 'Ralph', actorType: ActorType.CHARACTER,
+  species: null, className: 'Aventureiro', role: null, description: null, level: 1, xp: 0, gold: 0,
+  appearance: {}, personality: {}, metadata: {}, status: ActorStatus.ACTIVE, mechanicalSheet,
+  inventorySummary: { entryCount: 0, equippedCount: 0, totalCarriedWeight: 0, encumbranceState: 'normal' as const },
+  activeEffectSummary: { total: 0, statusCount: 0, modifierCount: 0, reactionGrantCount: 0 },
+};
 const contentItem = actorContentFixture();
 const definition = publishedContentFixture();
 const scope = { playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' };
@@ -58,7 +64,7 @@ const emptyGptRepository: GptRepository = {
   loadGame: () => Promise.resolve({}), listPlayerWorlds: () => Promise.resolve([]), listWorldCampaigns: () => Promise.resolve([]),
   startGame: () => Promise.resolve({}), listCampaignActors: () => Promise.resolve([]), upsertActor: () => Promise.resolve({}),
   patchActor: () => Promise.resolve({}), upsertContent: () => Promise.resolve({}), manageActorContent: () => Promise.resolve({}),
-  manageActorInventory: () => Promise.resolve({}), createEvent: () => Promise.resolve({}),
+  manageActorInventory: () => Promise.resolve({}), createEvent: () => Promise.resolve({}), resolveActorEffect: () => Promise.resolve({}),
 };
 
 function appWith(
@@ -76,6 +82,7 @@ function appWith(
     manageActorContent: (_actorRef, input) => Promise.resolve({ operation: input.operation, state: input.changes?.state ?? 'known' }),
     manageActorInventory: (_actorRef, input) => Promise.resolve({ operation: input.operation, inventoryStateVersion: 1 }),
     createEvent: (input) => Promise.resolve({ eventType: input.eventType, title: input.title }),
+    resolveActorEffect: (input) => Promise.resolve({ operation: input.operation }),
   },
   readiness: ReadinessCheck = { check: () => Promise.resolve(true) },
   auditLog?: AuditLogWriter,
@@ -110,7 +117,7 @@ describe('HTTP API', () => {
   });
   it('rejects a private route without x-rpg-key', async () => { expect((await request(appWith()).get(`/api/v1/characters/ralph?${scopeQuery}`)).status).toBe(401); });
   it('rejects a private route with the wrong x-rpg-key', async () => { expect((await request(appWith()).get(`/api/v1/characters/ralph?${scopeQuery}`).set('x-rpg-key', 'wrong-key')).status).toBe(401); });
-  it('reaches the controller with a valid key and normalizes a character', async () => { const response = await request(appWith()).get(`/api/v1/characters/ralph?${scopeQuery}`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toEqual({ code: 'ralph', name: 'Ralph', actorType: 'character', species: null, className: 'Aventureiro', role: null, description: null, level: 1, xp: 0, gold: 0, appearance: {}, personality: {}, metadata: {}, status: 'active', ...mechanicalSheet }); expect(response.body).not.toHaveProperty('id'); expect(JSON.stringify(response.body)).not.toMatch(/inputHash|rulesetVersionId|[0-9a-f]{8}-[0-9a-f-]{27}/); });
+  it('reaches the controller with a valid key and normalizes a character', async () => { const response = await request(appWith()).get(`/api/v1/characters/ralph?${scopeQuery}`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toEqual({ code: 'ralph', name: 'Ralph', actorType: 'character', species: null, className: 'Aventureiro', role: null, description: null, level: 1, xp: 0, gold: 0, appearance: {}, personality: {}, metadata: {}, status: 'active', ...mechanicalSheet, inventorySummary: actor.inventorySummary, activeEffectSummary: actor.activeEffectSummary }); expect(response.body).not.toHaveProperty('id'); expect(JSON.stringify(response.body)).not.toMatch(/inputHash|rulesetVersionId|[0-9a-f]{8}-[0-9a-f-]{27}/); });
   it('validates an invalid characterRef', async () => { expect((await request(appWith()).get(`/api/v1/characters/not%20valid?${scopeQuery}`).set('x-rpg-key', 'test-key')).status).toBe(400); });
   it('returns 404 for a missing character', async () => { const repository: ActorRepository = { findByReference: () => Promise.resolve(null), listContent: () => Promise.resolve(null) }; expect((await request(appWith(repository)).get(`/api/v1/characters/missing?${scopeQuery}`).set('x-rpg-key', 'test-key')).status).toBe(404); });
   it('normalizes character content', async () => { const response = await request(appWith()).get(`/api/v1/characters/ralph/content?${scopeQuery}`).set('x-rpg-key', 'test-key'); expect(response.status).toBe(200); expect(response.body).toEqual([expect.objectContaining({ code: 'wind_breeze_step', contentType: 'skill', state: 'learning', status: 'active', progress: 10, notes: 'Treino inicial com Lyra', versionNumber: 1 })]); expect(JSON.stringify(response.body)).not.toContain('contentDefinition'); });
@@ -262,6 +269,51 @@ describe('HTTP API', () => {
       error: { type: 'validation', code: 'INVALID_INPUT', issues: [expect.objectContaining({ path: 'idempotencyKey' })] },
     });
     expect(JSON.stringify(records)).not.toContain('test-key');
+  });
+  it('audits effect resolution with counts and booleans but no resources, rolls or idempotency values', async () => {
+    const records: HttpAuditRecord[] = [];
+    const repository: GptRepository = {
+      ...emptyGptRepository,
+      resolveActorEffect: () => Promise.resolve({
+        operation: 'execute_content', source: { effectsStateVersion: 2, resources: { mana: { current: 7 } } },
+        target: { effectsStateVersion: 3 }, rolls: [{ kind: 'hit', rollBps: 9876 }],
+        damageResults: [{ hit: true, critical: false, damageApplied: 12 }],
+        resourceChanges: [{ resource: 'mana', before: 10, after: 7 }],
+        activeEffectChanges: [{ change: 'created' }], inventoryChanges: [],
+      }),
+    };
+    const response = await request(appWith(undefined, undefined, repository, undefined, (record) => records.push(record)))
+      .post('/api/v1/actors/effects/resolve').set('x-rpg-key', 'test-key').send({
+        ...scope, operation: 'execute_content', sourceActorRef: 'ralph', targetActorRef: 'lyra',
+        contentRef: { contentType: 'spell', code: 'arcane-mark', versionNumber: 1 },
+        expectedSourceState: {
+          mechanicsStateVersion: 1, inventoryStateVersion: 1, effectsStateVersion: 1,
+          resourceStateVersions: { hp: 1, mana: 1, sp: 1 },
+        },
+        expectedTargetState: {
+          mechanicsStateVersion: 1, inventoryStateVersion: 1, effectsStateVersion: 2,
+          resourceStateVersions: { hp: 1, mana: 1, sp: 1 },
+        },
+        idempotencyKey: 'effect-audit-secret-001',
+      });
+    expect(response.status).toBe(200);
+    expect(records[0]).toMatchObject({
+      request: { body: {
+        operation: 'execute_content', sourceActorRef: 'ralph', targetActorRef: 'lyra',
+        mechanicsStateVersionBefore: 1, inventoryStateVersionBefore: 1, effectsStateVersionBefore: 1,
+        targetEffectsStateVersionBefore: 2,
+      } },
+      response: {
+        operation: 'execute_content', rollCount: 1, hit: true, critical: false,
+        damageAppliedPresent: true, resourceTypesChanged: ['mana'], activeEffectChanges: 1,
+        inventoryChanged: false, effectsStateVersionAfter: 2, targetEffectsStateVersionAfter: 3,
+      },
+    });
+    const serialized = JSON.stringify(records);
+    expect(serialized).not.toContain('9876');
+    expect(serialized).not.toContain('effect-audit-secret-001');
+    expect(serialized).not.toContain('"current":7');
+    expect(serialized).not.toContain('"damageApplied":12');
   });
   it('does not echo rejected field values in validation responses or audit logs', async () => {
     const records: HttpAuditRecord[] = [];

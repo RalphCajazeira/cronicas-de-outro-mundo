@@ -9,7 +9,9 @@ function actor(actorType: ActorType): ActorRecord {
   return { id: '7e7b7cbe-5767-47de-a0b5-4b7bc9365c89', code: 'ralph', name: 'Ralph', actorType, species: null,
     className: null, role: null, description: null, level: 1, xp: 0, gold: 0,
     appearance: {}, personality: {}, metadata: {}, status: ActorStatus.ACTIVE,
-    mechanicalSheet: actorMechanicalSheetFixture() };
+    mechanicalSheet: actorMechanicalSheetFixture(),
+    inventorySummary: { entryCount: 0, equippedCount: 0, totalCarriedWeight: 0, encumbranceState: 'normal' },
+    activeEffectSummary: { total: 0, statusCount: 0, modifierCount: 0, reactionGrantCount: 0 } };
 }
 
 function repository(actorType: ActorType): ActorRepository {

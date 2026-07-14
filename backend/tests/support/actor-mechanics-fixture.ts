@@ -23,13 +23,14 @@ export function actorMechanicalSheetFixture(
   return {
     primaryAttributes: { ...primaryAttributes },
     resources: {
-      hp: { current: maximums.maxHp, max: maximums.maxHp },
-      mana: { current: maximums.maxMana, max: maximums.maxMana },
-      sp: { current: maximums.maxSp, max: maximums.maxSp },
+      hp: { current: maximums.maxHp, max: maximums.maxHp, stateVersion: 1 },
+      mana: { current: maximums.maxMana, max: maximums.maxMana, stateVersion: 1 },
+      sp: { current: maximums.maxSp, max: maximums.maxSp, stateVersion: 1 },
     },
     secondaryAttributes: { ...scalarSecondary, elementalResistanceBps: { default: elementalResistanceBps } },
     mechanicsStateVersion: 1,
     inventoryStateVersion: 1,
+    effectsStateVersion: 1,
     ruleset: { code: 'core-v1', revision: 'RC1.1' },
   };
 }

@@ -9,6 +9,7 @@ export * from './core-v1.content-mechanics.js';
 export * from './core-v1.inventory.js';
 export * from './core-v1.equipment.js';
 export * from './core-v1.effects.js';
+export * from './core-v1.effects.manifest.js';
 export * from './core-v1.damage.js';
 export * from './core-v1.progression.js';
 export type * from './core-v1.action-economy.types.js';
@@ -44,4 +45,18 @@ export {
   CORE_V1_MAX_INVENTORY_ENTRIES_PER_OPERATION,
   CORE_V1_MAX_STACK_QUANTITY,
 } from './core-v1.inventory.config.js';
+export {
+  CORE_V1_EFFECT_RULES_CODE,
+  CORE_V1_EFFECT_RULESET_CODE,
+  CORE_V1_EFFECT_SCHEMA_VERSION,
+  CORE_V1_MAX_ACTIVE_EFFECTS_PER_ACTOR,
+  CORE_V1_MAX_ACTIVE_MODIFIERS_PER_ACTOR,
+  CORE_V1_MAX_EFFECTS_PER_SEQUENCE,
+  CORE_V1_MAX_OPERATIONAL_MULTIPLIER_BPS,
+  CORE_V1_MAX_RESOLUTION_ACTORS,
+  CORE_V1_MAX_RESOLUTION_CHANGES,
+  CORE_V1_MAX_ROLL_BPS,
+  CORE_V1_MAX_RUNTIME_STATUS_STACKS,
+  CORE_V1_MIN_ROLL_BPS,
+} from './core-v1.effects.config.js';
 export { ceilDiv, clamp, roundHalfUp } from './core-v1.math.js';

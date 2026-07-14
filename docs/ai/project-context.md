@@ -25,7 +25,9 @@ Projeto de RPG narrativo reiniciado como nova versão, com o sistema anterior ar
 - O núcleo `core-v1` valida fichas canônicas de 13 tipos e sua configuração possui publicação própria `core-v1-content-v1`. `ContentDefinition` guarda identidade, `ContentVersion` guarda snapshots imutáveis e `ActorContent` fixa a versão concedida. `startGame`, `upsertContent`, `getContent`, `loadGame` e `manageActorContent` usam essa fronteira versionada.
 - O `core-v1-inventory-v1` possui publicação imutável própria e agora sustenta inventário físico persistido por instâncias ou stacks fixados em uma `ContentVersion`, equipamento atômico por slots, peso/carga RC1.1 e modificadores equipados aplicados ao snapshot. `ActorContent` permanece apenas progressão/conhecimento.
 - `manageActorInventory` é a única operação pública de inventário; escritas são idempotentes, usam `expectedInventoryStateVersion`, lock do Actor e recomputação mecânica na mesma transação. `startGame` reutiliza a mesma orquestração para inventário inicial.
-- O módulo puro `core-v1-effects-v1` resolve custos, rolls injetados, dano, restauração, estados ativos, duração, stacking, sequências atômicas e planejamento de consumíveis sem persistência. O backend continua sendo a única autoridade; integração transacional permanece futura.
+- O módulo `core-v1-effects-v1` mantém o cálculo puro e agora possui persistência autoritativa versionada por `EffectRulesVersion`. `resolveActorEffect` consulta efeitos ou executa conteúdo/consumível em transação única, com locks ordenados, tokens otimistas, rolls criptográficos gerados no backend, recursos versionados, efeitos ativos, inventário e auditoria idempotente.
+- Referências `apply_status`/`remove_status` são resolvidas na publicação e fixadas por `ContentEffectBinding` a uma `ContentVersion` exata; novas versões do status não alteram fontes já publicadas.
+- `Campaign.engineTick` é o relógio mecânico persistido. `Actor.effectsStateVersion` participa do snapshot e efeitos ativos aplicam modificadores na recomposição. `Actor.status` não é alterado automaticamente por dano, cura ou HP zero.
 - Auditoria HTTP estruturada com `x-request-id`, resumos seguros de requisição/resposta e caminhos de validação, sem headers ou payloads sensíveis.
 - Blueprint Render de staging nativo Node, Free em `virginia`, branch `develop`, sem Docker, sem pre-deploy e sem deploy automático.
 
@@ -37,7 +39,7 @@ Projeto de RPG narrativo reiniciado como nova versão, com o sistema anterior ar
 
 ## Fases futuras
 
-Frontend React, integração GPT ao vivo, operação explícita de upgrade de conteúdo do ator, persistência/transação de consumíveis e efeitos, combate, comércio, lojas, facções, relações, memórias detalhadas, viagens, clima e snapshots narrativos.
+Frontend React, integração GPT ao vivo, operação explícita de upgrade de conteúdo do ator, seleção multi-target, timeline/turnos/encontros, reaction/block runtime, cooldown/upkeep/ticks periódicos, combate completo, comércio, lojas, facções, relações, memórias detalhadas, viagens, clima e snapshots narrativos.
 
 ## Segurança
 

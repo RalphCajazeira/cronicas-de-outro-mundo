@@ -65,9 +65,11 @@ export function publishedContentFixture(overrides: Partial<PublishedContent> = {
       contentHash: 'a'.repeat(64),
       inventorySpec: null,
       inventorySpecHash: null,
+      effectBindingHash: '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
       createdAt: new Date(0),
       rulesetVersion: { code: 'core-v1', revision: 'RC1.1' },
       contentProfileVersion: { code: 'core-v1-content-v1', schemaVersion: 1 },
+      sourceEffectBindings: [],
     }],
     ...overrides,
   };
