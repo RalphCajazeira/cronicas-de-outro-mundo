@@ -322,6 +322,18 @@ function sourceInvalidationWithQueuedUnrelatedAction() {
   };
 }
 
+function deferActionPastBatchAdvance(
+  encounter: CoreV1EncounterState,
+  actionRef: string,
+): CoreV1EncounterState {
+  return {
+    ...encounter,
+    scheduledEvents: encounter.scheduledEvents.map((event) => event.actionRef === actionRef
+      ? { ...event, timelineEvent: { ...event.timelineEvent, tick: encounter.currentTick + 5001n } }
+      : event).sort((left, right) => compareTimelineEvents(left.timelineEvent, right.timelineEvent)),
+  };
+}
+
 function remainingExecutionEvents(state: CoreV1EncounterState, actionRef: string) {
   return state.scheduledEvents.filter((event) => event.actionRef === actionRef
     && ['action_effect', 'movement_effect', 'channel_pulse', 'upkeep_due'].includes(event.type));
@@ -921,6 +933,20 @@ describe('core-v1 action compile, timeline and effects composition', () => {
       .toEqual(fixture.unrelatedSourceBefore);
     expect(batch.encounterAfter.participants.find((entry) => entry.actorRef === 'enemy')?.resources)
       .toEqual(fixture.unrelatedTargetBefore);
+  });
+
+  it('preserves new_intent_required over a post-loop processing limit', () => {
+    const fixture = sourceInvalidationWithQueuedUnrelatedAction();
+    const delayed = deferActionPastBatchAdvance(fixture.encounter, fixture.unrelatedActionRef);
+    const batch = expectOk(processCoreV1EncounterBatch(delayed, runtime));
+    expect(batch.stopReason).toBe('new_intent_required');
+    expect(batch.continuationRequired).toBe(true);
+    expect(batch.resolvedActions).not.toContain(fixture.invalidatedActionRef);
+    expect(batch.processedEvents.some((event) => event.actionRef === fixture.unrelatedActionRef)).toBe(false);
+    expect(batch.encounterAfter.scheduledEvents.some((event) => (
+      event.actionRef === fixture.unrelatedActionRef
+        && event.timelineEvent.tick - batch.encounterAfter.currentTick > 5000n
+    ))).toBe(true);
   });
 
   it('keeps processing_limit authoritative after an optional target loss', () => {
@@ -1628,16 +1654,17 @@ describe('core-v1 reactions, casting, movement, combos and plans', () => {
 
   it('stops an unconditional plan when its batch requires a new intent', () => {
     const fixture = mandatoryAndOptionalInvalidation('mandatory_first');
+    const encounter = deferActionPastBatchAdvance(fixture.encounter, fixture.optionalActionRef);
     const firstIntent = intent({
       intentRef: 'planner-first', sourceActorRef: fixture.plannerActorRef,
       requestedTargetRefs: ['ally'],
     });
     const secondIntent = { ...firstIntent, intentRef: 'planner-followup' };
     const result = expectOk(applyCoreV1EncounterActionPlan({
-      encounter: fixture.encounter,
+      encounter,
       plan: {
         planRef: 'plan-mandatory-stop', actorRef: fixture.plannerActorRef,
-        expectedStateVersion: fixture.encounter.stateVersion,
+        expectedStateVersion: encounter.stateVersion,
         intents: [firstIntent, secondIntent], stopConditions: [],
       },
       definitions: {
@@ -1646,10 +1673,10 @@ describe('core-v1 reactions, casting, movement, combos and plans', () => {
       },
       targetingContexts: {
         [firstIntent.intentRef]: {
-          candidates: candidates(fixture.encounter, {}, fixture.plannerActorRef),
+          candidates: candidates(encounter, {}, fixture.plannerActorRef),
         },
         [secondIntent.intentRef]: {
-          candidates: candidates(fixture.encounter, {}, fixture.plannerActorRef),
+          candidates: candidates(encounter, {}, fixture.plannerActorRef),
         },
       },
       runtime,
@@ -1659,7 +1686,7 @@ describe('core-v1 reactions, casting, movement, combos and plans', () => {
     expect(result.stopReason).toBe('new_intent_required');
     expect(result.stopReason).not.toBe('plan_completed');
     expect(result.continuationRequired).toBe(true);
-    expect(result.encounterAfter.actionSequence).toBe(fixture.encounter.actionSequence + 1);
+    expect(result.encounterAfter.actionSequence).toBe(encounter.actionSequence + 1);
     expect(result.encounterAfter.actionPlans.map((plan) => plan.planRef)).toContain('plan-mandatory-stop');
     expect(result.encounterAfter.activeActions.some((action) => action.intentRef === secondIntent.intentRef))
       .toBe(false);

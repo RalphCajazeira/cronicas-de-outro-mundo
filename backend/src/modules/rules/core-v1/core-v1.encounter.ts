@@ -1531,8 +1531,8 @@ function mergeEncounterBatchStopReason(
   if (incoming === null) return current;
   if (isTerminalStopReason(incoming)) return incoming;
   if (isTerminalStopReason(current)) return current;
-  if (isMandatoryStopReason(incoming)) return incoming;
   if (isMandatoryStopReason(current)) return current;
+  if (isMandatoryStopReason(incoming)) return incoming;
   return incoming;
 }
 
