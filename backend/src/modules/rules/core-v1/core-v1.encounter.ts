@@ -1906,7 +1906,7 @@ export function processNextCoreV1EncounterEvent(
       if (event.actionRef !== undefined) {
         const action = next.activeActions.find((candidate) => candidate.actionRef === event.actionRef);
         if (action !== undefined && ['resolved', 'interrupted', 'invalidated'].includes(action.state)) {
-          resolvedActions.push(action.actionRef);
+          if (action.state !== 'invalidated') resolvedActions.push(action.actionRef);
           next = { ...next, activeActions: next.activeActions.filter((candidate) => candidate.actionRef !== action.actionRef) };
         }
       }

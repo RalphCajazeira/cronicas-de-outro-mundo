@@ -534,6 +534,7 @@ describe('core-v1 action compile, timeline and effects composition', () => {
     expect(invalidated.encounterAfter.activeActions[0]?.state).toBe('invalidated');
     const readied = expectOk(processNextCoreV1EncounterEvent(invalidated.encounterAfter, runtime));
     expect(readied.encounterAfter.activeActions).toEqual([]);
+    expect(readied.resolvedActions).toEqual([]);
   });
 
   it('applies single-target damage and action cost once with deterministic rolls', () => {
