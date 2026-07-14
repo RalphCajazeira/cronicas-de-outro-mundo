@@ -467,6 +467,55 @@ describe('core-v1 action compile, timeline and effects composition', () => {
     return { state, context: { candidates: candidates(state) } };
   }
 
+  function terminalSourceInvalidation(includeAlly: boolean) {
+    const state = readyEncounter([
+      participant('hero', 'party'),
+      ...(includeAlly ? [participant('ally', 'party')] : []),
+      participant('enemy', 'hostile'),
+      participant('enemy-two', 'hostile'),
+    ]);
+    const profile: CoreV1MechanicalContentProfile = {
+      ...strikeProfile,
+      code: 'double-strike',
+      name: 'Double Strike',
+      effects: [{
+        type: 'damage',
+        targeting: {
+          type: 'multi_target', rangeBand: 'engaged', maxTargets: 2,
+          damageMultiplierPerTargetBps: [5000, 5000],
+        },
+        damageComponents: [{
+          id: 'double-hit', channel: 'physical', element: null,
+          baseDamage: 8, scaling: 'full', canCrit: true,
+        }],
+      }],
+    };
+    const compiled = expectOk(compileCoreV1EncounterAction({
+      encounter: state,
+      intent: intent({
+        contentRef: { scope: 'world', contentType: 'skill', code: 'double-strike', versionNumber: 1 },
+        requestedTargetRefs: ['enemy', 'enemy-two'],
+      }),
+      definition: definition(profile),
+      targetingContext: { candidates: candidates(state) },
+    }));
+    const scheduled = expectOk(scheduleCoreV1EncounterAction(state, compiled));
+    const started = expectOk(processNextCoreV1EncounterEvent(scheduled, runtime));
+    const firstEffect = expectOk(processNextCoreV1EncounterEvent(started.encounterAfter, runtime));
+    const sourceRemoved = {
+      ...firstEffect.encounterAfter,
+      participants: firstEffect.encounterAfter.participants.map((entry) => entry.actorRef === 'hero'
+        ? { ...entry, combatState: 'removed' as const }
+        : entry),
+    };
+    return {
+      actionRef: compiled.actionRef,
+      firstEffect,
+      sourceRemoved,
+      invalidated: expectOk(processNextCoreV1EncounterEvent(sourceRemoved, runtime)),
+    };
+  }
+
   it('compiles preparation/effect/recovery without rolls and schedules through the existing queue', () => {
     const { state, context } = setup();
     const before = structuredClone(state);
@@ -532,61 +581,42 @@ describe('core-v1 action compile, timeline and effects composition', () => {
     };
     const invalidated = expectOk(processNextCoreV1EncounterEvent(targetRemoved, runtime));
     expect(invalidated.invalidatedEvents.some((entry) => entry.event.type === 'action_effect')).toBe(true);
-    expect(invalidated.stopReason).toBe('new_intent_required');
+    expect(invalidated.stopReason).toBe('encounter_completed');
+    expect(invalidated.continuationRequired).toBe(false);
     expect(invalidated.encounterAfter.activeActions[0]?.state).toBe('invalidated');
     const readied = expectOk(processNextCoreV1EncounterEvent(invalidated.encounterAfter, runtime));
     expect(readied.encounterAfter.activeActions).toEqual([]);
     expect(readied.resolvedActions).toEqual([]);
   });
 
-  it('keeps a partially applied action invalidated when its source becomes unavailable', () => {
-    const state = readyEncounter([
-      participant('hero', 'party'),
-      participant('enemy', 'hostile'),
-      participant('enemy-two', 'hostile'),
-    ]);
-    const profile: CoreV1MechanicalContentProfile = {
-      ...strikeProfile,
-      code: 'double-strike',
-      name: 'Double Strike',
-      effects: [{
-        type: 'damage',
-        targeting: {
-          type: 'multi_target', rangeBand: 'engaged', maxTargets: 2,
-          damageMultiplierPerTargetBps: [5000, 5000],
-        },
-        damageComponents: [{
-          id: 'double-hit', channel: 'physical', element: null,
-          baseDamage: 8, scaling: 'full', canCrit: true,
-        }],
-      }],
-    };
-    const compiled = expectOk(compileCoreV1EncounterAction({
-      encounter: state,
-      intent: intent({
-        contentRef: { scope: 'world', contentType: 'skill', code: 'double-strike', versionNumber: 1 },
-        requestedTargetRefs: ['enemy', 'enemy-two'],
-      }),
-      definition: definition(profile),
-      targetingContext: { candidates: candidates(state) },
-    }));
-    const scheduled = expectOk(scheduleCoreV1EncounterAction(state, compiled));
-    const started = expectOk(processNextCoreV1EncounterEvent(scheduled, runtime));
-    const firstEffect = expectOk(processNextCoreV1EncounterEvent(started.encounterAfter, runtime));
+  it('prioritizes encounter completion when a partially applied action loses its source', () => {
+    const { actionRef, firstEffect, sourceRemoved, invalidated } = terminalSourceInvalidation(false);
     expect(firstEffect.effectResolutions).toHaveLength(1);
-    const sourceRemoved = {
-      ...firstEffect.encounterAfter,
-      participants: firstEffect.encounterAfter.participants.map((entry) => entry.actorRef === 'hero'
-        ? { ...entry, combatState: 'removed' as const }
-        : entry),
-    };
-    const invalidated = expectOk(processNextCoreV1EncounterEvent(sourceRemoved, runtime));
+    expect(invalidated.invalidatedEvents[0]?.reason).toBe('STATE_CHANGED');
+    expect(invalidated.stopReason).toBe('encounter_completed');
+    expect(invalidated.continuationRequired).toBe(false);
+    expect(invalidated.encounterAfter.completionCandidate).toBe('hostile_victory_candidate');
+    expect(invalidated.encounterAfter.activeActions[0]?.state).toBe('invalidated');
+    expect(invalidated.resolvedActions).not.toContain(actionRef);
+    const batch = expectOk(processCoreV1EncounterBatch(sourceRemoved, runtime));
+    expect(batch.stopReason).toBe('encounter_completed');
+    expect(batch.continuationRequired).toBe(false);
+    expect(batch.resolvedActions).not.toContain(actionRef);
+  });
+
+  it('requires a new intent when terminal source invalidation leaves an actionable ally', () => {
+    const { actionRef, firstEffect, sourceRemoved, invalidated } = terminalSourceInvalidation(true);
+    expect(firstEffect.effectResolutions).toHaveLength(1);
     expect(invalidated.invalidatedEvents[0]?.reason).toBe('STATE_CHANGED');
     expect(invalidated.stopReason).toBe('new_intent_required');
+    expect(invalidated.continuationRequired).toBe(true);
+    expect(invalidated.encounterAfter.completionCandidate).toBeNull();
     expect(invalidated.encounterAfter.activeActions[0]?.state).toBe('invalidated');
-    const readied = expectOk(processNextCoreV1EncounterEvent(invalidated.encounterAfter, runtime));
-    expect(readied.encounterAfter.activeActions).toEqual([]);
-    expect(readied.resolvedActions).toEqual([]);
+    expect(invalidated.resolvedActions).not.toContain(actionRef);
+    const batch = expectOk(processCoreV1EncounterBatch(sourceRemoved, runtime));
+    expect(batch.stopReason).toBe('new_intent_required');
+    expect(batch.continuationRequired).toBe(true);
+    expect(batch.resolvedActions).not.toContain(actionRef);
   });
 
   it('applies single-target damage and action cost once with deterministic rolls', () => {
@@ -1191,6 +1221,67 @@ describe('core-v1 reactions, casting, movement, combos and plans', () => {
     expect(result.continuationRequired).toBe(true);
     expect(result.resolvedActions).not.toContain('encounter-test-action-2');
     expect(result.encounterAfter.actionPlans.map((plan) => plan.planRef)).toContain('plan-source');
+  });
+
+  it('propagates encounter completion for a terminally invalidated plan without requesting continuation', () => {
+    const state = readyEncounter([
+      participant('hero', 'party'),
+      participant('enemy', 'hostile'),
+    ]);
+    const heroAction = expectOk(compileCoreV1EncounterAction({
+      encounter: state,
+      intent: intent(),
+      definition: definition(),
+      targetingContext: { candidates: candidates(state) },
+    }));
+    const scheduled = expectOk(scheduleCoreV1EncounterAction(state, heroAction));
+    const started = expectOk(processNextCoreV1EncounterEvent(scheduled, runtime));
+    const sourceRemoved = {
+      ...started.encounterAfter,
+      participants: started.encounterAfter.participants.map((entry) => entry.actorRef === 'hero'
+        ? { ...entry, combatState: 'removed' as const }
+        : entry),
+      scheduledEvents: started.encounterAfter.scheduledEvents.map((event) => event.type === 'action_effect'
+        ? { ...event, timelineEvent: { ...event.timelineEvent, tick: started.encounterAfter.currentTick } }
+        : event),
+    };
+    const selfProfile: CoreV1MechanicalContentProfile = {
+      ...strikeProfile,
+      code: 'focus',
+      name: 'Focus',
+      cost: { type: 'none' },
+      effects: [{
+        type: 'restore_resource', resource: 'sp', amount: 1,
+        targeting: { type: 'self', rangeBand: 'self' },
+      }],
+    };
+    const enemyIntent = intent({
+      intentRef: 'enemy-plan-intent', sourceActorRef: 'enemy',
+      targetSelector: 'self', requestedTargetRefs: [],
+      contentRef: { scope: 'world', contentType: 'skill', code: 'focus', versionNumber: 1 },
+    });
+    const result = expectOk(applyCoreV1EncounterActionPlan({
+      encounter: sourceRemoved,
+      plan: {
+        planRef: 'enemy-plan-completion', actorRef: 'enemy',
+        expectedStateVersion: sourceRemoved.stateVersion,
+        intents: [enemyIntent], stopConditions: [],
+      },
+      definitions: {
+        [enemyIntent.intentRef]: definition(selfProfile, { allowedRelations: ['self'] }),
+      },
+      targetingContexts: {
+        [enemyIntent.intentRef]: { candidates: candidates(sourceRemoved, {}, 'enemy') },
+      },
+      runtime,
+    }));
+    expect(result.invalidatedEvents.some((entry) => entry.reason === 'STATE_CHANGED')).toBe(true);
+    expect(result.stopReason).toBe('encounter_completed');
+    expect(result.continuationRequired).toBe(false);
+    expect(result.encounterAfter.completionCandidate).toBe('hostile_victory_candidate');
+    expect(result.resolvedActions).not.toContain(heroAction.actionRef);
+    expect(result.encounterAfter.activeActions.find((action) => action.actionRef === heroAction.actionRef)?.state)
+      .toBe('invalidated');
   });
 
   it('always stops plans for processing limits, missing intents and encounter completion', () => {

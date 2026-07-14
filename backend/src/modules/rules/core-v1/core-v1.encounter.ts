@@ -1491,6 +1491,16 @@ function completionCandidate(encounter: CoreV1EncounterState): CoreV1EncounterCo
   return null;
 }
 
+function promoteEncounterCompletion(
+  encounter: Pick<CoreV1EncounterState, 'completionCandidate'>,
+  stopReason: CoreV1EncounterStopReason | null,
+): CoreV1EncounterStopReason | null {
+  if (encounter.completionCandidate === null) return stopReason;
+  return stopReason === null || stopReason === 'new_intent_required' || stopReason === 'no_valid_target'
+    ? 'encounter_completed'
+    : stopReason;
+}
+
 function removeEvents(
   encounter: CoreV1EncounterState,
   refs: ReadonlySet<string>,
@@ -1770,6 +1780,12 @@ export function processNextCoreV1EncounterEvent(
       stateVersion: safeIntegerAdd(next.stateVersion, 1, 'encounter state version'),
       completionCandidate: completionCandidate(next),
     };
+    const stopReason = promoteEncounterCompletion(
+      next,
+      terminalState === 'invalidated'
+        ? 'new_intent_required'
+        : invalidReason === 'NO_VALID_TARGET' ? 'no_valid_target' : null,
+    );
     return success({
       ...report,
       encounterAfter: next,
@@ -1777,9 +1793,8 @@ export function processNextCoreV1EncounterEvent(
         ? [event.actionRef]
         : [],
       invalidatedEvents: [{ event, reason: invalidReason }],
-      stopReason: terminalState === 'invalidated'
-        ? 'new_intent_required'
-        : invalidReason === 'NO_VALID_TARGET' ? 'no_valid_target' : null,
+      stopReason,
+      continuationRequired: stopReason === 'new_intent_required',
     });
   }
   const processedEvents = [event];
@@ -1923,7 +1938,7 @@ export function processNextCoreV1EncounterEvent(
     };
     const validated = validateCoreV1EncounterState(next);
     if (!validated.ok) return validated;
-    if (validated.value.completionCandidate !== null && stopReason === null) stopReason = 'encounter_completed';
+    stopReason = promoteEncounterCompletion(validated.value, stopReason);
     return success({
       encounterBefore: report.encounterBefore,
       encounterAfter: validated.value,
@@ -2011,7 +2026,7 @@ export function processCoreV1EncounterBatch(
     current,
     reports,
     stopReason,
-    technicalLimit,
+    technicalLimit || reports.some((report) => report.continuationRequired),
   ));
 }
 
@@ -2159,10 +2174,12 @@ export function applyCoreV1EncounterActionPlan(
     }
   }
   const completedActions = reports.flatMap((report) => report.resolvedActions).length;
-  const continuationRequired = stopReason === 'processing_limit'
-    || stopReason === 'new_intent_required'
-    || stopReason === 'reaction_required'
-    || completedActions < input.plan.intents.length;
+  const continuationRequired = stopReason === 'encounter_completed' || stopReason === 'encounter_failed'
+    ? false
+    : stopReason === 'processing_limit'
+      || stopReason === 'new_intent_required'
+      || stopReason === 'reaction_required'
+      || completedActions < input.plan.intents.length;
   if (stopReason === null) stopReason = 'plan_completed';
   current = {
     ...current,
