@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import {
+  ContentEffectBindingKind,
   ContentProfileMode,
-  type ContentStatus,
-  type ContentType,
+  ContentStatus,
+  ContentType,
   Prisma,
 } from '../../generated/prisma/client.js';
-import { ConflictError, NotFoundError } from '../../shared/errors/app-error.js';
+import { AppError, ConflictError, NotFoundError } from '../../shared/errors/app-error.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import { canonicalJson, canonicalizeJson, type CanonicalJsonValue } from '../../shared/json/canonical-json.js';
 import { ensureCoreV1ContentProfileVersion, type ContentProfileRegistryClient } from '../rules/content-profile.registry.js';
@@ -18,6 +19,7 @@ import {
   type CoreV1ContentValidationResult,
 } from '../rules/core-v1/index.js';
 import { ensureCoreV1InventoryRulesVersion, type InventoryRulesRegistryClient } from '../rules/inventory-rules.registry.js';
+import { ensureCoreV1EffectRulesVersion, type EffectRulesRegistryClient } from '../rules/effect-rules.registry.js';
 import { ensureCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
 
 export const CANONICAL_CONTENT_TYPES = Object.freeze([
@@ -63,6 +65,22 @@ export interface ContentHashInput {
   contentProfileVersion: { code: string; schemaVersion: number; configHash: string };
 }
 
+export interface ContentEffectBindingHashEntry {
+  effectIndex: number;
+  bindingKind: 'apply_status' | 'remove_status';
+  target: {
+    scope: 'world' | 'campaign';
+    contentType: 'status_effect';
+    code: string;
+    versionNumber: number;
+  };
+}
+
+interface ResolvedContentEffectBinding extends ContentEffectBindingHashEntry {
+  targetContentDefinitionId: string;
+  targetContentVersionId: string;
+}
+
 export function buildContentHashSnapshot(input: ContentHashInput): CanonicalJsonValue {
   return canonicalizeJson({
     schemaVersion: input.schemaVersion,
@@ -85,6 +103,22 @@ export function calculateContentHash(input: ContentHashInput): string {
 
 export function calculateInventorySpecHash(spec: CoreV1InventorySpec): string {
   return createHash('sha256').update(canonicalJson(spec)).digest('hex');
+}
+
+export function calculateEffectBindingHash(bindings: readonly ContentEffectBindingHashEntry[]): string {
+  const ordered = [...bindings].sort((left, right) => left.effectIndex - right.effectIndex
+    || left.bindingKind.localeCompare(right.bindingKind)
+    || left.target.scope.localeCompare(right.target.scope)
+    || left.target.code.localeCompare(right.target.code)
+    || left.target.versionNumber - right.target.versionNumber);
+  return createHash('sha256').update(canonicalJson(ordered)).digest('hex');
+}
+
+export class ContentEffectBindingResolutionError extends AppError {
+  constructor(public readonly statusRef: string) {
+    super(409, 'CONTENT_EFFECT_BINDING_UNRESOLVED', 'Referenced status effect has no compatible published version');
+    this.name = 'ContentEffectBindingResolutionError';
+  }
 }
 
 export class InvalidPersistedContentProfileError extends Error {
@@ -110,6 +144,10 @@ export class InvalidPersistedInventorySpecError extends Error {
 export const contentVersionPublicInclude = {
   rulesetVersion: { select: { code: true, revision: true } },
   contentProfileVersion: { select: { code: true, schemaVersion: true } },
+  sourceEffectBindings: {
+    include: { targetContentDefinition: true, targetContentVersion: true },
+    orderBy: [{ effectIndex: 'asc' as const }, { bindingKind: 'asc' as const }],
+  },
 } satisfies Prisma.ContentVersionInclude;
 
 export const publishedContentInclude = {
@@ -122,10 +160,83 @@ export const publishedContentInclude = {
 
 export type PublishedContent = Prisma.ContentDefinitionGetPayload<{ include: typeof publishedContentInclude }>;
 export type PublicContentVersion = Prisma.ContentVersionGetPayload<{ include: typeof contentVersionPublicInclude }>;
-export type ContentPublicationClient = ContentProfileRegistryClient & InventoryRulesRegistryClient & Pick<
+export type ContentPublicationClient = ContentProfileRegistryClient & InventoryRulesRegistryClient & EffectRulesRegistryClient & Pick<
   Prisma.TransactionClient,
   'world' | 'campaign' | 'contentDefinition' | 'contentVersion' | '$queryRaw'
 >;
+
+function statusEffects(profile: CoreV1ContentProfile | null) {
+  if (profile?.profileMode !== 'mechanical') return [];
+  const rootOffset = (profile.damageComponents?.length ?? 0) > 0 && profile.targeting !== undefined ? 1 : 0;
+  return (profile.effects ?? []).flatMap((effect, index) => {
+    if (effect.type !== 'apply_status' && effect.type !== 'remove_status') return [];
+    return [{
+      effectIndex: rootOffset + index,
+      bindingKind: effect.type,
+      statusRef: effect.statusRef,
+    }];
+  });
+}
+
+async function resolveEffectBindings(
+  client: ContentPublicationClient,
+  input: ContentPublicationInput,
+  profile: CoreV1ContentProfile | null,
+  rulesetVersionId: string,
+): Promise<readonly ResolvedContentEffectBinding[]> {
+  const resolved: ResolvedContentEffectBinding[] = [];
+  for (const effect of statusEffects(profile)) {
+    let definition = input.campaignId === null ? null : await client.contentDefinition.findFirst({
+      where: {
+        worldId: input.worldId,
+        campaignId: input.campaignId,
+        contentType: ContentType.STATUS_EFFECT,
+        code: effect.statusRef,
+        status: ContentStatus.ACTIVE,
+      },
+      include: publishedContentInclude,
+    });
+    definition ??= await client.contentDefinition.findFirst({
+      where: {
+        worldId: input.worldId,
+        campaignId: null,
+        contentType: ContentType.STATUS_EFFECT,
+        code: effect.statusRef,
+        status: ContentStatus.ACTIVE,
+      },
+      include: publishedContentInclude,
+    });
+    const version = definition?.versions[0];
+    if (definition === null || version === undefined || version.rulesetVersionId !== rulesetVersionId
+      || version.profileMode !== ContentProfileMode.MECHANICAL) {
+      throw new ContentEffectBindingResolutionError(effect.statusRef);
+    }
+    resolved.push({
+      effectIndex: effect.effectIndex,
+      bindingKind: effect.bindingKind,
+      target: {
+        scope: definition.campaignId === null ? 'world' : 'campaign',
+        contentType: 'status_effect',
+        code: definition.code,
+        versionNumber: version.versionNumber,
+      },
+      targetContentDefinitionId: definition.id,
+      targetContentVersionId: version.id,
+    });
+  }
+  return resolved;
+}
+
+function effectBindingCreates(bindings: readonly ResolvedContentEffectBinding[]) {
+  return bindings.map((binding) => ({
+    effectIndex: binding.effectIndex,
+    bindingKind: binding.bindingKind === 'apply_status'
+      ? ContentEffectBindingKind.APPLY_STATUS
+      : ContentEffectBindingKind.REMOVE_STATUS,
+    targetContentDefinitionId: binding.targetContentDefinitionId,
+    targetContentVersionId: binding.targetContentVersionId,
+  }));
+}
 
 function inputJson(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
@@ -222,6 +333,7 @@ export async function publishContentVersion(
   const officialRuleset = await ensureCoreV1RulesetVersion(client);
   const contentProfileVersion = await ensureCoreV1ContentProfileVersion(client);
   const inventoryRulesVersion = await ensureCoreV1InventoryRulesVersion(client);
+  const effectRulesVersion = await ensureCoreV1EffectRulesVersion(client);
   const world = await client.world.findUnique({
     where: { id: input.worldId },
     select: { id: true, defaultRulesetVersionId: true },
@@ -237,7 +349,8 @@ export async function publishContentVersion(
     rulesetVersionId = campaign.rulesetVersionId;
   }
   if (rulesetVersionId !== officialRuleset.id || contentProfileVersion.rulesetVersionId !== rulesetVersionId
-    || inventoryRulesVersion.rulesetVersionId !== rulesetVersionId) {
+    || inventoryRulesVersion.rulesetVersionId !== rulesetVersionId
+    || effectRulesVersion.rulesetVersionId !== rulesetVersionId) {
     throw new ConflictError('Content ruleset is not compatible with the publication scope');
   }
 
@@ -246,6 +359,8 @@ export async function publishContentVersion(
   const inventorySpecHash = inventorySpec === null
     ? null
     : calculateInventorySpecHash(inventorySpec);
+  const effectBindings = await resolveEffectBindings(client, input, validated.profile, rulesetVersionId);
+  const effectBindingHash = calculateEffectBindingHash(effectBindings);
   const hashInput: ContentHashInput = {
     schemaVersion: validated.schemaVersion,
     contentType: normalizeEnum(input.contentType),
@@ -276,36 +391,42 @@ export async function publishContentVersion(
     include: publishedContentInclude,
   });
   if (definition === null) {
-    definition = await client.contentDefinition.create({
+    const createdDefinition = await client.contentDefinition.create({
       data: {
         worldId: input.worldId,
         campaignId: input.campaignId,
         contentType: input.contentType,
         code: input.code,
         status: input.status,
-        versions: {
-          create: {
-            rulesetVersionId,
-            contentProfileVersionId: contentProfileVersion.id,
-            inventoryRulesVersionId: inventorySpec === null ? null : inventoryRulesVersion.id,
-            versionNumber: 1,
-            schemaVersion: validated.schemaVersion,
-            profileMode: validated.profileMode,
-            name: input.name,
-            description: input.description,
-            profile: validated.profile === null ? Prisma.DbNull : inputJson(validated.profile),
-            presentation: inputJson(input.presentation),
-            tags: inputJson(input.tags),
-            metadata: inputJson(input.metadata),
-            contentHash,
-            inventorySpec: inventorySpec === null ? Prisma.DbNull : inputJson(inventorySpec),
-            inventorySpecHash,
-          },
-        },
       },
+      select: { id: true },
+    });
+    await client.contentVersion.create({
+      data: {
+        contentDefinitionId: createdDefinition.id,
+        rulesetVersionId,
+        contentProfileVersionId: contentProfileVersion.id,
+        inventoryRulesVersionId: inventorySpec === null ? null : inventoryRulesVersion.id,
+        versionNumber: 1,
+        schemaVersion: validated.schemaVersion,
+        profileMode: validated.profileMode,
+        name: input.name,
+        description: input.description,
+        profile: validated.profile === null ? Prisma.DbNull : inputJson(validated.profile),
+        presentation: inputJson(input.presentation),
+        tags: inputJson(input.tags),
+        metadata: inputJson(input.metadata),
+        contentHash,
+        inventorySpec: inventorySpec === null ? Prisma.DbNull : inputJson(inventorySpec),
+        inventorySpecHash,
+        effectBindingHash,
+        sourceEffectBindings: { create: effectBindingCreates(effectBindings) },
+      },
+    });
+    return client.contentDefinition.findUniqueOrThrow({
+      where: { id: createdDefinition.id },
       include: publishedContentInclude,
     });
-    return definition;
   }
 
   await client.$queryRaw(Prisma.sql`SELECT "id" FROM "ContentDefinition" WHERE "id" = ${definition.id}::uuid FOR UPDATE`);
@@ -314,7 +435,8 @@ export async function publishContentVersion(
     include: publishedContentInclude,
   });
   const latest = currentVersion(definition);
-  if (latest.contentHash === contentHash && latest.inventorySpecHash === inventorySpecHash) {
+  if (latest.contentHash === contentHash && latest.inventorySpecHash === inventorySpecHash
+    && latest.effectBindingHash === effectBindingHash) {
     if (definition.status !== input.status) {
       definition = await client.contentDefinition.update({
         where: { id: definition.id },
@@ -325,7 +447,7 @@ export async function publishContentVersion(
     return definition;
   }
   const historical = await client.contentVersion.findFirst({
-    where: { contentDefinitionId: definition.id, contentHash, inventorySpecHash },
+    where: { contentDefinitionId: definition.id, contentHash, inventorySpecHash, effectBindingHash },
     select: { id: true },
   });
   if (historical !== null) throw new ConflictError('A historical content snapshot cannot be republished as a new version');
@@ -348,6 +470,8 @@ export async function publishContentVersion(
       contentHash,
       inventorySpec: inventorySpec === null ? Prisma.DbNull : inputJson(inventorySpec),
       inventorySpecHash,
+      effectBindingHash,
+      sourceEffectBindings: { create: effectBindingCreates(effectBindings) },
     },
   });
   return client.contentDefinition.update({
@@ -364,7 +488,7 @@ export function publicContentDto(content: PublishedContent) {
 
 export function publicContentVersionDto(
   content: Pick<PublishedContent, 'code' | 'contentType' | 'status'>,
-  version: PublicContentVersion,
+  version: Omit<PublicContentVersion, 'sourceEffectBindings'> & { sourceEffectBindings?: PublicContentVersion['sourceEffectBindings'] },
 ) {
   return {
     code: content.code,

@@ -12,7 +12,7 @@ O GPT envia somente `primaryAttributes` na criação. Cada valor deve ser inteir
 
 Habilidades, magias e outros conceitos podem existir como `ContentDefinition` e vínculo `ActorContent`. Posse física usa inventário separado; `equipped` é derivado dos slots ocupados e nunca pertence ao vínculo conceitual.
 
-Uma espécie nominal usa `species`. Conteúdo `race` só é criado quando houver regra mecânica real. Condições canônicas usam `status_effect` e duração/stacking allowlisted no perfil. O núcleo puro consegue criar e evoluir estados ativos conceituais, mas eles ainda não são persistidos no ator e permanecem normalmente não equipados.
+Uma espécie nominal usa `species`. Conteúdo `race` só é criado quando houver regra mecânica real. Condições canônicas usam `status_effect`, versão exata, duração/stacking allowlisted e persistência em `ActiveEffect`. Elas não são equipamento e sua projeção completa fica em `resolveActorEffect(operation=get)`.
 
 O backend calcula máximos, poderes do ator, defesas, precisão, evasão, velocidades, crítico, movimento, capacidade, resistências e regenerações pelo `core-v1`. O GPT nunca envia esses resultados como autoridade. Modificadores de um item são aplicados ao snapshot somente enquanto sua instância estiver equipada; itens apenas carregados, reservados, consumidos ou destruídos não contribuem.
 
@@ -22,4 +22,4 @@ Peso e equipamento alteram `mechanicsStateVersion`, recompõem o snapshot e pode
 
 Interprete valores confirmados de modo coerente com espécie, classe, experiência, condição e contexto. Campos omitidos preservam o estado apenas conforme o contrato da operação; nunca substitua ficha conhecida por padrão genérico.
 
-Mudanças permanentes só existem após confirmação. `updateActor` é narrativo e não altera nível, XP, atributos, recursos ou derivados. Ainda não há operação pública/persistida de dano, cura, gasto, regeneração aplicada ou progressão mecânica; não declare esses estados como alterados depois de uma resolução conceitual, falha ou mera inferência narrativa.
+Mudanças permanentes só existem após confirmação. `updateActor` é narrativo e não altera nível, XP, atributos, recursos ou derivados. Dano, cura, gasto e efeitos só mudam após sucesso de `resolveActorEffect`; falha, conflito ou mera inferência narrativa não alteram a ficha. Máximo aumentado não cura, máximo reduzido pode clampá-la, e HP zero não altera `Actor.status` automaticamente.

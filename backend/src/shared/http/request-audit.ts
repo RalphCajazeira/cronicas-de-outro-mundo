@@ -27,7 +27,8 @@ export type AuditLogWriter = (record: HttpAuditRecord) => void;
 
 const allowedStringFields = [
   'actorRef', 'actorType', 'campaignRef', 'code', 'contentRef', 'contentType', 'eventType',
-  'encumbranceState', 'entryKind', 'entryRef', 'operation', 'playerMode', 'playerRef', 'preset', 'state', 'status', 'worldMode', 'worldRef',
+  'encumbranceState', 'entryKind', 'entryRef', 'inventoryEntryRef', 'operation', 'playerMode', 'playerRef', 'preset',
+  'sourceActorRef', 'state', 'status', 'targetActorRef', 'weaponEntryRef', 'worldMode', 'worldRef',
 ] as const;
 const allowedNumberFields = [
   'entryCount', 'equippedCount', 'expectedInventoryStateVersion', 'inventoryStateVersion',
@@ -110,6 +111,18 @@ function summarizeRequest(request: Request): Record<string, AuditValue> {
     }
     if (Object.keys(contentRef).length > 0) body.content = contentRef;
   }
+  if ((request.originalUrl.split('?', 1)[0] ?? request.path) === '/api/v1/actors/effects/resolve') {
+    if (isRecord(request.body.expectedSourceState)) {
+      for (const field of ['mechanicsStateVersion', 'inventoryStateVersion', 'effectsStateVersion'] as const) {
+        const value = request.body.expectedSourceState[field];
+        if (typeof value === 'number' && Number.isFinite(value)) body[`${field}Before`] = value;
+      }
+    }
+    if (isRecord(request.body.expectedTargetState)
+      && typeof request.body.expectedTargetState.effectsStateVersion === 'number') {
+      body.targetEffectsStateVersionBefore = request.body.expectedTargetState.effectsStateVersion;
+    }
+  }
 
   const idempotency = fingerprint(request.body.idempotencyKey);
   if (idempotency !== undefined) body.idempotency = idempotency;
@@ -174,6 +187,29 @@ function summarizeResponse(body: unknown): Record<string, AuditValue> {
   if (isRecord(body.encumbrance)) {
     const encumbranceState = safeString(body.encumbrance.state);
     if (encumbranceState !== undefined) summary.encumbranceState = encumbranceState;
+  }
+  if (Array.isArray(body.rolls)) summary.rollCount = body.rolls.length;
+  if (Array.isArray(body.activeEffectChanges)) summary.activeEffectChanges = body.activeEffectChanges.length;
+  if (Array.isArray(body.inventoryChanges)) summary.inventoryChanged = body.inventoryChanges.length > 0;
+  if (Array.isArray(body.resourceChanges)) {
+    summary.resourceTypesChanged = [...new Set(body.resourceChanges.flatMap((change) => (
+      isRecord(change) && ['hp', 'mana', 'sp'].includes(String(change.resource)) ? [String(change.resource)] : []
+    )))].sort();
+  }
+  if (Array.isArray(body.damageResults)) {
+    summary.damageAppliedPresent = body.damageResults.some((damage) => isRecord(damage)
+      && typeof damage.damageApplied === 'number' && damage.damageApplied > 0);
+    const firstDamage = body.damageResults.find(isRecord);
+    if (firstDamage !== undefined) {
+      if (typeof firstDamage.hit === 'boolean') summary.hit = firstDamage.hit;
+      if (typeof firstDamage.critical === 'boolean') summary.critical = firstDamage.critical;
+    }
+  }
+  if (isRecord(body.source) && typeof body.source.effectsStateVersion === 'number') {
+    summary.effectsStateVersionAfter = body.source.effectsStateVersion;
+  }
+  if (isRecord(body.target) && typeof body.target.effectsStateVersion === 'number') {
+    summary.targetEffectsStateVersionAfter = body.target.effectsStateVersion;
   }
   if (isRecord(body.protagonist)) addMechanicalSummary(body.protagonist, summary);
   if (Array.isArray(body.mainActors)) summary.mainActorCount = body.mainActors.length;

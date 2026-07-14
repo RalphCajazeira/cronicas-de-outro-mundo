@@ -9,6 +9,7 @@ import {
   CORE_V1_PRIMARY_ATTRIBUTES,
   calculateEffectiveAttributes,
   calculateInventoryEncumbrance,
+  getCoreV1ContentElements,
   calculateResourceMaximums,
   calculateSecondaryAttributes,
   validateInitialPrimaryAttributes,
@@ -26,6 +27,11 @@ import {
   type InventoryMechanicalInputsClient,
 } from '../inventory/inventory-mechanical-inputs.js';
 import { validateCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
+import {
+  loadActorActiveEffectMechanicalInputs,
+  type ActiveEffectMechanicalInputsClient,
+  type ActorActiveEffectMechanicalInputs,
+} from '../effects/active-effect-mechanical-inputs.js';
 
 const attributeCodeToDatabase = {
   strength: ActorAttributeCode.STRENGTH,
@@ -50,8 +56,10 @@ interface MechanicalStateRecord {
   level: number;
   mechanicsStateVersion: number;
   inventoryStateVersion: number;
+  effectsStateVersion: number;
   campaign: {
     rulesetVersionId: string;
+    engineTick: bigint;
     rulesetVersion: {
       id: string;
       rulesetId: string;
@@ -67,25 +75,27 @@ interface MechanicalStateRecord {
   resources: Array<{ id: string; type: ActorResourceType; current: number; stateVersion: number }>;
   derivedSnapshot: Prisma.ActorDerivedSnapshotGetPayload<Record<string, never>> | null;
   inventoryInputs: ActorInventoryMechanicalInputs;
+  activeEffectInputs: ActorActiveEffectMechanicalInputs;
 }
 
 export type ActorMechanicsClient = Pick<
   Prisma.TransactionClient,
   'actor' | 'actorAttribute' | 'actorResource' | 'actorDerivedSnapshot' | 'campaign' | 'rulesetVersion' | 'ruleset'
-> & InventoryMechanicalInputsClient;
+> & InventoryMechanicalInputsClient & ActiveEffectMechanicalInputsClient;
 
 export interface ActorMechanicalSheet {
   primaryAttributes: PrimaryAttributes;
   resources: {
-    hp: { current: number; max: number };
-    mana: { current: number; max: number };
-    sp: { current: number; max: number };
+    hp: { current: number; max: number; stateVersion: number };
+    mana: { current: number; max: number; stateVersion: number };
+    sp: { current: number; max: number; stateVersion: number };
   };
   secondaryAttributes: Omit<SecondaryAttributes, 'elementalResistanceBps'> & {
     elementalResistanceBps: Readonly<Record<string, number>>;
   };
   mechanicsStateVersion: number;
   inventoryStateVersion: number;
+  effectsStateVersion: number;
   ruleset: { code: string; revision: string };
 }
 
@@ -109,6 +119,8 @@ export interface ActorMechanicsHashInput {
     encumbrancePenaltyBps: number;
     totalCarriedWeight: number;
     equipment: ActorInventoryMechanicalInputs['equipmentHashInput'];
+    effectsStateVersion: number;
+    activeEffects: ActorActiveEffectMechanicalInputs['hashInput'];
   };
 }
 
@@ -140,7 +152,11 @@ function mapEffectiveAttributes(
   return calculateEffectiveAttributes(Object.fromEntries(mapped) as PrimaryAttributes, modifiers);
 }
 
-function groupEquipmentModifiers(modifiers: ActorInventoryMechanicalInputs['modifiers']) {
+function groupMechanicalModifiers(modifiers: readonly {
+  target: string;
+  value: number;
+  source: AuthorizedNumericModifier['source'];
+}[]) {
   const primary: Partial<Record<PrimaryAttributeCode, AuthorizedNumericModifier[]>> = {};
   const resources: Partial<Record<'maxHp' | 'maxMana' | 'maxSp', AuthorizedNumericModifier[]>> = {};
   const secondary: Partial<Record<keyof SecondaryAttributeModifiers, AuthorizedNumericModifier[]>> = {};
@@ -174,17 +190,20 @@ function groupEquipmentModifiers(modifiers: ActorInventoryMechanicalInputs['modi
 
 function calculateMechanicalState(record: MechanicalStateRecord): MechanicalCalculation {
   const ruleset = validateCoreV1RulesetVersion(record.campaign.rulesetVersion);
-  const equipmentModifiers = groupEquipmentModifiers(record.inventoryInputs.modifiers);
-  const effectiveAttributes = mapEffectiveAttributes(record, equipmentModifiers.primary);
+  const mechanicalModifiers = groupMechanicalModifiers([
+    ...record.inventoryInputs.modifiers,
+    ...record.activeEffectInputs.modifiers,
+  ]);
+  const effectiveAttributes = mapEffectiveAttributes(record, mechanicalModifiers.primary);
   const calculationInputs = {
     weaponFamilyRank: 0,
     magicSchoolRank: 0,
     accuracyRank: 0,
     evasionRank: 0,
   } as const;
-  const maximums = calculateResourceMaximums(effectiveAttributes, record.level, equipmentModifiers.resources);
+  const maximums = calculateResourceMaximums(effectiveAttributes, record.level, mechanicalModifiers.resources);
   const unencumbered = calculateSecondaryAttributes({
-    attributes: effectiveAttributes, ...calculationInputs, encumbrancePenalty: 0, modifiers: equipmentModifiers.secondary,
+    attributes: effectiveAttributes, ...calculationInputs, encumbrancePenalty: 0, modifiers: mechanicalModifiers.secondary,
   });
   const encumbrance = calculateInventoryEncumbrance(record.inventoryInputs.totalCarriedWeight, unencumbered.carryingCapacity);
   if (!encumbrance.ok || encumbrance.value.penaltyBps % 100 !== 0) throw integrityError();
@@ -192,9 +211,13 @@ function calculateMechanicalState(record: MechanicalStateRecord): MechanicalCalc
     attributes: effectiveAttributes,
     ...calculationInputs,
     encumbrancePenalty: encumbrance.value.penaltyBps / 100,
-    modifiers: equipmentModifiers.secondary,
+    modifiers: mechanicalModifiers.secondary,
   });
-  const elementalResistanceSnapshot = Object.freeze({ default: secondary.elementalResistanceBps });
+  const elementalResistanceSnapshot = Object.freeze(Object.fromEntries(getCoreV1ContentElements().map((element) => [
+    element,
+    Math.max(-5000, Math.min(7500, secondary.elementalResistanceBps
+      + (record.inventoryInputs.defense.elementalResistanceBps[element] ?? 0))),
+  ])));
   const inputHash = createActorMechanicsInputHash({
     ruleset: { code: ruleset.code, revision: ruleset.revision, configHash: ruleset.configHash },
     level: record.level,
@@ -204,6 +227,8 @@ function calculateMechanicalState(record: MechanicalStateRecord): MechanicalCalc
       encumbrancePenaltyBps: encumbrance.value.penaltyBps,
       totalCarriedWeight: record.inventoryInputs.totalCarriedWeight,
       equipment: record.inventoryInputs.equipmentHashInput,
+      effectsStateVersion: record.effectsStateVersion,
+      activeEffects: record.activeEffectInputs.hashInput,
     },
   });
   return { effectiveAttributes, maximums, secondary, elementalResistanceSnapshot, inputHash };
@@ -219,7 +244,7 @@ function validateResources(record: MechanicalStateRecord, maximums: ResourceMaxi
   if (hp === undefined || mana === undefined || sp === undefined) throw integrityError();
   for (const resource of [hp, mana, sp]) {
     if (!Number.isSafeInteger(resource.current) || resource.current < 0
-      || !Number.isSafeInteger(resource.stateVersion) || resource.stateVersion < 0) throw integrityError();
+      || !Number.isSafeInteger(resource.stateVersion) || resource.stateVersion < 1) throw integrityError();
   }
   if (!allowAboveMaximum
     && (hp.current > maximums.maxHp || mana.current > maximums.maxMana || sp.current > maximums.maxSp)) throw integrityError();
@@ -236,6 +261,7 @@ function snapshotMatches(
   const scalarMatches = snapshot.rulesetVersionId === record.campaign.rulesetVersionId
     && snapshot.mechanicsStateVersion === record.mechanicsStateVersion
     && snapshot.inventoryStateVersion === record.inventoryStateVersion
+    && snapshot.effectsStateVersion === record.effectsStateVersion
     && snapshot.inputHash === calculation.inputHash
     && snapshot.maxHp === calculation.maximums.maxHp
     && snapshot.maxMana === calculation.maximums.maxMana
@@ -268,12 +294,15 @@ function snapshotMatches(
 async function readMechanicalState(client: ActorMechanicsClient, actorId: string): Promise<MechanicalStateRecord> {
   const actor = await client.actor.findUnique({
     where: { id: actorId },
-    select: { id: true, campaignId: true, level: true, mechanicsStateVersion: true, inventoryStateVersion: true },
+    select: {
+      id: true, campaignId: true, level: true, mechanicsStateVersion: true,
+      inventoryStateVersion: true, effectsStateVersion: true,
+    },
   });
   if (actor === null) throw new NotFoundError('Actor');
   const campaign = await client.campaign.findUnique({
     where: { id: actor.campaignId },
-    select: { rulesetVersionId: true },
+    select: { rulesetVersionId: true, engineTick: true },
   });
   if (campaign === null) throw integrityError();
   const rulesetVersion = await client.rulesetVersion.findUnique({
@@ -294,16 +323,23 @@ async function readMechanicalState(client: ActorMechanicsClient, actorId: string
   });
   const derivedSnapshot = await client.actorDerivedSnapshot.findUnique({ where: { actorId } });
   const inventoryInputs = await loadActorInventoryMechanicalInputs(client, actorId);
+  const activeEffectInputs = await loadActorActiveEffectMechanicalInputs(client, actorId, campaign.engineTick);
   return {
     id: actor.id,
     level: actor.level,
     mechanicsStateVersion: actor.mechanicsStateVersion,
     inventoryStateVersion: actor.inventoryStateVersion,
-    campaign: { rulesetVersionId: campaign.rulesetVersionId, rulesetVersion: { ...rulesetVersion, ruleset } },
+    effectsStateVersion: actor.effectsStateVersion,
+    campaign: {
+      rulesetVersionId: campaign.rulesetVersionId,
+      engineTick: campaign.engineTick,
+      rulesetVersion: { ...rulesetVersion, ruleset },
+    },
     attributes,
     resources,
     derivedSnapshot,
     inventoryInputs,
+    activeEffectInputs,
   };
 }
 
@@ -324,9 +360,9 @@ export function projectActorMechanicalSheet(record: MechanicalStateRecord): Acto
   return {
     primaryAttributes: { ...calculation.effectiveAttributes },
     resources: {
-      hp: { current: resources.hp.current, max: snapshot.maxHp },
-      mana: { current: resources.mana.current, max: snapshot.maxMana },
-      sp: { current: resources.sp.current, max: snapshot.maxSp },
+      hp: { current: resources.hp.current, max: snapshot.maxHp, stateVersion: resources.hp.stateVersion },
+      mana: { current: resources.mana.current, max: snapshot.maxMana, stateVersion: resources.mana.stateVersion },
+      sp: { current: resources.sp.current, max: snapshot.maxSp, stateVersion: resources.sp.stateVersion },
     },
     secondaryAttributes: {
       actorPhysicalPower: snapshot.actorPhysicalPower,
@@ -350,6 +386,7 @@ export function projectActorMechanicalSheet(record: MechanicalStateRecord): Acto
     },
     mechanicsStateVersion: record.mechanicsStateVersion,
     inventoryStateVersion: record.inventoryStateVersion,
+    effectsStateVersion: record.effectsStateVersion,
     ruleset: { code: record.campaign.rulesetVersion.code, revision: record.campaign.rulesetVersion.revision },
   };
 }
@@ -368,6 +405,7 @@ export async function recomputeActorDerivedSnapshot(
     rulesetVersionId: record.campaign.rulesetVersionId,
     mechanicsStateVersion: record.mechanicsStateVersion,
     inventoryStateVersion: record.inventoryStateVersion,
+    effectsStateVersion: record.effectsStateVersion,
     ...calculation.maximums,
     actorPhysicalPower: secondary.actorPhysicalPower,
     actorMagicalPower: secondary.actorMagicalPower,

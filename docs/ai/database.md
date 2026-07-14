@@ -84,3 +84,23 @@ Triggers tornam `InventoryRulesVersion` imutável e impedem entrada sem spec, ru
 `inventorySpecHash` usa SHA-256 do spec canônico separadamente de `contentHash`; versões sem spec deduplicam por definição+contentHash e versões com spec por definição+contentHash+inventorySpecHash. Nenhum rollout remoto foi executado.
 
 Status: implementada e validada na Fase 1H; revisão e integração rastreadas pelo PR correspondente
+
+## Fase 1J — efeitos, recursos e rolls autoritativos
+
+Models e campos:
+
+- `EffectRulesVersion`: publicação imutável `core-v1-effects-v1` ligada à `RulesetVersion`;
+- `ContentEffectBinding` e `ContentVersion.effectBindingHash`: vínculo imutável e hash canônico das versões exatas de status;
+- `Campaign.engineTick|engineStateVersion`: relógio mecânico persistido e token otimista;
+- `Actor.effectsStateVersion` e `ActorDerivedSnapshot.effectsStateVersion`: versão de efeitos e versão observada pela recomposição;
+- `ActiveEffect`: status/modificador/reação persistido, com origem, stacks e estado de duração coerente;
+- `EffectResolution` e `EffectRoll`: snapshot/result hash idempotentes e rolls autoritativos auditáveis;
+- `ActorResource.stateVersion`: positivo e incrementado uma vez por recurso realmente alterado.
+
+A migration `20260714030000_engine_v1_effects_persistence` exige Actor, ContentDefinition, ContentVersion, ActorContent, InventoryEntry e ActorEquipmentSlot vazios antes do DDL incompatível. Não contém `DELETE`, `TRUNCATE`, backfill, dual-read ou dual-write. Índices parciais de conteúdo passam a incluir `effectBindingHash`; rollback estrutural é somente por migration corretiva revisada.
+
+Checks cobrem hashes, versões, ticks, stacks, payloads JSON, roll/chance e coerência de duração. FKs compostas fixam versão/definição do status. Triggers validam campanha/ruleset de atores, conteúdo, bindings e resoluções; `EffectRulesVersion`, `ContentEffectBinding`, `EffectResolution` e `EffectRoll` rejeitam update/delete. As cinco tabelas novas têm RLS habilitado, sem policies públicas, e revogação condicional para `anon`/`authenticated`.
+
+Integração recria exclusivamente `localhost:5432/game_gpt_test`, testa a precondition sem alteração de dados, aplica migrations desde zero, exige diff vazio, valida registry concorrente/rollback, executa seed determinístico e cobre bindings, effects, rolls, idempotência, recursos e consumíveis. Nenhum banco remoto foi acessado.
+
+Status: implementada e validada na Fase 1J; revisão e integração rastreadas pelo PR correspondente

@@ -117,6 +117,37 @@ enum ActorEquipmentSlotRef {
   ACCESSORY_2
 }
 
+enum ContentEffectBindingKind {
+  APPLY_STATUS
+  REMOVE_STATUS
+}
+
+enum ActiveEffectKind {
+  STATUS
+  PRIMARY_MODIFIER
+  SECONDARY_MODIFIER
+  REACTION_GRANT
+}
+
+enum ActiveEffectDurationType {
+  TICKS
+  ACTIONS
+  SCENE
+  ENCOUNTER
+  PERMANENT
+}
+
+enum EffectResolutionOperation {
+  EXECUTE_CONTENT
+  USE_CONSUMABLE
+}
+
+enum EffectRollKind {
+  HIT
+  CRITICAL
+  CONCENTRATION
+}
+
 model Player {
   id          String   @id @default(uuid()) @db.Uuid
   slug        String   @unique
@@ -135,21 +166,22 @@ model Ruleset {
 }
 
 model RulesetVersion {
-  id             String     @id @default(uuid()) @db.Uuid
-  rulesetId      String     @db.Uuid
-  code           String     @unique
-  revision       String
-  schemaVersion  Int
-  configHash     String     @db.Char(64)
-  configSnapshot Json
-  createdAt      DateTime   @default(now())
-  ruleset        Ruleset    @relation(fields: [rulesetId], references: [id], onDelete: Restrict)
-  defaultWorlds  World[]    @relation("WorldDefaultRulesetVersion")
-  campaigns      Campaign[] @relation("CampaignRulesetVersion")
-  actorSnapshots ActorDerivedSnapshot[]
-  contentProfiles ContentProfileVersion[]
-  contentVersions ContentVersion[]
+  id                     String                  @id @default(uuid()) @db.Uuid
+  rulesetId              String                  @db.Uuid
+  code                   String                  @unique
+  revision               String
+  schemaVersion          Int
+  configHash             String                  @db.Char(64)
+  configSnapshot         Json
+  createdAt              DateTime                @default(now())
+  ruleset                Ruleset                 @relation(fields: [rulesetId], references: [id], onDelete: Restrict)
+  defaultWorlds          World[]                 @relation("WorldDefaultRulesetVersion")
+  campaigns              Campaign[]              @relation("CampaignRulesetVersion")
+  actorSnapshots         ActorDerivedSnapshot[]
+  contentProfiles        ContentProfileVersion[]
+  contentVersions        ContentVersion[]
   inventoryRulesVersions InventoryRulesVersion[]
+  effectRulesVersions    EffectRulesVersion[]
 
   @@index([rulesetId])
 }
@@ -174,55 +206,63 @@ model World {
 }
 
 model Campaign {
-  id               String              @id @default(uuid()) @db.Uuid
-  worldId          String              @db.Uuid
-  rulesetVersionId String              @db.Uuid
-  code             String
-  name             String
-  status           CampaignStatus      @default(DRAFT)
-  currentTime      Json?
-  metadata         Json                @default("{}")
-  createdAt        DateTime            @default(now())
-  updatedAt        DateTime            @updatedAt
-  world            World               @relation(fields: [worldId], references: [id], onDelete: Cascade)
-  rulesetVersion   RulesetVersion      @relation("CampaignRulesetVersion", fields: [rulesetVersionId], references: [id], onDelete: Restrict)
-  actors           Actor[]
-  content          ContentDefinition[]
-  events           GameEvent[]
+  id                 String              @id @default(uuid()) @db.Uuid
+  worldId            String              @db.Uuid
+  rulesetVersionId   String              @db.Uuid
+  code               String
+  name               String
+  status             CampaignStatus      @default(DRAFT)
+  currentTime        Json?
+  engineTick         BigInt              @default(0)
+  engineStateVersion Int                 @default(1)
+  metadata           Json                @default("{}")
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  world              World               @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  rulesetVersion     RulesetVersion      @relation("CampaignRulesetVersion", fields: [rulesetVersionId], references: [id], onDelete: Restrict)
+  actors             Actor[]
+  content            ContentDefinition[]
+  events             GameEvent[]
+  effectResolutions  EffectResolution[]
 
   @@unique([worldId, code])
   @@index([rulesetVersionId])
 }
 
 model Actor {
-  id                      String                @id @default(uuid()) @db.Uuid
-  campaignId              String                @db.Uuid
-  code                    String
-  name                    String
-  actorType               ActorType
-  species                 String?
-  className               String?
-  role                    String?
-  description             String?
-  level                   Int                   @default(1)
-  xp                      Int                   @default(0)
-  gold                    Int                   @default(0)
-  mechanicsStateVersion  Int                   @default(1)
-  inventoryStateVersion  Int                   @default(1)
-  appearance              Json                  @default("{}")
-  personality             Json                  @default("{}")
-  metadata                Json                  @default("{}")
-  status                  ActorStatus           @default(ACTIVE)
-  createdAt               DateTime              @default(now())
-  updatedAt               DateTime              @updatedAt
-  campaign                Campaign              @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  attributes              ActorAttribute[]
-  resources               ActorResource[]
-  derivedSnapshot         ActorDerivedSnapshot?
-  content                 ActorContent[]
-  inventoryEntries        InventoryEntry[]
-  equipmentSlots          ActorEquipmentSlot[]
-  events                  GameEvent[]
+  id                        String                @id @default(uuid()) @db.Uuid
+  campaignId                String                @db.Uuid
+  code                      String
+  name                      String
+  actorType                 ActorType
+  species                   String?
+  className                 String?
+  role                      String?
+  description               String?
+  level                     Int                   @default(1)
+  xp                        Int                   @default(0)
+  gold                      Int                   @default(0)
+  mechanicsStateVersion     Int                   @default(1)
+  inventoryStateVersion     Int                   @default(1)
+  effectsStateVersion       Int                   @default(1)
+  appearance                Json                  @default("{}")
+  personality               Json                  @default("{}")
+  metadata                  Json                  @default("{}")
+  status                    ActorStatus           @default(ACTIVE)
+  createdAt                 DateTime              @default(now())
+  updatedAt                 DateTime              @updatedAt
+  campaign                  Campaign              @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  attributes                ActorAttribute[]
+  resources                 ActorResource[]
+  derivedSnapshot           ActorDerivedSnapshot?
+  content                   ActorContent[]
+  inventoryEntries          InventoryEntry[]
+  equipmentSlots            ActorEquipmentSlot[]
+  events                    GameEvent[]
+  sourcedActiveEffects      ActiveEffect[]        @relation("ActiveEffectSourceActor")
+  targetedActiveEffects     ActiveEffect[]        @relation("ActiveEffectTargetActor")
+  sourcedEffectResolutions  EffectResolution[]    @relation("EffectResolutionSourceActor")
+  targetedEffectResolutions EffectResolution[]    @relation("EffectResolutionTargetActor")
 
   @@unique([campaignId, code])
   @@index([campaignId, actorType, status])
@@ -256,54 +296,56 @@ model ActorResource {
 }
 
 model ActorDerivedSnapshot {
-  id                            String         @id @default(uuid()) @db.Uuid
-  actorId                       String         @unique @db.Uuid
-  rulesetVersionId              String         @db.Uuid
-  mechanicsStateVersion         Int
-  inventoryStateVersion         Int
-  maxHp                         Int
-  maxMana                       Int
-  maxSp                         Int
-  actorPhysicalPower            Int
-  actorMagicalPower             Int
-  physicalDefense               Int
-  magicalDefense                Int
-  accuracy                      Int
-  evasion                       Int
-  baseAttackSpeedBps            Int
-  baseCastingSpeedBps           Int
-  criticalChanceBps             Int
-  criticalDamageBps             Int
-  movementSpeed                 Int
-  carryingCapacity              Int
-  physicalResistanceBps         Int
-  magicalResistanceBps          Int
-  elementalResistanceSnapshot  Json           @default("{}")
-  hpRegen                       Int
-  manaRegen                     Int
-  spRegen                       Int
-  inputHash                     String         @db.Char(64)
-  createdAt                     DateTime       @default(now())
-  updatedAt                     DateTime       @updatedAt
-  actor                         Actor          @relation(fields: [actorId], references: [id], onDelete: Cascade)
-  rulesetVersion                RulesetVersion @relation(fields: [rulesetVersionId], references: [id], onDelete: Restrict)
+  id                          String         @id @default(uuid()) @db.Uuid
+  actorId                     String         @unique @db.Uuid
+  rulesetVersionId            String         @db.Uuid
+  mechanicsStateVersion       Int
+  inventoryStateVersion       Int
+  effectsStateVersion         Int
+  maxHp                       Int
+  maxMana                     Int
+  maxSp                       Int
+  actorPhysicalPower          Int
+  actorMagicalPower           Int
+  physicalDefense             Int
+  magicalDefense              Int
+  accuracy                    Int
+  evasion                     Int
+  baseAttackSpeedBps          Int
+  baseCastingSpeedBps         Int
+  criticalChanceBps           Int
+  criticalDamageBps           Int
+  movementSpeed               Int
+  carryingCapacity            Int
+  physicalResistanceBps       Int
+  magicalResistanceBps        Int
+  elementalResistanceSnapshot Json           @default("{}")
+  hpRegen                     Int
+  manaRegen                   Int
+  spRegen                     Int
+  inputHash                   String         @db.Char(64)
+  createdAt                   DateTime       @default(now())
+  updatedAt                   DateTime       @updatedAt
+  actor                       Actor          @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  rulesetVersion              RulesetVersion @relation(fields: [rulesetVersionId], references: [id], onDelete: Restrict)
 
   @@index([rulesetVersionId])
 }
 
 model ContentDefinition {
-  id          String           @id @default(uuid()) @db.Uuid
-  worldId     String           @db.Uuid
-  campaignId  String?          @db.Uuid
-  code        String
-  contentType ContentType
-  status      ContentStatus    @default(DRAFT)
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
-  world       World            @relation(fields: [worldId], references: [id], onDelete: Cascade)
-  campaign    Campaign?        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  versions    ContentVersion[]
-  actors      ActorContent[]
+  id                     String                 @id @default(uuid()) @db.Uuid
+  worldId                String                 @db.Uuid
+  campaignId             String?                @db.Uuid
+  code                   String
+  contentType            ContentType
+  status                 ContentStatus          @default(DRAFT)
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+  world                  World                  @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  campaign               Campaign?              @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  versions               ContentVersion[]
+  actors                 ActorContent[]
+  targetedEffectBindings ContentEffectBinding[] @relation("ContentEffectBindingTargetDefinition")
 
   @@unique([worldId, campaignId, contentType, code])
   @@unique([worldId, contentType, code], map: "ContentDefinition_global_scope_key", where: { campaignId: null })
@@ -339,40 +381,77 @@ model InventoryRulesVersion {
   @@index([rulesetVersionId])
 }
 
+model EffectRulesVersion {
+  id                String             @id @default(uuid()) @db.Uuid
+  rulesetVersionId  String             @db.Uuid
+  code              String             @unique
+  schemaVersion     Int
+  configHash        String             @db.Char(64)
+  configSnapshot    Json
+  createdAt         DateTime           @default(now())
+  rulesetVersion    RulesetVersion     @relation(fields: [rulesetVersionId], references: [id], onDelete: Restrict)
+  activeEffects     ActiveEffect[]
+  effectResolutions EffectResolution[]
+
+  @@index([rulesetVersionId])
+}
+
 model ContentVersion {
-  id                      String                @id @default(uuid()) @db.Uuid
-  contentDefinitionId     String                @db.Uuid
-  rulesetVersionId        String                @db.Uuid
-  contentProfileVersionId String                @db.Uuid
-  inventoryRulesVersionId String?               @db.Uuid
+  id                      String                 @id @default(uuid()) @db.Uuid
+  contentDefinitionId     String                 @db.Uuid
+  rulesetVersionId        String                 @db.Uuid
+  contentProfileVersionId String                 @db.Uuid
+  inventoryRulesVersionId String?                @db.Uuid
   versionNumber           Int
   schemaVersion           Int
   profileMode             ContentProfileMode
   name                    String
   description             String?
   profile                 Json?
-  presentation            Json                  @default("{}")
-  tags                    Json                  @default("[]")
-  metadata                Json                  @default("{}")
-  contentHash             String                @db.Char(64)
+  presentation            Json                   @default("{}")
+  tags                    Json                   @default("[]")
+  metadata                Json                   @default("{}")
+  contentHash             String                 @db.Char(64)
   inventorySpec           Json?
-  inventorySpecHash       String?               @db.Char(64)
-  createdAt               DateTime              @default(now())
-  contentDefinition       ContentDefinition     @relation(fields: [contentDefinitionId], references: [id], onDelete: Restrict)
-  rulesetVersion          RulesetVersion        @relation(fields: [rulesetVersionId], references: [id], onDelete: Restrict)
-  contentProfileVersion   ContentProfileVersion @relation(fields: [contentProfileVersionId], references: [id], onDelete: Restrict)
+  inventorySpecHash       String?                @db.Char(64)
+  effectBindingHash       String                 @default("4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945") @db.Char(64)
+  createdAt               DateTime               @default(now())
+  contentDefinition       ContentDefinition      @relation(fields: [contentDefinitionId], references: [id], onDelete: Restrict)
+  rulesetVersion          RulesetVersion         @relation(fields: [rulesetVersionId], references: [id], onDelete: Restrict)
+  contentProfileVersion   ContentProfileVersion  @relation(fields: [contentProfileVersionId], references: [id], onDelete: Restrict)
   inventoryRulesVersion   InventoryRulesVersion? @relation(fields: [inventoryRulesVersionId], references: [id], onDelete: Restrict)
   actors                  ActorContent[]
   inventoryEntries        InventoryEntry[]
+  sourceEffectBindings    ContentEffectBinding[] @relation("ContentEffectBindingSourceVersion")
+  targetEffectBindings    ContentEffectBinding[] @relation("ContentEffectBindingTargetVersion")
+  sourcedActiveEffects    ActiveEffect[]         @relation("ActiveEffectSourceContentVersion")
+  effectActiveEffects     ActiveEffect[]         @relation("ActiveEffectContentVersion")
+  effectResolutions       EffectResolution[]
 
   @@unique([contentDefinitionId, versionNumber])
-  @@unique([contentDefinitionId, contentHash], map: "ContentVersion_without_inventory_spec_key", where: { inventorySpecHash: null })
-  @@unique([contentDefinitionId, contentHash, inventorySpecHash], map: "ContentVersion_with_inventory_spec_key", where: { inventorySpecHash: { not: null } })
+  @@unique([contentDefinitionId, contentHash, effectBindingHash], map: "ContentVersion_without_inventory_spec_key", where: { inventorySpecHash: null })
+  @@unique([contentDefinitionId, contentHash, inventorySpecHash, effectBindingHash], map: "ContentVersion_with_inventory_spec_key", where: { inventorySpecHash: { not: null } })
   @@unique([id, contentDefinitionId])
   @@index([contentDefinitionId, versionNumber(sort: Desc)])
   @@index([rulesetVersionId])
   @@index([contentProfileVersionId])
   @@index([inventoryRulesVersionId])
+}
+
+model ContentEffectBinding {
+  id                        String                   @id @default(uuid()) @db.Uuid
+  sourceContentVersionId    String                   @db.Uuid
+  effectIndex               Int
+  bindingKind               ContentEffectBindingKind
+  targetContentDefinitionId String                   @db.Uuid
+  targetContentVersionId    String                   @db.Uuid
+  createdAt                 DateTime                 @default(now())
+  sourceContentVersion      ContentVersion           @relation("ContentEffectBindingSourceVersion", fields: [sourceContentVersionId], references: [id], onDelete: Restrict)
+  targetContentDefinition   ContentDefinition        @relation("ContentEffectBindingTargetDefinition", fields: [targetContentDefinitionId], references: [id], onDelete: Restrict)
+  targetContentVersion      ContentVersion           @relation("ContentEffectBindingTargetVersion", fields: [targetContentVersionId, targetContentDefinitionId], references: [id, contentDefinitionId], onDelete: Restrict)
+
+  @@unique([sourceContentVersionId, effectIndex, bindingKind])
+  @@index([targetContentVersionId, targetContentDefinitionId])
 }
 
 model ActorContent {
@@ -431,6 +510,81 @@ model ActorEquipmentSlot {
 
   @@unique([actorId, slotRef])
   @@index([inventoryEntryId, actorId])
+}
+
+model ActiveEffect {
+  id                     String                   @id @default(uuid()) @db.Uuid
+  targetActorId          String                   @db.Uuid
+  sourceActorId          String                   @db.Uuid
+  sourceContentVersionId String                   @db.Uuid
+  effectContentVersionId String?                  @db.Uuid
+  effectRulesVersionId   String                   @db.Uuid
+  effectRef              String
+  effectIndex            Int
+  kind                   ActiveEffectKind
+  stacks                 Int
+  appliedAtTick          BigInt
+  durationType           ActiveEffectDurationType
+  expiresAtTick          BigInt?
+  remainingActions       Int?
+  payload                Json
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+  targetActor            Actor                    @relation("ActiveEffectTargetActor", fields: [targetActorId], references: [id], onDelete: Cascade)
+  sourceActor            Actor                    @relation("ActiveEffectSourceActor", fields: [sourceActorId], references: [id], onDelete: Cascade)
+  sourceContentVersion   ContentVersion           @relation("ActiveEffectSourceContentVersion", fields: [sourceContentVersionId], references: [id], onDelete: Restrict)
+  effectContentVersion   ContentVersion?          @relation("ActiveEffectContentVersion", fields: [effectContentVersionId], references: [id], onDelete: Restrict)
+  effectRulesVersion     EffectRulesVersion       @relation(fields: [effectRulesVersionId], references: [id], onDelete: Restrict)
+
+  @@unique([targetActorId, effectRef])
+  @@unique([targetActorId, effectContentVersionId], map: "ActiveEffect_status_version_key", where: { effectContentVersionId: { not: null } })
+  @@unique([targetActorId, sourceContentVersionId, effectIndex, kind], map: "ActiveEffect_direct_origin_key")
+  @@index([targetActorId, expiresAtTick])
+  @@index([sourceActorId])
+  @@index([sourceContentVersionId])
+  @@index([effectRulesVersionId])
+}
+
+model EffectResolution {
+  id                     String                    @id @default(uuid()) @db.Uuid
+  campaignId             String                    @db.Uuid
+  sourceActorId          String                    @db.Uuid
+  targetActorId          String?                   @db.Uuid
+  sourceContentVersionId String                    @db.Uuid
+  effectRulesVersionId   String                    @db.Uuid
+  operation              EffectResolutionOperation
+  idempotencyKey         String                    @unique
+  engineTick             BigInt
+  requestHash            String                    @db.Char(64)
+  resultHash             String                    @db.Char(64)
+  resultSnapshot         Json
+  createdAt              DateTime                  @default(now())
+  campaign               Campaign                  @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  sourceActor            Actor                     @relation("EffectResolutionSourceActor", fields: [sourceActorId], references: [id], onDelete: Restrict)
+  targetActor            Actor?                    @relation("EffectResolutionTargetActor", fields: [targetActorId], references: [id], onDelete: Restrict)
+  sourceContentVersion   ContentVersion            @relation(fields: [sourceContentVersionId], references: [id], onDelete: Restrict)
+  effectRulesVersion     EffectRulesVersion        @relation(fields: [effectRulesVersionId], references: [id], onDelete: Restrict)
+  rolls                  EffectRoll[]
+
+  @@index([campaignId, createdAt])
+  @@index([sourceActorId, createdAt])
+  @@index([targetActorId, createdAt])
+  @@index([sourceContentVersionId])
+  @@index([effectRulesVersionId])
+}
+
+model EffectRoll {
+  id                 String           @id @default(uuid()) @db.Uuid
+  effectResolutionId String           @db.Uuid
+  kind               EffectRollKind
+  ordinal            Int
+  rollBps            Int
+  chanceBps          Int
+  success            Boolean
+  createdAt          DateTime         @default(now())
+  effectResolution   EffectResolution @relation(fields: [effectResolutionId], references: [id], onDelete: Cascade)
+
+  @@unique([effectResolutionId, kind, ordinal])
 }
 
 model GameEvent {

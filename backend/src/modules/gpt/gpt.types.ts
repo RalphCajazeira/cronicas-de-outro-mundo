@@ -1,6 +1,6 @@
 import type {
   CreateEventInput, ListCampaignActorsInput, LoadGameInput, ManageActorContentInput, ManageActorInventoryInput,
-  ListPlayerWorldsInput, ListWorldCampaignsInput, PatchActorInput, StartGameInput, UpsertActorInput, UpsertContentInput,
+  ListPlayerWorldsInput, ListWorldCampaignsInput, PatchActorInput, ResolveActorEffectInput, StartGameInput, UpsertActorInput, UpsertContentInput,
 } from './gpt.schemas.js';
 
 export type ApiResult = Record<string, unknown> | Array<Record<string, unknown>>;
@@ -17,4 +17,5 @@ export interface GptRepository {
   manageActorContent(actorRef: string, input: ManageActorContentInput): Promise<ApiResult>;
   manageActorInventory(actorRef: string, input: ManageActorInventoryInput): Promise<ApiResult>;
   createEvent(input: CreateEventInput): Promise<ApiResult>;
+  resolveActorEffect(input: ResolveActorEffectInput): Promise<ApiResult>;
 }

@@ -348,3 +348,23 @@ Impacto:
 - inventário, equipamento por instância, aplicação de efeitos, combate, deploy e atualização do GPT ao vivo permanecem fora do escopo.
 
 Status: implementada e validada na Fase 1F; revisão e integração rastreadas pelo PR correspondente
+
+## 2026-07-13 — Efeitos autoritativos, bindings exatos e rolls transacionais
+
+Decisão:
+- preservar `core-v1-effects-v1` como núcleo puro e publicar seu manifesto em `EffectRulesVersion`;
+- resolver referências de status durante a publicação, fixando definição/versão exatas e incluindo um hash separado na deduplicação;
+- expor somente `resolveActorEffect` para leitura, execução de conteúdo e uso de consumível;
+- gerar rolls criptográficos somente no backend, depois de locks e validação otimista, persistindo roll, chance e resultado com a resolução;
+- versionar efeitos e cada recurso, recompor snapshots quando inventário/efeitos mudarem e manter `Actor.status` fora da automação;
+- fazer da migration um novo corte clean-slate, sem conversão ou apagamento automático;
+- manter multi-target, timeline, encontros, reaction/block runtime, cooldown, periodic ticks, upkeep, recursos customizados e GPT ao vivo fora desta fase.
+
+Impacto:
+- replay idempotente devolve o snapshot original sem reroll ou novo custo;
+- conteúdo publicado não muda semanticamente quando uma nova versão de status aparece;
+- falha de custo, versão, binding, inventário ou persistência reverte toda a operação;
+- OpenAPI passa de 18 para 19 operationIds, com tokens de concorrência e nenhum roll aceito como input;
+- rollout remoto e atualização da Action continuam pendentes.
+
+Status: implementada e validada na Fase 1J; revisão e integração rastreadas pelo PR correspondente

@@ -21,6 +21,12 @@ export interface ActorInventoryMechanicalInputs {
   loadout: CoreV1EquipmentLoadout;
   totalCarriedWeight: number;
   modifiers: readonly CoreV1CollectedEquipmentModifier[];
+  defense: {
+    physicalImmune: boolean;
+    magicalImmune: boolean;
+    immuneElements: readonly string[];
+    elementalResistanceBps: Readonly<Record<string, number>>;
+  };
   equipmentHashInput: readonly {
     entryRef: string;
     contentType: string;
@@ -28,6 +34,7 @@ export interface ActorInventoryMechanicalInputs {
     versionNumber: number;
     inventorySpecHash: string;
     passiveModifiers: readonly { target: string; amount: number; sourceRule: string }[];
+    defense: unknown;
   }[];
 }
 
@@ -91,6 +98,34 @@ export async function loadActorInventoryMechanicalInputs(
   const modifiers = collectEquippedModifiers(validatedInventory.value, validatedLoadout.value);
   if (!weight.ok || !modifiers.ok) throw integrityError();
   const equippedEntryRefs = [...new Set(validatedLoadout.value.slots.flatMap((slot) => slot.entryRef === null ? [] : [slot.entryRef]))].sort();
+  const defenseModifiers: CoreV1CollectedEquipmentModifier[] = [];
+  const elementalResistanceBps: Record<string, number> = {};
+  const immuneElements = new Set<string>();
+  let physicalImmune = false;
+  let magicalImmune = false;
+  for (const entryRef of equippedEntryRefs) {
+    const entry = validatedInventory.value.entries.find((candidate) => candidate.entryRef === entryRef);
+    if (entry?.profile?.profileMode !== 'mechanical') continue;
+    const defense = entry.profile.defense;
+    if (defense === undefined) continue;
+    const source = { type: 'equipment' as const, ref: entryRef };
+    const scalarTargets = [
+      ['physicalFlatDefense', 'physicalDefense'],
+      ['magicalFlatDefense', 'magicalDefense'],
+      ['physicalResistanceBps', 'physicalResistanceBps'],
+      ['magicalResistanceBps', 'magicalResistanceBps'],
+    ] as const;
+    for (const [field, target] of scalarTargets) {
+      const amount = defense[field];
+      if (amount !== undefined && amount !== 0) defenseModifiers.push({ target, value: amount, source });
+    }
+    for (const [element, amount] of Object.entries(defense.elementalResistanceBps ?? {})) {
+      elementalResistanceBps[element] = (elementalResistanceBps[element] ?? 0) + amount;
+    }
+    physicalImmune ||= defense.immunities?.physical === true;
+    magicalImmune ||= defense.immunities?.magical === true;
+    defense.immunities?.elements?.forEach((element) => immuneElements.add(element));
+  }
   const equipmentHashInput = equippedEntryRefs.map((entryRef) => {
     const row = rows.find((candidate) => candidate.entryRef === entryRef);
     if (row === undefined || row.contentVersion.inventorySpecHash === null) throw integrityError();
@@ -104,13 +139,20 @@ export async function loadActorInventoryMechanicalInputs(
       passiveModifiers: [...(profile?.passiveModifiers ?? [])]
         .map((modifier) => ({ target: modifier.target, amount: modifier.amount, sourceRule: modifier.sourceRule }))
         .sort((left, right) => left.target.localeCompare(right.target) || left.amount - right.amount || left.sourceRule.localeCompare(right.sourceRule)),
+      defense: profile !== null && 'defense' in profile ? profile.defense ?? null : null,
     };
   });
   return {
     inventory: validatedInventory.value,
     loadout: validatedLoadout.value,
     totalCarriedWeight: weight.value.totalCarriedWeight,
-    modifiers: modifiers.value,
+    modifiers: [...modifiers.value, ...defenseModifiers],
+    defense: {
+      physicalImmune,
+      magicalImmune,
+      immuneElements: [...immuneElements].sort(),
+      elementalResistanceBps: Object.fromEntries(Object.entries(elementalResistanceBps).sort(([left], [right]) => left.localeCompare(right))),
+    },
     equipmentHashInput,
   };
 }

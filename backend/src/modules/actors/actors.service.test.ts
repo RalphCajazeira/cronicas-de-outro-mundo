@@ -10,6 +10,8 @@ const actor: ActorRecord = {
   species: null, className: 'Aventureiro', role: null, description: null, level: 1, xp: 0, gold: 0,
   status: ActorStatus.ACTIVE, appearance: { eyes: 'green' }, personality: { traits: ['calm'] }, metadata: {},
   mechanicalSheet: actorMechanicalSheetFixture(),
+  inventorySummary: { entryCount: 0, equippedCount: 0, totalCarriedWeight: 0, encumbranceState: 'normal' },
+  activeEffectSummary: { total: 0, statusCount: 0, modifierCount: 0, reactionGrantCount: 0 },
 };
 const scope = { playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' };
 

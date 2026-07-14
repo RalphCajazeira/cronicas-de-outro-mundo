@@ -4,15 +4,19 @@
 
 `Actor` representa personagem ou figura individual relevante. Possui `code` estável, identidade básica, descrição, metadados, estado e ficha mecânica autoritativa calculada pelo backend. Os tipos atuais são `character`, `npc`, `creature`, `companion` e `spirit`.
 
-A ficha pública contém nove `primaryAttributes`, recursos atuais/máximos de HP, Mana e SP, `secondaryAttributes`, `mechanicsStateVersion` e ruleset. O GPT propõe os atributos iniciais e, para NPC/criatura, nível 1–20; não propõe máximos nem derivados. Recursos começam cheios. O backend já possui resolução conceitual pura de gasto, cura e dano, mas ainda não existe operação pública ou persistência desses resultados.
+A ficha pública contém nove `primaryAttributes`, recursos atuais/máximos de HP, Mana e SP com `stateVersion`, `secondaryAttributes`, versões de mecânica/inventário/efeitos e ruleset. O GPT propõe os atributos iniciais e, para NPC/criatura, nível 1–20; não propõe máximos nem derivados. Recursos começam cheios. A Action futura `resolveActorEffect` pode gastar/restaurar recursos e aplicar dano de forma autoritativa; cada escrita exige os tokens lidos imediatamente antes.
 
 `ContentDefinition` representa a identidade estável de conteúdo reutilizável no mundo ou em uma campanha. Nome, descrição, perfil, apresentação, tags e metadados pertencem a uma `ContentVersion` imutável. Os 13 tipos canônicos são arma, armadura, escudo, roupa, magia, habilidade, talento, item, consumível, efeito de estado, raça, classe e modelo de criatura. Material, localização, facção, modelo de missão, receita e outros continuam narrativos genéricos, sem perfil mecânico.
+
+Efeitos `apply_status` e `remove_status` são vinculados na publicação a uma versão exata de `status_effect`. Publicar v2 do status não altera uma magia v1; somente nova versão da fonte pode fixar a versão nova.
 
 `ActorContent` liga uma definição e uma versão específica a um ator e registra somente `state`, `rank`, `progress`, `mastery`, `notes` e metadados. Estados de progressão: `locked`, `learning`, `known` e `mastered`. Uma nova publicação não migra silenciosamente vínculos antigos.
 
 O inventário físico é separado: entradas são instâncias ou stacks fixados em versões exatas, e equipamento é derivado de slots físicos. Toda escrita usa `manageActorInventory`, idempotência e `expectedInventoryStateVersion`; conflito de versão exige nova leitura antes de tentar outra vez. Conhecer conteúdo não concede posse, e possuir item não cria `ActorContent`.
 
 `GameEvent` registra um fato narrativo da campanha, opcionalmente ligado a um ator. Um evento não cria automaticamente um subsistema de missão, memória, relacionamento ou inventário.
+
+Efeitos ativos usam refs públicas e podem ser consultados por `resolveActorEffect(operation=get)`. `loadGame` traz somente contagem resumida. O uso de consumível reduz/remove a entrada física na mesma transação dos efeitos; conhecer um consumível continua sem conceder posse.
 
 ## Uso responsável
 

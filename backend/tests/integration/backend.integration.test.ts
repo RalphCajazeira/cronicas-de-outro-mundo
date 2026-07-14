@@ -273,12 +273,20 @@ describe('migration and PostgreSQL schema', () => {
     expect(migration[0]?.finished_at).toBeInstanceOf(Date);
   });
 
+  it('records the Phase 1J effect persistence migration as successfully applied', async () => {
+    const migration = await prisma.$queryRaw<Array<{ finished_at: Date | null }>>`
+      SELECT finished_at FROM "_prisma_migrations"
+      WHERE migration_name = '20260714030000_engine_v1_effects_persistence' AND rolled_back_at IS NULL
+    `;
+    expect(migration[0]?.finished_at).toBeInstanceOf(Date);
+  });
+
   it('contains every principal table', async () => {
     const rows = await prisma.$queryRaw<Array<{ table_name: string }>>`
       SELECT table_name FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_name IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'GameEvent', 'IdempotencyRecord')
+      WHERE table_schema = 'public' AND table_name IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'IdempotencyRecord')
     `;
-    expect(rows.map((row) => row.table_name).sort()).toEqual(['Actor', 'ActorAttribute', 'ActorContent', 'ActorDerivedSnapshot', 'ActorEquipmentSlot', 'ActorResource', 'Campaign', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'GameEvent', 'IdempotencyRecord', 'InventoryEntry', 'InventoryRulesVersion', 'Player', 'Ruleset', 'RulesetVersion', 'World']);
+    expect(rows.map((row) => row.table_name).sort()).toEqual(['ActiveEffect', 'Actor', 'ActorAttribute', 'ActorContent', 'ActorDerivedSnapshot', 'ActorEquipmentSlot', 'ActorResource', 'Campaign', 'ContentDefinition', 'ContentEffectBinding', 'ContentProfileVersion', 'ContentVersion', 'EffectResolution', 'EffectRoll', 'EffectRulesVersion', 'GameEvent', 'IdempotencyRecord', 'InventoryEntry', 'InventoryRulesVersion', 'Player', 'Ruleset', 'RulesetVersion', 'World']);
   });
 
   it('contains the principal foreign keys', async () => {
@@ -298,7 +306,43 @@ describe('migration and PostgreSQL schema', () => {
       'InventoryRulesVersion_rulesetVersionId_fkey', 'ContentVersion_inventoryRulesVersionId_fkey',
       'InventoryEntry_actorId_fkey', 'InventoryEntry_contentVersionId_fkey', 'InventoryEntry_inventoryRulesVersionId_fkey',
       'ActorEquipmentSlot_actorId_fkey', 'ActorEquipmentSlot_inventoryEntryId_actorId_fkey',
+      'EffectRulesVersion_rulesetVersionId_fkey', 'ContentEffectBinding_sourceContentVersionId_fkey',
+      'ContentEffectBinding_targetContentDefinitionId_fkey', 'ContentEffectBinding_targetContentVersionId_targetContentD_fkey',
+      'ActiveEffect_targetActorId_fkey', 'ActiveEffect_sourceActorId_fkey', 'ActiveEffect_sourceContentVersionId_fkey',
+      'ActiveEffect_effectContentVersionId_fkey', 'ActiveEffect_effectRulesVersionId_fkey',
+      'EffectResolution_campaignId_fkey', 'EffectResolution_sourceActorId_fkey', 'EffectResolution_targetActorId_fkey',
+      'EffectResolution_sourceContentVersionId_fkey', 'EffectResolution_effectRulesVersionId_fkey',
+      'EffectRoll_effectResolutionId_fkey',
     ]));
+  });
+
+  it('installs Phase 1J clocks, optimistic versions, constraints and immutable triggers', async () => {
+    const columns = await prisma.$queryRaw<Array<{ table_name: string; column_name: string; column_default: string | null }>>`
+      SELECT table_name, column_name, column_default FROM information_schema.columns
+      WHERE table_schema = 'public' AND (table_name, column_name) IN (
+        ('Campaign', 'engineTick'), ('Campaign', 'engineStateVersion'),
+        ('Actor', 'effectsStateVersion'), ('ActorDerivedSnapshot', 'effectsStateVersion'),
+        ('ContentVersion', 'effectBindingHash')
+      )
+    `;
+    expect(columns).toHaveLength(5);
+    expect(columns.find((column) => column.table_name === 'Actor' && column.column_name === 'effectsStateVersion')?.column_default).toContain('1');
+    const constraints = await prisma.$queryRaw<Array<{ conname: string }>>`
+      SELECT conname FROM pg_constraint WHERE conname IN (
+        'ActiveEffect_duration_check', 'ActiveEffect_kind_content_check', 'ActiveEffect_stacks_check',
+        'EffectRoll_rollBps_check', 'EffectRoll_chanceBps_check',
+        'EffectResolution_resultSnapshot_check', 'ContentVersion_effectBindingHash_check'
+      )
+    `;
+    expect(constraints).toHaveLength(7);
+    const triggers = await prisma.$queryRaw<Array<{ tgname: string }>>`
+      SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgname IN (
+        'EffectRulesVersion_reject_update', 'ContentEffectBinding_reject_update',
+        'EffectResolution_reject_update', 'EffectRoll_reject_update',
+        'ActiveEffect_validate_write'
+      )
+    `;
+    expect(triggers).toHaveLength(5);
   });
 
   it('contains the partial global ContentDefinition index', async () => {
@@ -317,18 +361,19 @@ describe('migration and PostgreSQL schema', () => {
     expect(rows).toHaveLength(2);
     expect(rows.find((row) => row.indexname === 'ContentVersion_without_inventory_spec_key')?.indexdef).toContain('"inventorySpecHash" IS NULL');
     expect(rows.find((row) => row.indexname === 'ContentVersion_with_inventory_spec_key')?.indexdef).toContain('"inventorySpecHash" IS NOT NULL');
+    expect(rows.every((row) => row.indexdef.includes('"effectBindingHash"'))).toBe(true);
   });
 
   it('enables RLS without public policies on every Node platform table', async () => {
     const tables = await prisma.$queryRaw<Array<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>>`
       SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'GameEvent', 'IdempotencyRecord')
+      WHERE n.nspname = 'public' AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'IdempotencyRecord')
     `;
-    expect(tables).toHaveLength(18);
+    expect(tables).toHaveLength(23);
     expect(tables.every((table) => table.relrowsecurity)).toBe(true);
     expect(tables.every((table) => !table.relforcerowsecurity)).toBe(true);
-    await expect(prisma.$queryRaw<Array<{ tablename: string }>>`SELECT tablename::text FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'GameEvent', 'IdempotencyRecord')`).resolves.toHaveLength(0);
+    await expect(prisma.$queryRaw<Array<{ tablename: string }>>`SELECT tablename::text FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'IdempotencyRecord')`).resolves.toHaveLength(0);
   });
 
   it('does not grant table privileges to PUBLIC', async () => {
@@ -338,7 +383,7 @@ describe('migration and PostgreSQL schema', () => {
       JOIN pg_namespace n ON n.oid = c.relnamespace
       CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) privilege
       WHERE n.nspname = 'public'
-        AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'GameEvent', 'IdempotencyRecord')
+        AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'IdempotencyRecord')
         AND privilege.grantee = 0
     `;
     expect(rows[0]?.count).toBe(0);
@@ -370,17 +415,23 @@ describe('migration and PostgreSQL schema', () => {
 
 describe('idempotent seed', () => {
   async function counts() {
-    const [rulesets, rulesetVersions, contentProfileVersions, inventoryRulesVersions, players, worlds, campaigns, actors, attributes, resources, snapshots, definitions, contentVersions, links, inventoryEntries] = await Promise.all([
-      prisma.ruleset.count(), prisma.rulesetVersion.count(), prisma.contentProfileVersion.count(), prisma.inventoryRulesVersion.count(),
+    const [rulesets, rulesetVersions, contentProfileVersions, inventoryRulesVersions, effectRulesVersions, players, worlds, campaigns, actors, attributes, resources, snapshots, definitions, contentVersions, links, inventoryEntries, effectBindings, activeEffects, effectResolutions, effectRolls] = await Promise.all([
+      prisma.ruleset.count(), prisma.rulesetVersion.count(), prisma.contentProfileVersion.count(), prisma.inventoryRulesVersion.count(), prisma.effectRulesVersion.count(),
       prisma.player.count(), prisma.world.count(), prisma.campaign.count(), prisma.actor.count(),
       prisma.actorAttribute.count(), prisma.actorResource.count(), prisma.actorDerivedSnapshot.count(),
       prisma.contentDefinition.count(), prisma.contentVersion.count(), prisma.actorContent.count(), prisma.inventoryEntry.count(),
+      prisma.contentEffectBinding.count(), prisma.activeEffect.count(), prisma.effectResolution.count(), prisma.effectRoll.count(),
     ]);
-    return { rulesets, rulesetVersions, contentProfileVersions, inventoryRulesVersions, players, worlds, campaigns, actors, attributes, resources, snapshots, definitions, contentVersions, links, inventoryEntries };
+    return { rulesets, rulesetVersions, contentProfileVersions, inventoryRulesVersions, effectRulesVersions, players, worlds, campaigns, actors, attributes, resources, snapshots, definitions, contentVersions, links, inventoryEntries, effectBindings, activeEffects, effectResolutions, effectRolls };
   }
 
   it('creates the expected initial records', async () => {
-    await expect(counts()).resolves.toEqual({ rulesets: 1, rulesetVersions: 1, contentProfileVersions: 1, inventoryRulesVersions: 1, players: 1, worlds: 1, campaigns: 1, actors: 2, attributes: 18, resources: 6, snapshots: 2, definitions: 2, contentVersions: 2, links: 1, inventoryEntries: 1 });
+    await expect(counts()).resolves.toEqual({
+      rulesets: 1, rulesetVersions: 1, contentProfileVersions: 1, inventoryRulesVersions: 1, effectRulesVersions: 1,
+      players: 1, worlds: 1, campaigns: 1, actors: 2, attributes: 18, resources: 6, snapshots: 2,
+      definitions: 4, contentVersions: 4, links: 2, inventoryEntries: 1, effectBindings: 1,
+      activeEffects: 0, effectResolutions: 0, effectRolls: 0,
+    });
   });
 
   it('keeps counts and the Ralph content link unchanged on a second seed', async () => {
@@ -396,12 +447,14 @@ describe('idempotent seed', () => {
     const definitionCount = await prisma.contentDefinition.count({ where: { code: 'wind_breeze_step' } });
     expect(lyraCount).toBe(1);
     expect(definitionCount).toBe(1);
-    expect(ralph.content).toHaveLength(1);
+    expect(ralph.content).toHaveLength(2);
     expect(ralph.attributes).toHaveLength(9);
     expect(ralph.resources).toHaveLength(3);
     expect(ralph.derivedSnapshot).not.toBeNull();
-    expect(ralph.content[0]).toMatchObject({ state: 'LEARNING', rank: 1, progress: 10, mastery: 0, notes: 'Treino inicial com Lyra' });
-    expect(ralph.content[0]?.contentVersion).toMatchObject({ contentDefinitionId: ralph.content[0]?.contentDefinitionId, versionNumber: 1 });
+    const breeze = ralph.content.find((link) => link.contentDefinition.code === 'wind_breeze_step');
+    if (breeze === undefined) throw new Error('Seed breeze content link is required');
+    expect(breeze).toMatchObject({ state: 'LEARNING', rank: 1, progress: 10, mastery: 0, notes: 'Treino inicial com Lyra' });
+    expect(breeze?.contentVersion).toMatchObject({ contentDefinitionId: breeze.contentDefinitionId, versionNumber: 1 });
   });
 });
 
@@ -1711,5 +1764,281 @@ describe('GPT v1 persistence with real transactions', () => {
       protagonist: { code: 'ralph', actorType: 'character' },
     });
     expect(JSON.stringify(response.body)).not.toMatch(/"id"|playerId|worldId|campaignId|actorId/);
+  });
+});
+
+describe('authoritative effect persistence', () => {
+  async function expectedState(actorId: string) {
+    const actor = await prisma.actor.findUniqueOrThrow({ where: { id: actorId } });
+    const resources = await prisma.actorResource.findMany({ where: { actorId } });
+    const version = (type: 'HP' | 'MANA' | 'SP') => resources.find((resource) => resource.type === type)?.stateVersion;
+    return {
+      mechanicsStateVersion: actor.mechanicsStateVersion,
+      inventoryStateVersion: actor.inventoryStateVersion,
+      effectsStateVersion: actor.effectsStateVersion,
+      resourceStateVersions: { hp: version('HP'), mana: version('MANA'), sp: version('SP') },
+    };
+  }
+
+  it('resolves same-payload status dependencies even when the source package appears first', async () => {
+    const statusCode = 'start-bound-status';
+    const statusDefinition = {
+      mode: 'create', scope: 'campaign', contentType: 'status_effect', code: statusCode,
+      name: 'Status Inicial Vinculado', description: 'Status criado no mesmo startGame.',
+      profile: {
+        schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical', contentKind: 'status_effect',
+        code: statusCode, name: 'Status Inicial Vinculado', description: 'Status criado no mesmo startGame.',
+        tier: 1, rarity: 'common', activation: { type: 'passive' }, cost: { type: 'none' },
+        duration: { type: 'actions', value: 2 }, stacking: { type: 'refresh' },
+        passiveModifiers: [{ target: 'evasion', amount: -1, sourceRule: 'status_effect' }],
+      },
+      presentation: {}, tags: ['start'], status: 'active', metadata: {},
+    } as const;
+    const spellCode = 'start-bound-spell';
+    const spellDefinition = {
+      mode: 'create', scope: 'campaign', contentType: 'spell', code: spellCode,
+      name: 'Magia Inicial Vinculada', description: 'Aplica status do mesmo payload.',
+      profile: {
+        schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical', contentKind: 'spell',
+        code: spellCode, name: 'Magia Inicial Vinculada', description: 'Aplica status do mesmo payload.',
+        tier: 1, rarity: 'common', activation: { type: 'active' }, cost: { type: 'mana', amount: 3 }, actionProfile: 'normal',
+        targeting: { type: 'single_target', rangeBand: 'near', maxTargets: 1 },
+        effects: [{ type: 'apply_status', statusRef: statusCode, duration: { type: 'actions', value: 2 }, stacking: { type: 'refresh' } }],
+      },
+      presentation: {}, tags: ['start'], status: 'active', metadata: {},
+    } as const;
+    const body = {
+      ...structuredStart('effect-start'),
+      idempotencyKey: 'start-effect-binding-001',
+      initialContentPackages: [
+        { definition: spellDefinition, protagonistLink: { state: 'known', rank: 1, progress: 0, mastery: 0, metadata: {} } },
+        { definition: statusDefinition },
+      ],
+      initialInventory: [],
+    };
+    const response = await post('/api/v1/game/start', body);
+    expect(response.status).toBe(200);
+    const spell = await prisma.contentDefinition.findFirstOrThrow({
+      where: { code: spellCode, world: { code: 'effect-start-world' } },
+      include: { versions: { include: { sourceEffectBindings: { include: { targetContentDefinition: true, targetContentVersion: true } } } } },
+    });
+    expect(spell.versions).toHaveLength(1);
+    expect(spell.versions[0]?.sourceEffectBindings[0]).toMatchObject({
+      effectIndex: 0, bindingKind: 'APPLY_STATUS', targetContentDefinition: { code: statusCode },
+      targetContentVersion: { versionNumber: 1 },
+    });
+  });
+
+  it('pins status bindings by version and changes only the binding hash when the referenced status advances', async () => {
+    const campaign = await prisma.campaign.findFirstOrThrow({ where: { code: 'main-campaign', world: { code: 'elarion', player: { slug: 'ralph' } } }, include: { world: true } });
+    const statusInput = (amount: number) => ({
+      worldId: campaign.world.id, campaignId: campaign.id, contentType: ContentType.STATUS_EFFECT,
+      code: 'integration-bound-status', name: 'Status Vinculado', description: 'Status versionado para integração.',
+      profile: {
+        schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical', contentKind: 'status_effect',
+        code: 'integration-bound-status', name: 'Status Vinculado', description: 'Status versionado para integração.',
+        tier: 1, rarity: 'common', activation: { type: 'passive' }, cost: { type: 'none' },
+        duration: { type: 'actions', value: 2 }, stacking: { type: 'refresh' },
+        passiveModifiers: [{ target: 'physicalDefense', amount, sourceRule: 'status_effect' }],
+      },
+      presentation: {}, tags: ['integration'], status: ContentStatus.ACTIVE, metadata: {},
+    } as const);
+    const spellInput = {
+      worldId: campaign.world.id, campaignId: campaign.id, contentType: ContentType.SPELL,
+      code: 'integration-bound-spell', name: 'Magia Vinculada', description: 'Aplica status versionado.',
+      profile: {
+        schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical', contentKind: 'spell',
+        code: 'integration-bound-spell', name: 'Magia Vinculada', description: 'Aplica status versionado.',
+        tier: 1, rarity: 'common', activation: { type: 'active' }, cost: { type: 'mana', amount: 3 }, actionProfile: 'normal',
+        targeting: { type: 'single_target', rangeBand: 'near', maxTargets: 1 },
+        effects: [{ type: 'apply_status', statusRef: 'integration-bound-status', duration: { type: 'actions', value: 2 }, stacking: { type: 'refresh' } }],
+      },
+      presentation: {}, tags: ['integration'], status: ContentStatus.ACTIVE, metadata: {},
+    } as const;
+    await prisma.$transaction((transaction) => publishContentVersion(transaction, statusInput(-1)));
+    const sourceV1 = await prisma.$transaction((transaction) => publishContentVersion(transaction, spellInput));
+    await prisma.$transaction((transaction) => publishContentVersion(transaction, statusInput(-2)));
+    const sourceV2 = await prisma.$transaction((transaction) => publishContentVersion(transaction, spellInput));
+    const first = sourceV1.versions[0];
+    const second = sourceV2.versions[0];
+    if (first === undefined || second === undefined) throw new Error('Bound source versions are required');
+    expect(first.versionNumber).toBe(1);
+    expect(second.versionNumber).toBe(2);
+    expect(first.contentHash).toBe(second.contentHash);
+    expect(first.effectBindingHash).not.toBe(second.effectBindingHash);
+    expect(first.sourceEffectBindings[0]?.targetContentVersion.versionNumber).toBe(1);
+    expect(second.sourceEffectBindings[0]?.targetContentVersion.versionNumber).toBe(2);
+
+    await expect(prisma.$transaction((transaction) => publishContentVersion(transaction, {
+      ...spellInput, code: 'integration-missing-status-spell', name: 'Magia Inválida',
+      profile: { ...spellInput.profile, code: 'integration-missing-status-spell', name: 'Magia Inválida', effects: [{ ...spellInput.profile.effects[0], statusRef: 'missing-integration-status' }] },
+    }))).rejects.toMatchObject({ code: 'CONTENT_EFFECT_BINDING_UNRESOLVED' });
+    await expect(prisma.contentDefinition.count({ where: { code: 'integration-missing-status-spell' } })).resolves.toBe(0);
+  });
+
+  it('applies an exact bound status atomically and replays without duplicate cost or state', async () => {
+    const campaign = await prisma.campaign.findUniqueOrThrow({ where: { worldId_code: {
+      worldId: (await prisma.world.findFirstOrThrow({ where: { code: 'elarion', player: { slug: 'ralph' } } })).id,
+      code: 'main-campaign',
+    } } });
+    const source = await prisma.actor.findUniqueOrThrow({ where: { campaignId_code: { campaignId: campaign.id, code: 'ralph' } } });
+    const target = await prisma.actor.findUniqueOrThrow({ where: { campaignId_code: { campaignId: campaign.id, code: 'lyra' } } });
+    const beforeMana = await prisma.actorResource.findUniqueOrThrow({ where: { actorId_type: { actorId: source.id, type: 'MANA' } } });
+    const body = {
+      operation: 'execute_content', sourceActorRef: source.code, targetActorRef: target.code,
+      contentRef: { contentType: 'spell', code: 'seed-mark-spell', versionNumber: 1 },
+      expectedSourceState: await expectedState(source.id), expectedTargetState: await expectedState(target.id),
+      idempotencyKey: 'integration-effect-mark-001',
+    };
+    const first = await post('/api/v1/actors/effects/resolve', body);
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({
+      operation: 'execute_content', content: { contentType: 'spell', code: 'seed-mark-spell', versionNumber: 1 },
+      source: { actorRef: 'ralph' }, target: { actorRef: 'lyra' },
+      activeEffectChanges: [expect.objectContaining({ change: 'created', stacksAfter: 1 })],
+      rolls: [], defeatedCandidate: false,
+    });
+    expect(JSON.stringify(first.body)).not.toMatch(/"id"|contentVersionId|effectRulesVersionId|resultHash|requestHash|configHash|"profile"|"payload"/i);
+    const [afterMana, persisted, resolutions, rolls] = await Promise.all([
+      prisma.actorResource.findUniqueOrThrow({ where: { actorId_type: { actorId: source.id, type: 'MANA' } } }),
+      prisma.activeEffect.findMany({ where: { targetActorId: target.id }, include: { effectContentVersion: { include: { contentDefinition: true } } } }),
+      prisma.effectResolution.count({ where: { idempotencyKey: body.idempotencyKey } }),
+      prisma.effectRoll.count(),
+    ]);
+    expect(afterMana.current).toBe(beforeMana.current - 3);
+    expect(afterMana.stateVersion).toBe(beforeMana.stateVersion + 1);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.effectContentVersion?.contentDefinition.code).toBe('seed-arcane-mark');
+    expect(resolutions).toBe(1);
+    expect(rolls).toBe(0);
+
+    const replay = await post('/api/v1/actors/effects/resolve', body);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(first.body);
+    await expect(prisma.activeEffect.count({ where: { targetActorId: target.id } })).resolves.toBe(1);
+    await expect(prisma.effectResolution.count({ where: { idempotencyKey: body.idempotencyKey } })).resolves.toBe(1);
+    await expect(prisma.actorResource.findUniqueOrThrow({ where: { actorId_type: { actorId: source.id, type: 'MANA' } } }))
+      .resolves.toMatchObject({ current: afterMana.current, stateVersion: afterMana.stateVersion });
+
+    const beforeRead = await expectedState(target.id);
+    const read = await post('/api/v1/actors/effects/resolve', { operation: 'get', sourceActorRef: target.code });
+    expect(read.status).toBe(200);
+    const readBody = bodyRecord(read);
+    expect(readBody).toMatchObject({
+      operation: 'get', actorRef: 'lyra', effectsStateVersion: beforeRead.effectsStateVersion,
+      resources: { hp: { stateVersion: beforeRead.resourceStateVersions.hp } },
+    });
+    if (!Array.isArray(readBody.activeEffects)) throw new Error('Active effects response must be an array');
+    const readEffect = bodyRecord({ body: readBody.activeEffects[0] });
+    expect(readEffect.kind).toBe('status');
+    expect(bodyRecord({ body: readEffect.statusContent })).toMatchObject({ code: 'seed-arcane-mark', versionNumber: 1 });
+    expect(await expectedState(target.id)).toEqual(beforeRead);
+  });
+
+  it('rejects stale optimistic tokens without generating a resolution or changing resources', async () => {
+    const source = await prisma.actor.findFirstOrThrow({ where: { code: 'ralph', campaign: { code: 'main-campaign', world: { code: 'elarion' } } } });
+    const target = await prisma.actor.findFirstOrThrow({ where: { code: 'lyra', campaignId: source.campaignId } });
+    const sourceState = await expectedState(source.id);
+    const before = await prisma.actorResource.findMany({ where: { actorId: source.id }, orderBy: { type: 'asc' } });
+    const response = await post('/api/v1/actors/effects/resolve', {
+      operation: 'execute_content', sourceActorRef: source.code, targetActorRef: target.code,
+      contentRef: { contentType: 'spell', code: 'seed-mark-spell', versionNumber: 1 },
+      expectedSourceState: { ...sourceState, mechanicsStateVersion: sourceState.mechanicsStateVersion - 1 },
+      expectedTargetState: await expectedState(target.id), idempotencyKey: 'integration-effect-stale-001',
+    });
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ error: { code: 'CONFLICT' } });
+    expect(await prisma.actorResource.findMany({ where: { actorId: source.id }, orderBy: { type: 'asc' } })).toEqual(before);
+    await expect(prisma.effectResolution.count({ where: { idempotencyKey: 'integration-effect-stale-001' } })).resolves.toBe(0);
+  });
+
+  it('persists authoritative hit and critical rolls and replays without rerolling', async () => {
+    const source = await prisma.actor.findFirstOrThrow({ where: { code: 'ralph', campaign: { code: 'main-campaign', world: { code: 'elarion' } } } });
+    const target = await prisma.actor.findFirstOrThrow({ where: { code: 'lyra', campaignId: source.campaignId } });
+    const currentInventory = source.inventoryStateVersion;
+    const equipped = await post(`/api/v1/actors/${source.code}/inventory/manage`, {
+      operation: 'equip', entryRef: 'starter-dagger-1', targetSlotRef: 'main_hand',
+      expectedInventoryStateVersion: currentInventory, idempotencyKey: 'integration-equip-dagger-001',
+    });
+    expect(equipped.status).toBe(200);
+    const body = {
+      operation: 'execute_content', sourceActorRef: source.code, targetActorRef: target.code,
+      contentRef: { contentType: 'weapon', code: 'starter-dagger', versionNumber: 1 },
+      expectedSourceState: await expectedState(source.id), expectedTargetState: await expectedState(target.id),
+      idempotencyKey: 'integration-effect-dagger-001',
+    };
+    const first = await post('/api/v1/actors/effects/resolve', body);
+    expect(first.status).toBe(200);
+    const firstBody = bodyRecord(first);
+    if (!Array.isArray(firstBody.rolls)) throw new Error('Effect rolls response must be an array');
+    expect(firstBody.rolls).toHaveLength(2);
+    const publicRolls = firstBody.rolls.map((roll) => bodyRecord({ body: roll }));
+    expect(publicRolls.map((roll) => roll.kind)).toEqual(['hit', 'critical']);
+    for (const roll of publicRolls) {
+      expect(roll).toMatchObject({ ordinal: 0 });
+      expect(typeof roll.rollBps === 'number' && roll.rollBps >= 1 && roll.rollBps <= 10_000).toBe(true);
+      expect(typeof roll.chanceBps).toBe('number');
+      expect(typeof roll.success).toBe('boolean');
+    }
+    const persisted = await prisma.effectResolution.findUniqueOrThrow({
+      where: { idempotencyKey: body.idempotencyKey }, include: { rolls: { orderBy: { kind: 'asc' } } },
+    });
+    expect(persisted.rolls).toHaveLength(2);
+    expect(persisted.resultHash).toMatch(/^[0-9a-f]{64}$/);
+    const replay = await post('/api/v1/actors/effects/resolve', body);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(first.body);
+    await expect(prisma.effectRoll.count({ where: { effectResolutionId: persisted.id } })).resolves.toBe(2);
+    await expect(prisma.actor.findUniqueOrThrow({ where: { id: target.id } })).resolves.toMatchObject({ status: 'ACTIVE' });
+    await expect(prisma.effectResolution.update({ where: { id: persisted.id }, data: { resultHash: '0'.repeat(64) } }))
+      .rejects.toThrow('immutable');
+    await expect(prisma.effectRoll.update({ where: { id: persisted.rolls[0]!.id }, data: { rollBps: 1 } }))
+      .rejects.toThrow('immutable');
+  });
+
+  it('restores HP and consumes a stack entry in the same idempotent transaction', async () => {
+    const source = await prisma.actor.findFirstOrThrow({ where: { code: 'ralph', campaign: { code: 'main-campaign', world: { code: 'elarion' } } }, include: { campaign: { include: { world: true } } } });
+    const potion = await prisma.$transaction((transaction) => publishContentVersion(transaction, {
+      worldId: source.campaign.world.id, campaignId: source.campaignId, contentType: ContentType.CONSUMABLE,
+      code: 'integration-healing-potion', name: 'Poção de Cura de Integração', description: 'Restaura HP em teste.',
+      profile: {
+        schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical', contentKind: 'consumable',
+        code: 'integration-healing-potion', name: 'Poção de Cura de Integração', description: 'Restaura HP em teste.',
+        tier: 1, rarity: 'common', activation: { type: 'active' }, cost: { type: 'none' }, actionProfile: 'potion',
+        consumable: true, effects: [{ type: 'restore_resource', resource: 'hp', amount: 10, targeting: { type: 'self', rangeBand: 'self' } }],
+      },
+      inventorySpec: { ...inventorySpecBase, unitWeight: 1, stacking: { mode: 'stackable', maxStack: 20 } },
+      presentation: {}, tags: ['integration'], status: ContentStatus.ACTIVE, metadata: {},
+    }));
+    const potionVersion = potion.versions[0];
+    if (potionVersion === undefined) throw new Error('Integration potion version is required');
+    const actorBeforeGrant = await prisma.actor.findUniqueOrThrow({ where: { id: source.id } });
+    const grant = await post(`/api/v1/actors/${source.code}/inventory/manage`, {
+      operation: 'grant', expectedInventoryStateVersion: actorBeforeGrant.inventoryStateVersion,
+      idempotencyKey: 'integration-grant-potion-001',
+      contentRef: { scope: 'campaign', contentType: 'consumable', code: potion.code, versionNumber: potionVersion.versionNumber },
+      quantity: 1, entryRefs: ['integration-potion-stack'],
+    });
+    expect(grant.status).toBe(200);
+    const hp = await prisma.actorResource.findUniqueOrThrow({ where: { actorId_type: { actorId: source.id, type: 'HP' } } });
+    const reducedHp = Math.max(0, hp.current - 10);
+    await prisma.actorResource.update({ where: { id: hp.id }, data: { current: reducedHp, stateVersion: { increment: 1 } } });
+    const body = {
+      operation: 'use_consumable', sourceActorRef: source.code, targetActorRef: source.code,
+      inventoryEntryRef: 'integration-potion-stack', expectedSourceState: await expectedState(source.id),
+      idempotencyKey: 'integration-use-potion-001',
+    };
+    const first = await post('/api/v1/actors/effects/resolve', body);
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({
+      operation: 'use_consumable', source: { actorRef: source.code }, target: { actorRef: source.code },
+      inventoryChanges: [{ entryRef: 'integration-potion-stack', change: 'consumed' }], rolls: [],
+    });
+    await expect(prisma.inventoryEntry.findUnique({ where: { actorId_entryRef: { actorId: source.id, entryRef: 'integration-potion-stack' } } })).resolves.toBeNull();
+    await expect(prisma.actorResource.findUniqueOrThrow({ where: { id: hp.id } })).resolves.toMatchObject({ current: hp.current });
+    const replay = await post('/api/v1/actors/effects/resolve', body);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(first.body);
+    await expect(prisma.effectResolution.count({ where: { idempotencyKey: body.idempotencyKey } })).resolves.toBe(1);
   });
 });

@@ -53,7 +53,7 @@ Os coeficientes calibráveis permanecem associados à identidade `core-v1`/futur
 
 `createActorMechanicalState`, `recomputeActorDerivedSnapshot` e `loadActorMechanicalSheet` formam a única orquestração de persistência. A validação inicial reutiliza integralmente `validateInitialPrimaryAttributes`; máximos e derivados reutilizam `calculateResourceMaximums` e `calculateSecondaryAttributes`. O snapshot nunca contém fórmula e a leitura recalcula hash e resultados, exige 9 atributos/3 recursos, compara versão e ruleset e falha com erro sanitizado diante de estado incompleto ou stale.
 
-`startGame` cria o protagonista em nível 1/XP 0 e todo o estado 9/3/1 na transação idempotente existente. `upsertActor` cria NPCs/atores em nível 1–20 com a mesma autoridade e só atualiza narrativa quando as entradas mecânicas coincidem; `updateActor` é exclusivamente narrativo. Recursos começam cheios. Gasto, cura, regeneração aplicada, inventário, equipamento, cenas e combate continuam fora do escopo.
+`startGame` cria o protagonista em nível 1/XP 0 e todo o estado 9/3/1 na transação idempotente existente. `upsertActor` cria NPCs/atores em nível 1–20 com a mesma autoridade e só atualiza narrativa quando as entradas mecânicas coincidem; `updateActor` é exclusivamente narrativo. Na Fase 1D, recursos começavam cheios e gasto, cura, regeneração aplicada, inventário, equipamento, cenas e combate ainda ficavam fora do escopo; inventário/equipamento e o subconjunto transacional de recursos/efeitos foram incorporados nas Fases 1H e 1J.
 
 A migration da Fase 1D exige `Actor` vazio antes de qualquer DDL incompatível, não apaga nem converte dados, remove `health`, `maxHealth`, `mana`, `maxMana`, `attributes`, `resistances` e `affinities`, instala constraints/FKs/RLS e mantém rollout remoto e GPT ao vivo pendentes.
 
@@ -172,7 +172,7 @@ Cadastrar secrets e o secret file no Render, executar o gate manual a partir do 
 
 ## Fases futuras
 
-Frontend, combate, uso de consumíveis, comércio e demais sistemas narrativos/mecânicos permanecem fora do escopo atual.
+Frontend, combate multi-target/timeline, comércio e demais sistemas narrativos/mecânicos ainda não cobertos pela Fase 1J permanecem futuros.
 
 ### Fase 1H — inventário e equipamento persistentes
 
@@ -199,3 +199,15 @@ Sequências aplicam custo uma vez e carregam o estado entre efeitos; miss manté
 Prisma, migrations, repositories, HTTP, OpenAPI, banco remoto, deploy e GPT ao vivo permanecem inalterados. A Fase 1J deverá decidir persistência autoritativa, transações, produção/persistência de rolls e integração com inventário/combate.
 
 Status: implementada e validada na Fase 1I; revisão e integração rastreadas pelo PR correspondente
+
+### Fase 1J — persistência autoritativa de efeitos
+
+`EffectRulesVersion(core-v1-effects-v1)` publica o manifesto operacional imutável. `ContentEffectBinding` fixa cada `apply_status`/`remove_status` da versão fonte à definição e versão exatas do status; `effectBindingHash` participa da deduplicação sem contaminar `contentHash` ou `inventorySpecHash`.
+
+`resolveActorEffect` é a única fronteira pública desta fase. `get` somente projeta recursos versionados e efeitos ativos. `execute_content` exige versão conhecida/mastered ou versão equipada; `use_consumable` resolve o perfil da entrada física. Escritas bloqueiam Campaign e Actors em ordem determinística, validam `mechanicsStateVersion`, `inventoryStateVersion`, `effectsStateVersion` e as três versões de recurso antes de qualquer roll criptográfico. Custo, dano/restauração, consumo, diffs de `ActiveEffect`, `EffectResolution`, `EffectRoll`, `GameEvent` allowlisted e resposta idempotente são confirmados ou revertidos juntos.
+
+Efeitos persistidos usam origem pública determinística, versão de conteúdo exata e duração `ticks|actions|scene|encounter|permanent`. Expiração por tick, avanço por ação e fechamento de scope são services internos que incrementam versões e recompõem o snapshot uma única vez. Equipamento e efeitos ativos alimentam a mesma projeção mecânica; máximos podem clampá-los sem cura implícita.
+
+O contrato deliberadamente não implementa recursos customizados persistidos, seleção multi-target, timeline/turnos/encontros, reaction/block runtime, cooldown, periodic ticks ou upkeep. HP zero retorna `defeatedCandidate`, mas não altera `Actor.status`. OpenAPI e instruções locais já descrevem a Action futura; o GPT ao vivo, staging e deploy não foram alterados.
+
+Status: implementada e validada na Fase 1J; revisão e integração rastreadas pelo PR correspondente

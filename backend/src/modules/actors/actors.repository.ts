@@ -4,6 +4,8 @@ import { resolveScope } from '../../shared/database/game-scope.js';
 import type { ActorRepository } from './actors.types.js';
 import { loadActorMechanicalSheet } from './actor-mechanics.service.js';
 import { contentVersionPublicInclude } from '../content/content-publication.service.js';
+import { loadActorInventorySummary } from '../inventory/inventory.service.js';
+import { loadActorActiveEffectSummary } from '../effects/effect-state.service.js';
 
 const actorSelect = { id: true, code: true, name: true, actorType: true, species: true, className: true,
   role: true, description: true, level: true, xp: true, gold: true, appearance: true, personality: true,
@@ -18,8 +20,12 @@ export const prismaActorRepository: ActorRepository = {
     const { campaign } = await resolveScope(prisma, scope);
     const actor = await prisma.actor.findUnique({ where: scopedActorKey(campaign.id, reference), select: actorSelect });
     if (actor === null) return null;
-    const mechanicalSheet = await loadActorMechanicalSheet(prisma, actor.id);
-    return { ...actor, mechanicalSheet };
+    const [mechanicalSheet, inventorySummary, activeEffectSummary] = await Promise.all([
+      loadActorMechanicalSheet(prisma, actor.id),
+      loadActorInventorySummary(prisma, actor.id),
+      loadActorActiveEffectSummary(prisma, actor.id),
+    ]);
+    return { ...actor, mechanicalSheet, inventorySummary, activeEffectSummary };
   },
   async listContent(scope, reference) {
     const { campaign } = await resolveScope(prisma, scope);

@@ -844,6 +844,36 @@
         }
       }
     },
+    "/api/v1/actors/effects/resolve": {
+      "post": {
+        "operationId": "resolveActorEffect",
+        "summary": "Consultar ou resolver efeitos autoritativos de um ator",
+        "description": "get somente lê. execute_content e use_consumable validam tokens otimistas, geram rolls no backend e persistem custo, dano, recursos, inventário, efeitos e auditoria atomicamente. Multi-target retorna REQUIRES_ACTION_ORCHESTRATOR.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ResolveActorEffectInput" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Estado de efeitos ou resolução idempotente concluída",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActorEffectOperationResult" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/InvalidInput" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
     "/api/v1/events": {
       "post": {
         "operationId": "createGameEvent",
@@ -1445,16 +1475,16 @@
         "required": ["hp", "mana", "sp"],
         "properties": {
           "hp": {
-            "type": "object", "additionalProperties": false, "required": ["current", "max"],
-            "properties": { "current": { "type": "integer", "minimum": 0 }, "max": { "type": "integer", "minimum": 1 } }
+            "type": "object", "additionalProperties": false, "required": ["current", "max", "stateVersion"],
+            "properties": { "current": { "type": "integer", "minimum": 0 }, "max": { "type": "integer", "minimum": 1 }, "stateVersion": { "type": "integer", "minimum": 1 } }
           },
           "mana": {
-            "type": "object", "additionalProperties": false, "required": ["current", "max"],
-            "properties": { "current": { "type": "integer", "minimum": 0 }, "max": { "type": "integer", "minimum": 0 } }
+            "type": "object", "additionalProperties": false, "required": ["current", "max", "stateVersion"],
+            "properties": { "current": { "type": "integer", "minimum": 0 }, "max": { "type": "integer", "minimum": 0 }, "stateVersion": { "type": "integer", "minimum": 1 } }
           },
           "sp": {
-            "type": "object", "additionalProperties": false, "required": ["current", "max"],
-            "properties": { "current": { "type": "integer", "minimum": 0 }, "max": { "type": "integer", "minimum": 0 } }
+            "type": "object", "additionalProperties": false, "required": ["current", "max", "stateVersion"],
+            "properties": { "current": { "type": "integer", "minimum": 0 }, "max": { "type": "integer", "minimum": 0 }, "stateVersion": { "type": "integer", "minimum": 1 } }
           }
         }
       },
@@ -1486,12 +1516,14 @@
       "ActorMechanicalSheet": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["primaryAttributes", "resources", "secondaryAttributes", "mechanicsStateVersion", "ruleset"],
+        "required": ["primaryAttributes", "resources", "secondaryAttributes", "mechanicsStateVersion", "inventoryStateVersion", "effectsStateVersion", "ruleset"],
         "properties": {
           "primaryAttributes": { "$ref": "#/components/schemas/PrimaryAttributes" },
           "resources": { "$ref": "#/components/schemas/ActorResources" },
           "secondaryAttributes": { "$ref": "#/components/schemas/SecondaryAttributes" },
           "mechanicsStateVersion": { "type": "integer", "minimum": 1 },
+          "inventoryStateVersion": { "type": "integer", "minimum": 1 },
+          "effectsStateVersion": { "type": "integer", "minimum": 1 },
           "ruleset": {
             "type": "object", "additionalProperties": false, "required": ["code", "revision"],
             "properties": { "code": { "type": "string" }, "revision": { "type": "string" } }
@@ -1729,6 +1761,17 @@
           }
         }
       },
+      "ActiveEffectSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["total", "statusCount", "modifierCount", "reactionGrantCount"],
+        "properties": {
+          "total": { "type": "integer", "minimum": 0 },
+          "statusCount": { "type": "integer", "minimum": 0 },
+          "modifierCount": { "type": "integer", "minimum": 0 },
+          "reactionGrantCount": { "type": "integer", "minimum": 0 }
+        }
+      },
       "Actor": {
         "type": "object",
         "additionalProperties": false,
@@ -1744,7 +1787,9 @@
           "secondaryAttributes",
           "mechanicsStateVersion",
           "inventoryStateVersion",
+          "effectsStateVersion",
           "inventorySummary",
+          "activeEffectSummary",
           "ruleset",
           "appearance",
           "personality",
@@ -1808,7 +1853,9 @@
           "secondaryAttributes": { "$ref": "#/components/schemas/SecondaryAttributes" },
           "mechanicsStateVersion": { "type": "integer", "minimum": 1 },
           "inventoryStateVersion": { "type": "integer", "minimum": 1 },
+          "effectsStateVersion": { "type": "integer", "minimum": 1 },
           "inventorySummary": { "$ref": "#/components/schemas/InventorySummary" },
+          "activeEffectSummary": { "$ref": "#/components/schemas/ActiveEffectSummary" },
           "ruleset": {
             "type": "object", "additionalProperties": false, "required": ["code", "revision"],
             "properties": { "code": { "type": "string" }, "revision": { "type": "string" } }
@@ -2332,6 +2379,146 @@
               "canStartAttackOrMovement": { "type": "boolean" }
             }
           }
+        }
+      },
+      "EffectContentVersionReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["scope", "contentType", "code", "versionNumber"],
+        "properties": {
+          "scope": { "type": "string", "enum": ["world", "campaign"] },
+          "contentType": { "type": "string", "enum": ["weapon", "armor", "shield", "clothing", "spell", "skill", "talent", "item", "consumable", "status_effect"] },
+          "code": { "$ref": "#/components/schemas/Code" },
+          "versionNumber": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "EffectContentInputReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["contentType", "code", "versionNumber"],
+        "properties": {
+          "contentType": { "type": "string", "enum": ["weapon", "armor", "shield", "clothing", "spell", "skill", "talent", "item", "consumable", "status_effect"] },
+          "code": { "$ref": "#/components/schemas/Code" },
+          "versionNumber": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "EffectResourceStateVersions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["hp", "mana", "sp"],
+        "properties": {
+          "hp": { "type": "integer", "minimum": 1 },
+          "mana": { "type": "integer", "minimum": 1 },
+          "sp": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "ExpectedActorEffectState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mechanicsStateVersion", "inventoryStateVersion", "effectsStateVersion", "resourceStateVersions"],
+        "properties": {
+          "mechanicsStateVersion": { "type": "integer", "minimum": 1 },
+          "inventoryStateVersion": { "type": "integer", "minimum": 1 },
+          "effectsStateVersion": { "type": "integer", "minimum": 1 },
+          "resourceStateVersions": { "$ref": "#/components/schemas/EffectResourceStateVersions" }
+        }
+      },
+      "ResolveActorEffectInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["playerRef", "worldRef", "campaignRef", "operation", "sourceActorRef"],
+        "properties": {
+          "playerRef": { "$ref": "#/components/schemas/Code" },
+          "worldRef": { "$ref": "#/components/schemas/Code" },
+          "campaignRef": { "$ref": "#/components/schemas/Code" },
+          "operation": { "type": "string", "enum": ["get", "execute_content", "use_consumable"] },
+          "sourceActorRef": { "$ref": "#/components/schemas/Code" },
+          "targetActorRef": { "$ref": "#/components/schemas/Code" },
+          "contentRef": { "$ref": "#/components/schemas/EffectContentInputReference" },
+          "inventoryEntryRef": { "$ref": "#/components/schemas/Code" },
+          "weaponEntryRef": { "$ref": "#/components/schemas/Code" },
+          "expectedSourceState": { "$ref": "#/components/schemas/ExpectedActorEffectState" },
+          "expectedTargetState": { "$ref": "#/components/schemas/ExpectedActorEffectState" },
+          "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" }
+        },
+        "description": "get aceita somente escopo, operation e sourceActorRef. Escritas exigem targetActorRef, expectedSourceState e idempotencyKey; alvo diferente exige expectedTargetState. execute_content exige contentRef. use_consumable exige inventoryEntryRef. Rolls nunca são aceitos do cliente."
+      },
+      "ActiveEffectDurationState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type"],
+        "properties": {
+          "type": { "type": "string", "enum": ["ticks", "actions", "scene", "encounter", "permanent"] },
+          "expiresAtTick": { "type": "string", "pattern": "^[0-9]+$" },
+          "remainingActions": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "ActiveEffect": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["effectRef", "kind", "sourceActorRef", "sourceContent", "effectIndex", "stacks", "appliedAtTick", "duration"],
+        "properties": {
+          "effectRef": { "$ref": "#/components/schemas/Code" },
+          "kind": { "type": "string", "enum": ["status", "primary_modifier", "secondary_modifier", "reaction_grant"] },
+          "sourceActorRef": { "$ref": "#/components/schemas/Code" },
+          "sourceContent": { "$ref": "#/components/schemas/EffectContentVersionReference" },
+          "statusContent": { "$ref": "#/components/schemas/EffectContentVersionReference" },
+          "effectIndex": { "type": "integer", "minimum": 0 },
+          "stacks": { "type": "integer", "minimum": 1 },
+          "appliedAtTick": { "type": "string", "pattern": "^[0-9]+$" },
+          "duration": { "$ref": "#/components/schemas/ActiveEffectDurationState" }
+        }
+      },
+      "ActorEffectPublicState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["actorRef", "mechanicsStateVersion", "inventoryStateVersion", "effectsStateVersion", "resources"],
+        "properties": {
+          "actorRef": { "$ref": "#/components/schemas/Code" },
+          "mechanicsStateVersion": { "type": "integer", "minimum": 1 },
+          "inventoryStateVersion": { "type": "integer", "minimum": 1 },
+          "effectsStateVersion": { "type": "integer", "minimum": 1 },
+          "resources": { "$ref": "#/components/schemas/ActorResources" }
+        }
+      },
+      "EffectRollResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "ordinal", "rollBps", "chanceBps", "success"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["hit", "critical", "concentration"] },
+          "ordinal": { "type": "integer", "minimum": 0 },
+          "rollBps": { "type": "integer", "minimum": 1, "maximum": 10000 },
+          "chanceBps": { "type": "integer", "minimum": 0, "maximum": 10000 },
+          "success": { "type": "boolean" }
+        }
+      },
+      "ActorEffectOperationResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation"],
+        "properties": {
+          "operation": { "type": "string", "enum": ["get", "execute_content", "use_consumable"] },
+          "actorRef": { "$ref": "#/components/schemas/Code" },
+          "mechanicsStateVersion": { "type": "integer", "minimum": 1 },
+          "inventoryStateVersion": { "type": "integer", "minimum": 1 },
+          "effectsStateVersion": { "type": "integer", "minimum": 1 },
+          "resources": { "$ref": "#/components/schemas/ActorResources" },
+          "activeEffects": { "type": "array", "items": { "$ref": "#/components/schemas/ActiveEffect" } },
+          "engineTick": { "type": "string", "pattern": "^[0-9]+$" },
+          "content": { "$ref": "#/components/schemas/EffectContentVersionReference" },
+          "source": { "$ref": "#/components/schemas/ActorEffectPublicState" },
+          "target": { "$ref": "#/components/schemas/ActorEffectPublicState" },
+          "cost": { "$ref": "#/components/schemas/JsonObject" },
+          "effectResults": { "type": "array", "items": { "$ref": "#/components/schemas/JsonObject" } },
+          "activeEffectChanges": { "type": "array", "items": { "$ref": "#/components/schemas/JsonObject" } },
+          "resourceChanges": { "type": "array", "items": { "$ref": "#/components/schemas/JsonObject" } },
+          "damageResults": { "type": "array", "items": { "$ref": "#/components/schemas/JsonObject" } },
+          "defeatedCandidate": { "type": "boolean" },
+          "inventoryChanges": { "type": "array", "items": { "$ref": "#/components/schemas/JsonObject" } },
+          "rolls": { "type": "array", "items": { "$ref": "#/components/schemas/EffectRollResult" } },
+          "events": { "type": "array", "items": { "$ref": "#/components/schemas/JsonObject" } },
+          "changedResources": { "$ref": "#/components/schemas/JsonObject" }
         }
       },
       "RemovalResult": {

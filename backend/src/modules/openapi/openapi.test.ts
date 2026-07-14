@@ -75,12 +75,12 @@ function collectEnums(value: unknown, result: unknown[][] = []): unknown[][] {
 }
 
 describe('official OpenAPI contract', () => {
-  it('is valid JSON loaded as OpenAPI 3.1 with exactly 18 unique operationIds', () => {
+  it('is valid JSON loaded as OpenAPI 3.1 with exactly 19 unique operationIds', () => {
     const ids = operations().map(({ operation }) => operation.operationId);
     expect(contract.openapi).toBe('3.1.0');
     expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(18);
+    expect(ids).toHaveLength(19);
   });
 
   it('matches every registered Express route exactly', () => {
@@ -93,7 +93,7 @@ describe('official OpenAPI contract', () => {
     expect(contract.security).toEqual([{ RpgApiKey: [] }]);
     const publicIds = operations().filter(({ operation }) => Array.isArray(operation.security) && operation.security.length === 0).map(({ operation }) => operation.operationId).sort();
     expect(publicIds).toEqual(['checkHealth', 'checkReadiness', 'getOpenApiContract']);
-    expect(operations().filter(({ operation }) => !Array.isArray(operation.security) || operation.security.length > 0)).toHaveLength(15);
+    expect(operations().filter(({ operation }) => !Array.isArray(operation.security) || operation.security.length > 0)).toHaveLength(16);
   });
 
   it('contains no localhost production server', () => {
@@ -130,6 +130,17 @@ describe('official OpenAPI contract', () => {
     expect(contract.components.schemas.InventorySpec?.additionalProperties).toBe(false);
     expect(contract.components.schemas.ActorContent?.properties).not.toHaveProperty('equipped');
     expect(contract.components.schemas.ActorContent?.properties).not.toHaveProperty('quantity');
+  });
+
+  it('documents authoritative effect resolution without accepting client rolls', () => {
+    const operation = operations().find((item) => item.operation.operationId === 'resolveActorEffect')?.operation;
+    const schema = resolveSchema(operation?.requestBody?.content?.['application/json']?.schema);
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toEqual(expect.arrayContaining(['playerRef', 'worldRef', 'campaignRef', 'operation', 'sourceActorRef']));
+    expect(schema.properties?.operation?.enum).toEqual(['get', 'execute_content', 'use_consumable']);
+    expect(schema.properties).toHaveProperty('expectedSourceState');
+    expect(schema.properties).not.toHaveProperty('rolls');
+    expect(operation?.description).toContain('REQUIRES_ACTION_ORCHESTRATOR');
   });
 
   it('documents safe errors for every protected API operation', () => {
@@ -183,7 +194,7 @@ describe('official OpenAPI contract', () => {
     const scope = contract.components.schemas.ScopeInput;
     expect(scope?.required).toEqual(['playerRef', 'worldRef', 'campaignRef']);
     expect(contract.components.schemas.Code?.not).toEqual({ format: 'uuid' });
-    for (const operationId of ['loadGame', 'startGame', 'upsertActor', 'updateActor', 'upsertContent', 'manageActorContent', 'manageActorInventory', 'createGameEvent']) {
+    for (const operationId of ['loadGame', 'startGame', 'upsertActor', 'updateActor', 'upsertContent', 'manageActorContent', 'manageActorInventory', 'createGameEvent', 'resolveActorEffect']) {
       const operation = byId.get(operationId);
       const schema = resolveSchema(operation?.requestBody?.content?.['application/json']?.schema);
       expect(schema.required, operationId).toEqual(expect.arrayContaining(['playerRef', 'worldRef', 'campaignRef']));

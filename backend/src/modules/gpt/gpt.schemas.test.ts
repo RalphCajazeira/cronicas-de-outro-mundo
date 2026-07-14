@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { getContentSchema } from '../content/content.schemas.js';
 import {
   createEventSchema, listCampaignActorsSchema, loadGameSchema, manageActorContentSchema, manageActorInventorySchema, patchActorSchema,
-  startGameSchema, upsertActorSchema, upsertContentSchema,
+  resolveActorEffectSchema, startGameSchema, upsertActorSchema, upsertContentSchema,
 } from './gpt.schemas.js';
 import { jsonByteSize, jsonDepth, jsonKeyCount } from './gpt.start-game.js';
 import { getInitialAttributePreset } from '../rules/core-v1/index.js';
@@ -285,5 +285,26 @@ describe('GPT API schemas', () => {
     expect(manageActorInventorySchema.safeParse({ ...grant, entryRefs: ['dagger-1', 'dagger-1'] }).success).toBe(false);
     expect(manageActorInventorySchema.safeParse({ ...scope, operation: 'equip', idempotencyKey: 'inventory-equip-001', expectedInventoryStateVersion: 2, entryRef: 'dagger-1', quantity: 1 }).success).toBe(false);
     expect(manageActorContentSchema.safeParse({ ...scope, operation: 'equip', contentRef: 'dagger', contentType: 'weapon', idempotencyKey: 'old-equip' }).success).toBe(false);
+  });
+
+  it('validates closed effect operations and never accepts client rolls', () => {
+    expect(resolveActorEffectSchema.safeParse({ ...scope, operation: 'get', sourceActorRef: 'ralph' }).success).toBe(true);
+    expect(resolveActorEffectSchema.safeParse({ ...scope, operation: 'get', sourceActorRef: 'ralph', idempotencyKey: 'forbidden-roll-read' }).success).toBe(false);
+    const expectedSourceState = {
+      mechanicsStateVersion: 1, inventoryStateVersion: 1, effectsStateVersion: 1,
+      resourceStateVersions: { hp: 1, mana: 1, sp: 1 },
+    };
+    const execute = {
+      ...scope, operation: 'execute_content', sourceActorRef: 'ralph', targetActorRef: 'lyra',
+      contentRef: { contentType: 'spell', code: 'arcane-mark', versionNumber: 1 },
+      expectedSourceState, expectedTargetState: expectedSourceState, idempotencyKey: 'effect-execute-001',
+    };
+    expect(resolveActorEffectSchema.safeParse(execute).success).toBe(true);
+    expect(resolveActorEffectSchema.safeParse({ ...execute, rolls: { hitRollBps: 1, criticalRollBps: 1 } }).success).toBe(false);
+    expect(resolveActorEffectSchema.safeParse({ ...execute, expectedTargetState: undefined }).success).toBe(false);
+    expect(resolveActorEffectSchema.safeParse({
+      ...scope, operation: 'use_consumable', sourceActorRef: 'ralph', targetActorRef: 'ralph',
+      inventoryEntryRef: 'potion-1', expectedSourceState, idempotencyKey: 'effect-consume-001',
+    }).success).toBe(true);
   });
 });

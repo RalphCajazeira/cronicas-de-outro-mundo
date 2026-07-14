@@ -12,6 +12,7 @@ import { findScopedContent } from '../content/content.repository.js';
 import { loadActorInventorySummary, manageActorInventory } from '../inventory/inventory.service.js';
 import {
   contentVersionPublicInclude,
+  ContentEffectBindingResolutionError,
   publicContentDto,
   publicContentVersionDto,
   publishContentVersion,
@@ -20,9 +21,12 @@ import {
   type PublicContentVersion,
 } from '../content/content-publication.service.js';
 import { ensureCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
+import { ensureCoreV1EffectRulesVersion } from '../rules/effect-rules.registry.js';
+import { getActorEffects, resolveActorEffectTransaction } from '../effects/effect-resolution.service.js';
+import { loadActorActiveEffectSummary } from '../effects/effect-state.service.js';
 import type {
   CreateEventInput, ListCampaignActorsInput, LoadGameInput, ManageActorContentInput, ManageActorInventoryInput,
-  ListPlayerWorldsInput, ListWorldCampaignsInput, PatchActorInput, StartGameInput, UpsertActorInput, UpsertContentInput,
+  ListPlayerWorldsInput, ListWorldCampaignsInput, PatchActorInput, ResolveActorEffectInput, StartGameInput, UpsertActorInput, UpsertContentInput,
 } from './gpt.schemas.js';
 import type { ApiResult, GptRepository } from './gpt.types.js';
 import {
@@ -42,7 +46,7 @@ const contentInclude = {
   contentVersion: { include: contentVersionPublicInclude },
 } satisfies Prisma.ActorContentInclude;
 
-function requestHash(value: unknown): string {
+export function calculateGptRequestHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
 }
 
@@ -56,7 +60,7 @@ async function executeIdempotent(
   request: unknown,
   work: (transaction: Prisma.TransactionClient) => Promise<ApiResult>,
 ): Promise<ApiResult> {
-  const hash = requestHash(request);
+  const hash = calculateGptRequestHash(request);
   try {
     return await prisma.$transaction(async (transaction) => {
       await transaction.idempotencyRecord.create({ data: { key, operation, requestHash: hash } });
@@ -80,11 +84,13 @@ async function executeIdempotent(
 async function actorDto(client: DbClient, actor: Record<string, unknown>) {
   const mechanicalSheet = await loadActorMechanicalSheet(client, actor.id as string);
   const inventorySummary = await loadActorInventorySummary(client, actor.id as string);
+  const activeEffectSummary = await loadActorActiveEffectSummary(client, actor.id as string);
   return {
     code: actor.code, name: actor.name, actorType: normalizeEnum(actor.actorType as string), species: actor.species,
     className: actor.className, role: actor.role, description: actor.description, level: actor.level, xp: actor.xp,
     gold: actor.gold, metadata: actor.metadata, appearance: actor.appearance, personality: actor.personality,
     status: normalizeEnum(actor.status as string), ...mechanicalSheet, inventorySummary,
+    activeEffectSummary,
   };
 }
 
@@ -242,6 +248,7 @@ export const prismaGptRepository: GptRepository = {
   async startGame(input: StartGameInput) {
     return executeIdempotent(input.idempotencyKey, 'game.start', input, async (transaction) => {
       const officialRulesetVersion = await ensureCoreV1RulesetVersion(transaction);
+      await ensureCoreV1EffectRulesVersion(transaction);
       const existingPlayer = await transaction.player.findUnique({ where: { slug: input.playerRef } });
       if (input.playerMode === 'create' && existingPlayer !== null) throw new ConflictError('Player already exists');
       if (input.playerMode === 'reuse' && existingPlayer === null) throw new NotFoundError('Player');
@@ -305,49 +312,73 @@ export const prismaGptRepository: GptRepository = {
         primaryAttributes: input.protagonist.primaryAttributes,
       });
 
-      const resolvedPackages: Array<{
+      type ResolvedInitialPackage = {
         definition: PublishedContent;
         link: StartGameInput['initialContentPackages'][number]['protagonistLink'];
         scope: 'world' | 'campaign';
-      }> = [];
-      for (const item of input.initialContentPackages) {
-        const definitionInput = item.definition;
-        const type = definitionInput.contentType.toUpperCase() as ContentType;
-        if (definitionInput.mode === 'reuse') {
-          const definition = await transaction.contentDefinition.findFirst({
-            where: { worldId: world.id, campaignId: null, contentType: type, code: definitionInput.code },
-            include: publishedContentInclude,
-          });
-          if (definition === null) throw new NotFoundError('Content');
-          const version = definition.versions[0];
-          if (definition.status !== ContentStatus.ACTIVE || version === undefined) throw new ConflictError('Reused content is not an active publication');
-          if (version.rulesetVersionId !== campaign.rulesetVersionId) throw new ConflictError('Reused content is not compatible with the Campaign ruleset');
-          resolvedPackages.push({ definition, link: item.protagonistLink, scope: definitionInput.scope });
-          continue;
-        }
+      };
+      const resolvedByIndex: Array<ResolvedInitialPackage | undefined> = Array.from(
+        { length: input.initialContentPackages.length },
+        () => undefined,
+      );
+      let pendingIndexes = input.initialContentPackages.map((_, index) => index);
+      while (pendingIndexes.length > 0) {
+        const deferred: number[] = [];
+        let progress = false;
+        for (const index of pendingIndexes) {
+          const item = input.initialContentPackages[index];
+          if (item === undefined) throw new ConflictError('Initial content package ordering is invalid');
+          const definitionInput = item.definition;
+          const type = definitionInput.contentType.toUpperCase() as ContentType;
+          if (definitionInput.mode === 'reuse') {
+            const definition = await transaction.contentDefinition.findFirst({
+              where: { worldId: world.id, campaignId: null, contentType: type, code: definitionInput.code },
+              include: publishedContentInclude,
+            });
+            if (definition === null) throw new NotFoundError('Content');
+            const version = definition.versions[0];
+            if (definition.status !== ContentStatus.ACTIVE || version === undefined) throw new ConflictError('Reused content is not an active publication');
+            if (version.rulesetVersionId !== campaign.rulesetVersionId) throw new ConflictError('Reused content is not compatible with the Campaign ruleset');
+            resolvedByIndex[index] = { definition, link: item.protagonistLink, scope: definitionInput.scope };
+            progress = true;
+            continue;
+          }
 
-        const campaignId = definitionInput.scope === 'campaign' ? campaign.id : null;
-        const exact = await transaction.contentDefinition.findFirst({
-          where: { worldId: world.id, campaignId, contentType: type, code: definitionInput.code },
-        });
-        if (exact !== null) throw new ConflictError('Content definition already exists');
-        if (definitionInput.scope === 'campaign') {
-          const global = await transaction.contentDefinition.findFirst({
-            where: { worldId: world.id, campaignId: null, contentType: type, code: definitionInput.code },
+          const campaignId = definitionInput.scope === 'campaign' ? campaign.id : null;
+          const exact = await transaction.contentDefinition.findFirst({
+            where: { worldId: world.id, campaignId, contentType: type, code: definitionInput.code },
           });
-          if (global !== null && definitionInput.overridesWorldDefinition !== true) throw new ConflictError('Campaign content requires an explicit World override');
-          if (global === null && definitionInput.overridesWorldDefinition === true) throw new ConflictError('World content to override was not found');
+          if (exact !== null) throw new ConflictError('Content definition already exists');
+          if (definitionInput.scope === 'campaign') {
+            const global = await transaction.contentDefinition.findFirst({
+              where: { worldId: world.id, campaignId: null, contentType: type, code: definitionInput.code },
+            });
+            if (global !== null && definitionInput.overridesWorldDefinition !== true) throw new ConflictError('Campaign content requires an explicit World override');
+            if (global === null && definitionInput.overridesWorldDefinition === true) throw new ConflictError('World content to override was not found');
+          }
+          try {
+            const definition = await publishContentVersion(transaction, {
+              worldId: world.id, campaignId, code: definitionInput.code, contentType: type,
+              name: definitionInput.name ?? '', description: definitionInput.description ?? null,
+              profile: definitionInput.profile, inventorySpec: definitionInput.inventorySpec,
+              presentation: definitionInput.presentation ?? {},
+              tags: definitionInput.tags ?? [], status: ContentStatus.ACTIVE,
+              metadata: definitionInput.metadata ?? {},
+            });
+            resolvedByIndex[index] = { definition, link: item.protagonistLink, scope: definitionInput.scope };
+            progress = true;
+          } catch (error) {
+            if (!(error instanceof ContentEffectBindingResolutionError)) throw error;
+            deferred.push(index);
+          }
         }
-        const definition = await publishContentVersion(transaction, {
-          worldId: world.id, campaignId, code: definitionInput.code, contentType: type,
-          name: definitionInput.name ?? '', description: definitionInput.description ?? null,
-          profile: definitionInput.profile, inventorySpec: definitionInput.inventorySpec,
-          presentation: definitionInput.presentation ?? {},
-          tags: definitionInput.tags ?? [], status: ContentStatus.ACTIVE,
-          metadata: definitionInput.metadata ?? {},
-        });
-        resolvedPackages.push({ definition, link: item.protagonistLink, scope: definitionInput.scope });
+        if (!progress) throw new ConflictError('Initial content effect dependencies are missing or cyclic');
+        pendingIndexes = deferred;
       }
+      const resolvedPackages = resolvedByIndex.map((item) => {
+        if (item === undefined) throw new ConflictError('Initial content package was not resolved');
+        return item;
+      });
 
       const linkedKnown = new Set(resolvedPackages.filter((item) => ['known', 'mastered'].includes(item.link?.state ?? ''))
         .map((item) => `${normalizeEnum(item.definition.contentType)}:${item.definition.code}`));
@@ -609,5 +640,12 @@ export const prismaGptRepository: GptRepository = {
       });
       return { campaignRef: campaign.code, actorRef: actor?.code ?? null, eventType: event.eventType, title: event.title, payload: event.payload, createdAt: event.createdAt.toISOString() };
     });
+  },
+
+  async resolveActorEffect(input: ResolveActorEffectInput) {
+    if (input.operation === 'get') return prisma.$transaction((transaction) => getActorEffects(transaction, input));
+    return executeIdempotent(input.idempotencyKey ?? '', `actorEffects.${input.operation}`, input, (transaction) => (
+      resolveActorEffectTransaction(transaction, input, calculateGptRequestHash(input))
+    ));
   },
 };
