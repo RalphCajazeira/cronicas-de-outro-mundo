@@ -1694,6 +1694,98 @@ describe('core-v1 reactions, casting, movement, combos and plans', () => {
       .toBe(true);
   });
 
+  it('preserves new_intent_required even when processingLimit is selected', () => {
+    const fixture = mandatoryAndOptionalInvalidation('mandatory_first');
+    const encounter = deferActionPastBatchAdvance(fixture.encounter, fixture.optionalActionRef);
+    const firstIntent = intent({
+      intentRef: 'planner-first', sourceActorRef: fixture.plannerActorRef,
+      requestedTargetRefs: ['ally'],
+    });
+    const secondIntent = { ...firstIntent, intentRef: 'planner-followup' };
+    const result = expectOk(applyCoreV1EncounterActionPlan({
+      encounter,
+      plan: {
+        planRef: 'plan-mandatory-stop-limited', actorRef: fixture.plannerActorRef,
+        expectedStateVersion: encounter.stateVersion,
+        intents: [firstIntent, secondIntent], stopConditions: ['processingLimit'],
+      },
+      definitions: {
+        [firstIntent.intentRef]: definition(),
+        [secondIntent.intentRef]: definition(),
+      },
+      targetingContexts: {
+        [firstIntent.intentRef]: {
+          candidates: candidates(encounter, {}, fixture.plannerActorRef),
+        },
+        [secondIntent.intentRef]: {
+          candidates: candidates(encounter, {}, fixture.plannerActorRef),
+        },
+      },
+      runtime,
+    }));
+    expect(result.stopReason).toBe('new_intent_required');
+    expect(result.continuationRequired).toBe(true);
+    expect(result.encounterAfter.actionPlans.map((plan) => plan.planRef)).toContain('plan-mandatory-stop-limited');
+  });
+
+  it('preserves new intent-required semantics when both processingLimit and newPlayerIntentRequired are selected', () => {
+    const fixture = mandatoryAndOptionalInvalidation('mandatory_first');
+    const encounter = deferActionPastBatchAdvance(fixture.encounter, fixture.optionalActionRef);
+    const firstIntent = intent({
+      intentRef: 'planner-first', sourceActorRef: fixture.plannerActorRef,
+      requestedTargetRefs: ['ally'],
+    });
+    const secondIntent = { ...firstIntent, intentRef: 'planner-followup' };
+    const result = expectOk(applyCoreV1EncounterActionPlan({
+      encounter,
+      plan: {
+        planRef: 'plan-mandatory-stop-combined', actorRef: fixture.plannerActorRef,
+        expectedStateVersion: encounter.stateVersion,
+        intents: [firstIntent, secondIntent], stopConditions: ['processingLimit', 'newPlayerIntentRequired'],
+      },
+      definitions: {
+        [firstIntent.intentRef]: definition(),
+        [secondIntent.intentRef]: definition(),
+      },
+      targetingContexts: {
+        [firstIntent.intentRef]: {
+          candidates: candidates(encounter, {}, fixture.plannerActorRef),
+        },
+        [secondIntent.intentRef]: {
+          candidates: candidates(encounter, {}, fixture.plannerActorRef),
+        },
+      },
+      runtime,
+    }));
+    expect(result.stopReason).toBe('new_intent_required');
+    expect(result.continuationRequired).toBe(true);
+    expect(result.encounterAfter.actionPlans.map((plan) => plan.planRef)).toContain('plan-mandatory-stop-combined');
+  });
+
+  it('preserves reaction_required when reaction policy requires an unavailable response', () => {
+    const state = readyEncounter([
+      participant('hero', 'party'),
+      participant('enemy', 'hostile'),
+    ]);
+    const reactIntent = intent({
+      intentRef: 'reaction-intent', sourceActorRef: 'hero',
+      reactionPolicy: { mode: 'require', preferredReaction: 'block', allowCounterAttack: false },
+    });
+    const result = expectOk(applyCoreV1EncounterActionPlan({
+      encounter: state,
+      plan: {
+        planRef: 'plan-reaction', actorRef: 'hero',
+        expectedStateVersion: state.stateVersion,
+        intents: [reactIntent], stopConditions: ['processingLimit'],
+      },
+      definitions: { [reactIntent.intentRef]: definition() },
+      targetingContexts: { [reactIntent.intentRef]: { candidates: candidates(state) } },
+      runtime,
+    }));
+    expect(result.stopReason).toBe('reaction_required');
+    expect(result.continuationRequired).toBe(true);
+  });
+
   it('propagates encounter completion for a terminally invalidated plan without requesting continuation', () => {
     const state = readyEncounter([
       participant('hero', 'party'),

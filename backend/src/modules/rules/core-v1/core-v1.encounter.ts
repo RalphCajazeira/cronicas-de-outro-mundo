@@ -2106,7 +2106,7 @@ function planStopReason(
   if (conditions.has('reactionRequired') && report.stopReason === 'reaction_required') return 'reaction_required';
   if (conditions.has('newThreatDetected') && before.participants.length !== report.encounterAfter.participants.length) return 'new_threat_detected';
   if (conditions.has('stateVersionChanged') && before.stateVersion !== report.encounterAfter.stateVersion) return 'state_version_changed';
-  if (conditions.has('processingLimit') && report.continuationRequired) return 'processing_limit';
+  if (conditions.has('processingLimit') && report.stopReason === 'processing_limit') return 'processing_limit';
   if (conditions.has('newPlayerIntentRequired') && report.stopReason === 'new_intent_required') return 'new_intent_required';
   if (report.stopReason !== null && [
     'processing_limit', 'reaction_required', 'new_intent_required',
