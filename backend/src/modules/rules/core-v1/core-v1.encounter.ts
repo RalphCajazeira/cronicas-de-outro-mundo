@@ -2054,8 +2054,7 @@ export function processCoreV1EncounterBatch(
     reports.push(processed.value);
     current = processed.value.encounterAfter;
     stopReason = mergeEncounterBatchStopReason(stopReason, processed.value.stopReason);
-    if (isTerminalStopReason(processed.value.stopReason)
-      || processed.value.stopReason === 'reaction_required') {
+    if (isTerminalStopReason(stopReason) || isMandatoryStopReason(stopReason)) {
       break;
     }
   }
