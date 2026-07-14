@@ -2051,7 +2051,10 @@ function planStopReason(
   if (conditions.has('stateVersionChanged') && before.stateVersion !== report.encounterAfter.stateVersion) return 'state_version_changed';
   if (conditions.has('processingLimit') && report.continuationRequired) return 'processing_limit';
   if (conditions.has('newPlayerIntentRequired') && report.stopReason === 'new_intent_required') return 'new_intent_required';
-  return report.stopReason;
+  if (report.stopReason !== null && [
+    'processing_limit', 'new_intent_required', 'encounter_completed', 'encounter_failed',
+  ].includes(report.stopReason)) return report.stopReason;
+  return null;
 }
 
 function refreshPlanTargetingContext(
