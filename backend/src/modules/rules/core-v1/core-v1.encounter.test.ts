@@ -298,6 +298,60 @@ function remainingExecutionEvents(state: CoreV1EncounterState, actionRef: string
     && ['action_effect', 'movement_effect', 'channel_pulse', 'upkeep_due'].includes(event.type));
 }
 
+function mandatoryAndOptionalInvalidation(
+  order: 'mandatory_first' | 'optional_first',
+) {
+  const mandatorySourceRef = order === 'mandatory_first' ? 'z-hero' : 'a-hero';
+  const optionalSourceRef = order === 'mandatory_first' ? 'a-enemy' : 'z-enemy';
+  const optionalTargetRef = 'target-party';
+  const state = readyEncounter([
+    participant(mandatorySourceRef, 'party'),
+    participant('ally', 'party'),
+    participant(optionalTargetRef, 'party'),
+    participant(optionalSourceRef, 'hostile'),
+    participant('planner', 'hostile'),
+  ]);
+  const mandatoryAction = expectOk(compileCoreV1EncounterAction({
+    encounter: state,
+    intent: intent({
+      intentRef: 'mandatory-action', sourceActorRef: mandatorySourceRef,
+      requestedTargetRefs: [optionalSourceRef],
+    }),
+    definition: definition(),
+    targetingContext: { candidates: candidates(state, {}, mandatorySourceRef) },
+  }));
+  const mandatoryScheduled = expectOk(scheduleCoreV1EncounterAction(state, mandatoryAction));
+  const mandatoryStarted = expectOk(processNextCoreV1EncounterEvent(mandatoryScheduled, runtime));
+  const optionalAction = expectOk(compileCoreV1EncounterAction({
+    encounter: mandatoryStarted.encounterAfter,
+    intent: intent({
+      intentRef: 'optional-action', sourceActorRef: optionalSourceRef,
+      requestedTargetRefs: [optionalTargetRef],
+    }),
+    definition: definition(),
+    targetingContext: { candidates: candidates(mandatoryStarted.encounterAfter, {}, optionalSourceRef) },
+  }));
+  const optionalScheduled = expectOk(scheduleCoreV1EncounterAction(
+    mandatoryStarted.encounterAfter,
+    optionalAction,
+  ));
+  const optionalStarted = expectOk(processNextCoreV1EncounterEvent(optionalScheduled, runtime));
+  const encounter = {
+    ...optionalStarted.encounterAfter,
+    participants: optionalStarted.encounterAfter.participants.map((entry) => (
+      entry.actorRef === mandatorySourceRef || entry.actorRef === optionalTargetRef
+        ? { ...entry, combatState: 'removed' as const }
+        : entry
+    )),
+  };
+  return {
+    encounter,
+    mandatoryActionRef: mandatoryAction.actionRef,
+    optionalActionRef: optionalAction.actionRef,
+    plannerActorRef: 'planner',
+  };
+}
+
 describe('core-v1 encounter state and initiative', () => {
   it('creates an empty pure encounter with versioned identity and defensive copies', () => {
     const input = encounterInput([]);
@@ -798,6 +852,52 @@ describe('core-v1 action compile, timeline and effects composition', () => {
     expect(batch.stopReason).toBe('encounter_completed');
     expect(batch.continuationRequired).toBe(false);
     expect(batch.encounterAfter.completionCandidate).toBe('hostile_victory_candidate');
+  });
+
+  it.each([
+    ['mandatory_first', ['STATE_CHANGED', 'NO_VALID_TARGET']],
+    ['optional_first', ['NO_VALID_TARGET', 'STATE_CHANGED']],
+  ] as const)('preserves new_intent_required across %s batch ordering', (order, reasons) => {
+    const fixture = mandatoryAndOptionalInvalidation(order);
+    const batch = expectOk(processCoreV1EncounterBatch(fixture.encounter, runtime));
+    expect(batch.invalidatedEvents.map((entry) => entry.reason)).toEqual(reasons);
+    expect(batch.invalidatedEvents.map((entry) => entry.event.actionRef)).toEqual(order === 'mandatory_first'
+      ? [fixture.mandatoryActionRef, fixture.optionalActionRef]
+      : [fixture.optionalActionRef, fixture.mandatoryActionRef]);
+    expect(batch.stopReason).toBe('new_intent_required');
+    expect(batch.continuationRequired).toBe(true);
+  });
+
+  it('keeps processing_limit authoritative after an optional target loss', () => {
+    const state = readyEncounter([
+      participant('hero', 'party'),
+      participant('ally', 'party'),
+      participant('enemy', 'hostile'),
+      participant('enemy-two', 'hostile'),
+    ]);
+    const action = expectOk(compileCoreV1EncounterAction({
+      encounter: state,
+      intent: intent(),
+      definition: definition(),
+      targetingContext: { candidates: candidates(state) },
+    }));
+    const scheduled = expectOk(scheduleCoreV1EncounterAction(state, action));
+    const started = expectOk(processNextCoreV1EncounterEvent(scheduled, runtime));
+    const delayed = {
+      ...started.encounterAfter,
+      participants: started.encounterAfter.participants.map((entry) => entry.actorRef === 'enemy'
+        ? { ...entry, combatState: 'removed' as const }
+        : entry),
+      scheduledEvents: started.encounterAfter.scheduledEvents.map((event) => (
+        event.actionRef === action.actionRef && event.type === 'actor_ready'
+          ? { ...event, timelineEvent: { ...event.timelineEvent, tick: started.encounterAfter.currentTick + 5001n } }
+          : event
+      )).sort((left, right) => compareTimelineEvents(left.timelineEvent, right.timelineEvent)),
+    };
+    const batch = expectOk(processCoreV1EncounterBatch(delayed, runtime));
+    expect(batch.invalidatedEvents[0]?.reason).toBe('NO_VALID_TARGET');
+    expect(batch.stopReason).toBe('processing_limit');
+    expect(batch.continuationRequired).toBe(true);
   });
 
   it('applies single-target damage and action cost once with deterministic rolls', () => {
@@ -1456,6 +1556,7 @@ describe('core-v1 reactions, casting, movement, combos and plans', () => {
     const continued = planAfterUntouchedTargetLoss();
     expect(continued.stopReason).toBe('plan_completed');
     expect(continued.stopReason).not.toBe('new_intent_required');
+    expect(continued.continuationRequired).toBe(false);
     expect(continued.effectResolutions.some((entry) => entry.targetBefore.actorRef === 'enemy-two')).toBe(true);
   });
 
@@ -1466,6 +1567,45 @@ describe('core-v1 reactions, casting, movement, combos and plans', () => {
     expect(result.continuationRequired).toBe(true);
     expect(result.resolvedActions).not.toContain('encounter-test-action-2');
     expect(result.encounterAfter.actionPlans.map((plan) => plan.planRef)).toContain('plan-source');
+  });
+
+  it('stops an unconditional plan when a later optional reason follows new_intent_required', () => {
+    const fixture = mandatoryAndOptionalInvalidation('mandatory_first');
+    const firstIntent = intent({
+      intentRef: 'planner-first', sourceActorRef: fixture.plannerActorRef,
+      requestedTargetRefs: ['ally'],
+    });
+    const secondIntent = { ...firstIntent, intentRef: 'planner-followup' };
+    const result = expectOk(applyCoreV1EncounterActionPlan({
+      encounter: fixture.encounter,
+      plan: {
+        planRef: 'plan-mandatory-stop', actorRef: fixture.plannerActorRef,
+        expectedStateVersion: fixture.encounter.stateVersion,
+        intents: [firstIntent, secondIntent], stopConditions: [],
+      },
+      definitions: {
+        [firstIntent.intentRef]: definition(),
+        [secondIntent.intentRef]: definition(),
+      },
+      targetingContexts: {
+        [firstIntent.intentRef]: {
+          candidates: candidates(fixture.encounter, {}, fixture.plannerActorRef),
+        },
+        [secondIntent.intentRef]: {
+          candidates: candidates(fixture.encounter, {}, fixture.plannerActorRef),
+        },
+      },
+      runtime,
+    }));
+    expect(result.invalidatedEvents.map((entry) => entry.reason))
+      .toEqual(['STATE_CHANGED', 'NO_VALID_TARGET']);
+    expect(result.stopReason).toBe('new_intent_required');
+    expect(result.stopReason).not.toBe('plan_completed');
+    expect(result.continuationRequired).toBe(true);
+    expect(result.encounterAfter.actionSequence).toBe(fixture.encounter.actionSequence + 1);
+    expect(result.encounterAfter.actionPlans.map((plan) => plan.planRef)).toContain('plan-mandatory-stop');
+    expect(result.encounterAfter.activeActions.some((action) => action.intentRef === secondIntent.intentRef))
+      .toBe(false);
   });
 
   it('propagates encounter completion for a terminally invalidated plan without requesting continuation', () => {

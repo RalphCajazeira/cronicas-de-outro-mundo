@@ -1514,13 +1514,36 @@ function stopReasonForInvalidEvent(
   return promoteEncounterCompletion(encounter, stopReason);
 }
 
+function isTerminalStopReason(stopReason: CoreV1EncounterStopReason | null): boolean {
+  return stopReason === 'encounter_completed' || stopReason === 'encounter_failed';
+}
+
+function isMandatoryStopReason(stopReason: CoreV1EncounterStopReason | null): boolean {
+  return stopReason === 'processing_limit'
+    || stopReason === 'reaction_required'
+    || stopReason === 'new_intent_required';
+}
+
+function mergeEncounterBatchStopReason(
+  current: CoreV1EncounterStopReason | null,
+  incoming: CoreV1EncounterStopReason | null,
+): CoreV1EncounterStopReason | null {
+  if (incoming === null) return current;
+  if (isTerminalStopReason(incoming)) return incoming;
+  if (isTerminalStopReason(current)) return current;
+  if (isMandatoryStopReason(incoming)) return incoming;
+  if (isMandatoryStopReason(current)) return current;
+  return incoming;
+}
+
 function batchContinuationRequired(
   stopReason: CoreV1EncounterStopReason | null,
   technicalLimit: boolean,
   reports: readonly CoreV1EncounterBatchResult[],
 ): boolean {
-  if (stopReason === 'encounter_completed' || stopReason === 'encounter_failed') return false;
-  return technicalLimit || reports.some((report) => report.continuationRequired);
+  if (isTerminalStopReason(stopReason)) return false;
+  if (technicalLimit || isMandatoryStopReason(stopReason)) return true;
+  return reports.some((report) => report.continuationRequired);
 }
 
 function removeEvents(
@@ -2021,7 +2044,7 @@ export function processCoreV1EncounterBatch(
     if (nextTick === undefined) break;
     if (nextTick - startTick > CORE_V1_MAX_ENCOUNTER_BATCH_ADVANCE
       || nextTick - startTick > CORE_V1_MAX_PROCESSING_ADVANCE) {
-      stopReason = 'processing_limit';
+      stopReason = mergeEncounterBatchStopReason(stopReason, 'processing_limit');
       break;
     }
     const processed = processNextCoreV1EncounterEvent(current, runtime);
@@ -2030,19 +2053,17 @@ export function processCoreV1EncounterBatch(
       && processed.value.invalidatedEvents.length === 0) break;
     reports.push(processed.value);
     current = processed.value.encounterAfter;
-    if (processed.value.stopReason === 'encounter_completed'
-      || processed.value.stopReason === 'encounter_failed'
+    stopReason = mergeEncounterBatchStopReason(stopReason, processed.value.stopReason);
+    if (isTerminalStopReason(processed.value.stopReason)
       || processed.value.stopReason === 'reaction_required') {
-      stopReason = processed.value.stopReason;
       break;
     }
-    if (processed.value.stopReason !== null) stopReason = processed.value.stopReason;
   }
   const technicalLimit = current.scheduledEvents.length > 0
     && (reports.length >= CORE_V1_MAX_ENCOUNTER_BATCH_EVENTS
       || reports.length >= CORE_V1_MAX_PROCESSING_EVENTS
       || (current.scheduledEvents[0]?.timelineEvent.tick ?? current.currentTick) - startTick > CORE_V1_MAX_ENCOUNTER_BATCH_ADVANCE);
-  if (technicalLimit) stopReason = 'processing_limit';
+  if (technicalLimit) stopReason = mergeEncounterBatchStopReason(stopReason, 'processing_limit');
   return success(mergeBatchReports(
     encounter.value,
     current,
@@ -2089,7 +2110,8 @@ function planStopReason(
   if (conditions.has('processingLimit') && report.continuationRequired) return 'processing_limit';
   if (conditions.has('newPlayerIntentRequired') && report.stopReason === 'new_intent_required') return 'new_intent_required';
   if (report.stopReason !== null && [
-    'processing_limit', 'new_intent_required', 'encounter_completed', 'encounter_failed',
+    'processing_limit', 'reaction_required', 'new_intent_required',
+    'encounter_completed', 'encounter_failed',
   ].includes(report.stopReason)) return report.stopReason;
   return null;
 }
@@ -2196,13 +2218,14 @@ export function applyCoreV1EncounterActionPlan(
     }
   }
   const completedActions = reports.flatMap((report) => report.resolvedActions).length;
-  const continuationRequired = stopReason === 'encounter_completed' || stopReason === 'encounter_failed'
+  if (stopReason === null) stopReason = 'plan_completed';
+  const continuationRequired = stopReason === 'plan_completed'
+    || stopReason === 'encounter_completed' || stopReason === 'encounter_failed'
     ? false
     : stopReason === 'processing_limit'
       || stopReason === 'new_intent_required'
       || stopReason === 'reaction_required'
       || completedActions < input.plan.intents.length;
-  if (stopReason === null) stopReason = 'plan_completed';
   current = {
     ...current,
     actionPlans: stopReason === 'plan_completed'
