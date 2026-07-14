@@ -10,6 +10,10 @@ import { ensureCoreV1InventoryRulesVersion } from '../src/modules/rules/inventor
 import { ensureCoreV1EffectRulesVersion } from '../src/modules/rules/effect-rules.registry.js';
 import { ensureCoreV1RulesetVersion } from '../src/modules/rules/ruleset.registry.js';
 import { createAdminUrl, resolveTestDatabaseConfig } from '../tests/support/test-database.js';
+import {
+  assertOnlyExpectedEncounterPartialIndexDiff,
+  type EncounterPartialIndexMetadata,
+} from './encounter-partial-index-diff.js';
 
 const { Client } = pg;
 
@@ -19,6 +23,58 @@ function runNpm(args: string[], environment: NodeJS.ProcessEnv): void {
   const result = spawnSync(process.execPath, [npmCli, ...args], { env: environment, stdio: 'inherit' });
   if (result.error !== undefined) throw new Error('Unable to start integration test command');
   if (result.status !== 0) process.exit(result.status ?? 1);
+}
+
+async function verifySchemaDiffWithEncounterPartialIndex(
+  environment: NodeJS.ProcessEnv,
+  databaseUrl: URL,
+): Promise<void> {
+  const npmCli = process.env.npm_execpath;
+  if (npmCli === undefined) throw new Error('Unable to locate npm CLI');
+  const result = spawnSync(process.execPath, [npmCli,
+    'exec', '--', 'prisma', 'migrate', 'diff', '--from-config-datasource',
+    '--to-schema=prisma/schema.prisma', '--script',
+  ], { env: environment, encoding: 'utf8' });
+  if (result.error !== undefined || result.status !== 0) throw new Error('Unable to verify integration schema diff');
+  const client = new Client({ connectionString: databaseUrl.toString() });
+  await client.connect();
+  let metadata: EncounterPartialIndexMetadata;
+  try {
+    const rows = await client.query<EncounterPartialIndexMetadata>(`
+      SELECT
+        index_relation.relname AS "indexName",
+        table_relation.relname AS "tableName",
+        index_data.indisunique AS "isUnique",
+        index_data.indisvalid AS "isValid",
+        access_method.amname AS "accessMethod",
+        ARRAY(
+          SELECT attribute.attname
+          FROM unnest(index_data.indkey) WITH ORDINALITY AS key_column(attnum, position)
+          JOIN pg_attribute attribute
+            ON attribute.attrelid = table_relation.oid AND attribute.attnum = key_column.attnum
+          WHERE key_column.position <= index_data.indnkeyatts
+          ORDER BY key_column.position
+        )::text[] AS "columnNames",
+        CASE WHEN (index_data.indoption[0]::integer & 1) = 1 THEN 'DESC' ELSE 'ASC' END AS direction,
+        pg_get_expr(index_data.indpred, index_data.indrelid) AS predicate,
+        pg_get_indexdef(index_relation.oid) AS "indexDefinition"
+      FROM pg_index index_data
+      JOIN pg_class index_relation ON index_relation.oid = index_data.indexrelid
+      JOIN pg_class table_relation ON table_relation.oid = index_data.indrelid
+      JOIN pg_namespace namespace ON namespace.oid = table_relation.relnamespace
+      JOIN pg_am access_method ON access_method.oid = index_relation.relam
+      WHERE namespace.nspname = 'public'
+        AND index_relation.relname = 'Encounter_one_open_per_campaign_key'
+    `);
+    if (rows.rows.length !== 1 || rows.rows[0] === undefined) {
+      throw new Error('Encounter partial index metadata is missing or ambiguous');
+    }
+    metadata = rows.rows[0];
+  } finally {
+    await client.end();
+  }
+  assertOnlyExpectedEncounterPartialIndexDiff(result.stdout, metadata);
+  console.info('Schema diff contains only the reviewed SQL-only encounter partial index');
 }
 
 async function recreateTestDatabase(adminUrl: URL): Promise<void> {
@@ -400,10 +456,7 @@ async function main(): Promise<void> {
 
   runNpm(['exec', '--', 'prisma', 'migrate', 'deploy'], environment);
   runNpm(['exec', '--', 'prisma', 'migrate', 'status'], environment);
-  runNpm([
-    'exec', '--', 'prisma', 'migrate', 'diff', '--from-config-datasource',
-    '--to-schema=prisma/schema.prisma', '--exit-code',
-  ], environment);
+  await verifySchemaDiffWithEncounterPartialIndex(environment, config.databaseUrl);
   await verifyRulesetRegistryTransactions(config.databaseUrl);
   await verifyContentProfileRegistryTransactions(config.databaseUrl);
   await verifyInventoryRulesRegistryTransactions(config.databaseUrl);

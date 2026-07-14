@@ -104,3 +104,16 @@ Checks cobrem hashes, versões, ticks, stacks, payloads JSON, roll/chance e coer
 Integração recria exclusivamente `localhost:5432/game_gpt_test`, testa a precondition sem alteração de dados, aplica migrations desde zero, exige diff vazio, valida registry concorrente/rollback, executa seed determinístico e cobre bindings, effects, rolls, idempotência, recursos e consumíveis. Nenhum banco remoto foi acessado.
 
 Status: implementada e validada na Fase 1J; revisão e integração rastreadas pelo PR correspondente
+
+## Fase 1L-A — persistência mínima de encontros
+
+Models:
+
+- `Encounter`: identidade por Campaign, ruleset, lifecycle, versão/tick, snapshot interno schema 1 e hash SHA-256;
+- `EncounterParticipant`: vínculo imutável entre `actorRef` e Actor persistido ou entidade efêmera fechada, com versões iniciais para detecção futura de drift;
+- `EncounterOperation`: transições mutantes confirmadas, append-only, uma por `IdempotencyRecord` e por próxima versão;
+- `EncounterRoll`: cada entrada aleatória consumida, append-only e ligada simultaneamente ao Encounter e à operação.
+
+A migration `20260714120000_add_encounter_persistence` é incremental, aditiva e sem backfill. Checks cobrem versões, ticks, schema/tamanho do snapshot, hashes, bindings e ordinais; FKs usam delete restrito. Um índice único parcial SQL permite somente um lifecycle aberto por Campaign, pois o filtro `IN` não é representável no partial index declarativo do Prisma 7.8. As quatro tabelas têm RLS sem policies e revogações condicionais de `anon`/`authenticated`.
+
+Status: implementada localmente na Fase 1L-A; banco remoto não acessado

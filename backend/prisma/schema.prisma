@@ -148,6 +148,71 @@ enum EffectRollKind {
   CONCENTRATION
 }
 
+enum EncounterLifecycleStatus {
+  AWAITING_INTENT
+  AWAITING_REACTION
+  PROCESSING_PAUSED
+  COMPLETION_PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum EncounterStopReason {
+  PLAN_COMPLETED
+  ACTOR_INCAPACITATED
+  HOSTILE_BECAME_READY
+  TARGET_SET_CHANGED
+  RESOURCE_BELOW_REQUIRED
+  ZONE_CHANGED
+  NEW_THREAT_DETECTED
+  STATE_VERSION_CHANGED
+  PROCESSING_LIMIT
+  NO_VALID_TARGET
+  REACTION_REQUIRED
+  NEW_INTENT_REQUIRED
+  ENCOUNTER_COMPLETED
+  ENCOUNTER_FAILED
+}
+
+enum EncounterCompletionCandidate {
+  PARTY_VICTORY_CANDIDATE
+  HOSTILE_VICTORY_CANDIDATE
+  STALEMATE_CANDIDATE
+  CANCELLED
+}
+
+enum EncounterParticipantBindingKind {
+  PERSISTED_ACTOR
+  EPHEMERAL
+}
+
+enum EncounterEphemeralKind {
+  SUMMON
+  PROJECTION
+  EPHEMERAL_CREATURE
+}
+
+enum EncounterOperationKind {
+  CREATE
+  SUBMIT_INTENT
+  RESOLVE_REACTION
+  CONTINUE
+  CONFIRM_COMPLETION
+  CANCEL
+}
+
+enum EncounterRollKind {
+  TIE_BREAK
+  HIT
+  CRITICAL
+  CONCENTRATION
+  BLOCK
+  ACTIVE_DODGE
+  INTERRUPT
+  COUNTER_ATTACK
+}
+
 model Player {
   id          String   @id @default(uuid()) @db.Uuid
   slug        String   @unique
@@ -182,6 +247,7 @@ model RulesetVersion {
   contentVersions        ContentVersion[]
   inventoryRulesVersions InventoryRulesVersion[]
   effectRulesVersions    EffectRulesVersion[]
+  encounters             Encounter[]
 
   @@index([rulesetId])
 }
@@ -224,6 +290,7 @@ model Campaign {
   content            ContentDefinition[]
   events             GameEvent[]
   effectResolutions  EffectResolution[]
+  encounters         Encounter[]
 
   @@unique([worldId, code])
   @@index([rulesetVersionId])
@@ -263,6 +330,7 @@ model Actor {
   targetedActiveEffects     ActiveEffect[]        @relation("ActiveEffectTargetActor")
   sourcedEffectResolutions  EffectResolution[]    @relation("EffectResolutionSourceActor")
   targetedEffectResolutions EffectResolution[]    @relation("EffectResolutionTargetActor")
+  encounterParticipants    EncounterParticipant[]
 
   @@unique([campaignId, code])
   @@index([campaignId, actorType, status])
@@ -611,6 +679,97 @@ model IdempotencyRecord {
   response    Json     @default("{}")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  encounterOperation EncounterOperation?
 
   @@index([createdAt])
+}
+
+model Encounter {
+  id                      String                       @id @default(uuid()) @db.Uuid
+  campaignId              String                       @db.Uuid
+  rulesetVersionId        String                       @db.Uuid
+  encounterRef            String
+  lifecycleStatus         EncounterLifecycleStatus
+  stateVersion            Int
+  currentTick             BigInt
+  stopReason              EncounterStopReason?
+  completionCandidate     EncounterCompletionCandidate?
+  snapshotSchemaVersion   Int                          @default(1)
+  stateSnapshot           Json
+  stateHash               String                       @db.Char(64)
+  createdAt               DateTime                     @default(now())
+  updatedAt               DateTime                     @updatedAt
+  closedAt                DateTime?
+  campaign                Campaign                     @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  rulesetVersion          RulesetVersion               @relation(fields: [rulesetVersionId], references: [id], onDelete: Restrict)
+  participants            EncounterParticipant[]
+  operations              EncounterOperation[]
+  rolls                   EncounterRoll[]
+
+  @@unique([campaignId, encounterRef])
+  @@index([campaignId, lifecycleStatus])
+  @@index([rulesetVersionId])
+}
+
+model EncounterParticipant {
+  id                           String                          @id @default(uuid()) @db.Uuid
+  encounterId                  String                          @db.Uuid
+  actorId                      String?                         @db.Uuid
+  actorRef                     String
+  bindingKind                  EncounterParticipantBindingKind
+  ephemeralKind                EncounterEphemeralKind?
+  initialMechanicsStateVersion Int?
+  initialInventoryStateVersion Int?
+  initialEffectsStateVersion   Int?
+  createdAt                    DateTime                        @default(now())
+  encounter                    Encounter                       @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+  actor                        Actor?                          @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@unique([encounterId, actorRef])
+  @@unique([encounterId, actorId], map: "EncounterParticipant_encounterId_actorId_key", where: { actorId: { not: null } })
+  @@index([actorId])
+}
+
+model EncounterOperation {
+  id                  String                 @id @default(uuid()) @db.Uuid
+  encounterId         String                 @db.Uuid
+  idempotencyRecordId String                 @unique @db.Uuid
+  operation           EncounterOperationKind
+  previousStateVersion Int
+  nextStateVersion    Int
+  inputHash           String                 @db.Char(64)
+  beforeStateHash     String                 @db.Char(64)
+  afterStateHash      String                 @db.Char(64)
+  stopReason          EncounterStopReason?
+  resultSummary       Json
+  createdAt           DateTime               @default(now())
+  encounter           Encounter              @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+  idempotencyRecord   IdempotencyRecord      @relation(fields: [idempotencyRecordId], references: [id], onDelete: Restrict)
+  rolls               EncounterRoll[]
+
+  @@unique([encounterId, nextStateVersion])
+  @@unique([id, encounterId])
+  @@index([encounterId, createdAt])
+}
+
+model EncounterRoll {
+  id                   String              @id @default(uuid()) @db.Uuid
+  encounterId          String              @db.Uuid
+  encounterOperationId String              @db.Uuid
+  rollRef              String
+  kind                 EncounterRollKind
+  ordinal              Int
+  actionRef            String?
+  sourceActorRef        String
+  targetActorRef        String?
+  targetOrdinal        Int?
+  inputHash             String              @db.Char(64)
+  resultSnapshot        Json
+  resultHash            String              @db.Char(64)
+  createdAt             DateTime            @default(now())
+  encounter             Encounter           @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+  encounterOperation    EncounterOperation  @relation(fields: [encounterOperationId, encounterId], references: [id, encounterId], onDelete: Restrict)
+
+  @@unique([encounterId, rollRef])
+  @@index([encounterOperationId, encounterId])
 }

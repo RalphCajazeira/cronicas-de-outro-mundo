@@ -1,0 +1,54 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+
+const sql = readFileSync(new URL(
+  '../../prisma/migrations/20260714120000_add_encounter_persistence/migration.sql',
+  import.meta.url,
+), 'utf8');
+
+describe('Phase 1L-A encounter persistence migration', () => {
+  it('is incremental and additive without a clean-slate guard or data rewrite', () => {
+    expect(sql).not.toMatch(/DO \$clean_slate\$|\bDELETE\s+FROM\b|\bTRUNCATE\b|\bDROP\s+(TABLE|COLUMN|TYPE)\b/i);
+    expect(sql.indexOf('CREATE TABLE "Encounter"')).toBeGreaterThanOrEqual(0);
+    expect(sql).toContain('does not access external databases');
+  });
+
+  it('creates the four models and closed catalogs derived from core-v1', () => {
+    for (const table of ['Encounter', 'EncounterParticipant', 'EncounterOperation', 'EncounterRoll']) {
+      expect(sql).toContain(`CREATE TABLE "${table}"`);
+    }
+    for (const enumName of [
+      'EncounterLifecycleStatus', 'EncounterStopReason', 'EncounterCompletionCandidate',
+      'EncounterParticipantBindingKind', 'EncounterEphemeralKind', 'EncounterOperationKind',
+      'EncounterRollKind',
+    ]) expect(sql).toContain(`CREATE TYPE "${enumName}" AS ENUM`);
+    expect(sql).toContain("'TIE_BREAK', 'HIT', 'CRITICAL', 'CONCENTRATION'");
+    expect(sql).toContain("'BLOCK', 'ACTIVE_DODGE', 'INTERRUPT', 'COUNTER_ATTACK'");
+  });
+
+  it('enforces open encounter, participant binding, operation sequence and roll audit rules', () => {
+    for (const value of [
+      'Encounter_one_open_per_campaign_key', 'EncounterParticipant_binding_check',
+      'EncounterParticipant_encounterId_actorId_key', 'EncounterOperation_stateVersionSequence_check',
+      'EncounterOperation_idempotencyRecordId_key', 'EncounterRoll_encounterId_rollRef_key',
+      'Encounter_stateSnapshot_check', 'Encounter_stateHash_check',
+    ]) expect(sql).toContain(value);
+    expect(sql).toContain('octet_length("stateSnapshot"::text) <= 1048576');
+    expect(sql).toContain('ON DELETE RESTRICT');
+    expect(sql).not.toMatch(/ON DELETE CASCADE/);
+  });
+
+  it('makes mappings and audit rows immutable and applies the existing RLS posture', () => {
+    for (const trigger of [
+      'EncounterParticipant_reject_update', 'EncounterParticipant_reject_delete',
+      'EncounterOperation_reject_update', 'EncounterOperation_reject_delete',
+      'EncounterRoll_reject_update', 'EncounterRoll_reject_delete',
+    ]) expect(sql).toContain(trigger);
+    expect(sql).toContain("ARRAY['Encounter', 'EncounterParticipant', 'EncounterOperation', 'EncounterRoll']");
+    expect(sql).toContain('ENABLE ROW LEVEL SECURITY');
+    expect(sql).not.toContain('FORCE ROW LEVEL SECURITY');
+    expect(sql).not.toMatch(/CREATE\s+POLICY/i);
+    expect(sql).toContain("rolname = 'anon'");
+    expect(sql).toContain("rolname = 'authenticated'");
+  });
+});
