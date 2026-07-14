@@ -3,6 +3,7 @@ import {
   applyCoreV1EncounterActionPlan,
   applyCoreV1EncounterIntent,
   calculateSecondaryAttributes,
+  compareTimelineEvents,
   compileCoreV1EncounterAction,
   createCoreV1EmptyEquipmentLoadout,
   createCoreV1EncounterState,
@@ -619,6 +620,83 @@ describe('core-v1 action compile, timeline and effects composition', () => {
     expect(batch.resolvedActions).not.toContain(actionRef);
   });
 
+  it('reports no_valid_target when an untouched target is removed while the encounter stays open', () => {
+    const state = readyEncounter([
+      participant('hero', 'party'),
+      participant('ally', 'party'),
+      participant('enemy', 'hostile'),
+      participant('enemy-two', 'hostile'),
+    ]);
+    const compiled = expectOk(compileCoreV1EncounterAction({
+      encounter: state,
+      intent: intent(),
+      definition: definition(),
+      targetingContext: { candidates: candidates(state) },
+    }));
+    const scheduled = expectOk(scheduleCoreV1EncounterAction(state, compiled));
+    const started = expectOk(processNextCoreV1EncounterEvent(scheduled, runtime));
+    const targetRemoved = {
+      ...started.encounterAfter,
+      participants: started.encounterAfter.participants.map((entry) => entry.actorRef === 'enemy'
+        ? { ...entry, combatState: 'removed' as const }
+        : entry),
+    };
+    const invalidated = expectOk(processNextCoreV1EncounterEvent(targetRemoved, runtime));
+    expect(invalidated.invalidatedEvents[0]?.reason).toBe('NO_VALID_TARGET');
+    expect(invalidated.encounterAfter.activeActions[0]?.state).toBe('invalidated');
+    expect(invalidated.resolvedActions).not.toContain(compiled.actionRef);
+    expect(invalidated.stopReason).toBe('no_valid_target');
+    expect(invalidated.stopReason).not.toBe('new_intent_required');
+    expect(invalidated.encounterAfter.completionCandidate).toBeNull();
+  });
+
+  it('clears intermediate continuation when a later event completes the batch', () => {
+    const state = readyEncounter([
+      participant('a-hero', 'party'),
+      participant('ally', 'party', {
+        resources: {
+          hp: { current: 1, maximum: 100 }, mana: { current: 100, maximum: 100 },
+          sp: { current: 100, maximum: 100 }, customResources: [],
+        },
+      }),
+      participant('z-enemy', 'hostile'),
+    ]);
+    const heroAction = expectOk(compileCoreV1EncounterAction({
+      encounter: state,
+      intent: intent({ intentRef: 'hero-intent', sourceActorRef: 'a-hero', requestedTargetRefs: ['z-enemy'] }),
+      definition: definition(),
+      targetingContext: { candidates: candidates(state, {}, 'a-hero') },
+    }));
+    const heroScheduled = expectOk(scheduleCoreV1EncounterAction(state, heroAction));
+    const heroStarted = expectOk(processNextCoreV1EncounterEvent(heroScheduled, runtime));
+    const enemyAction = expectOk(compileCoreV1EncounterAction({
+      encounter: heroStarted.encounterAfter,
+      intent: intent({ intentRef: 'enemy-intent', sourceActorRef: 'z-enemy', requestedTargetRefs: ['ally'] }),
+      definition: definition(),
+      targetingContext: { candidates: candidates(heroStarted.encounterAfter, {}, 'z-enemy') },
+    }));
+    const enemyScheduled = expectOk(scheduleCoreV1EncounterAction(heroStarted.encounterAfter, enemyAction));
+    const sourceRemoved = {
+      ...enemyScheduled,
+      participants: enemyScheduled.participants.map((entry) => entry.actorRef === 'a-hero'
+        ? { ...entry, combatState: 'removed' as const }
+        : entry),
+      scheduledEvents: enemyScheduled.scheduledEvents.map((event) => event.actionRef === heroAction.actionRef
+        && event.type === 'action_effect'
+        ? { ...event, timelineEvent: { ...event.timelineEvent, tick: enemyScheduled.currentTick } }
+        : event).sort((left, right) => compareTimelineEvents(left.timelineEvent, right.timelineEvent)),
+    };
+    const enemyStarted = expectOk(processNextCoreV1EncounterEvent(sourceRemoved, runtime));
+    const intermediate = expectOk(processNextCoreV1EncounterEvent(enemyStarted.encounterAfter, runtime));
+    expect(intermediate.stopReason).toBe('new_intent_required');
+    expect(intermediate.continuationRequired).toBe(true);
+    const batch = expectOk(processCoreV1EncounterBatch(enemyStarted.encounterAfter, runtime));
+    expect(batch.invalidatedEvents.some((entry) => entry.reason === 'STATE_CHANGED')).toBe(true);
+    expect(batch.stopReason).toBe('encounter_completed');
+    expect(batch.continuationRequired).toBe(false);
+    expect(batch.encounterAfter.completionCandidate).toBe('hostile_victory_candidate');
+  });
+
   it('applies single-target damage and action cost once with deterministic rolls', () => {
     const { state, context } = setup();
     const report = expectOk(applyCoreV1EncounterIntent({
@@ -932,6 +1010,57 @@ describe('core-v1 reactions, casting, movement, combos and plans', () => {
     }));
   }
 
+  function planAfterUntouchedTargetLoss(
+    stopConditions: readonly 'noValidTarget'[] = [],
+  ) {
+    const state = readyEncounter([
+      participant('hero', 'party'),
+      participant('z-ally', 'party'),
+      participant('enemy', 'hostile', {
+        resources: {
+          hp: { current: 1, maximum: 100 }, mana: { current: 100, maximum: 100 },
+          sp: { current: 100, maximum: 100 }, customResources: [],
+        },
+      }),
+      participant('enemy-two', 'hostile'),
+    ]);
+    const auxiliaryIntent = intent({
+      intentRef: 'target-loss-auxiliary', sourceActorRef: 'z-ally', requestedTargetRefs: ['enemy'],
+    });
+    const auxiliaryAction = expectOk(compileCoreV1EncounterAction({
+      encounter: state,
+      intent: auxiliaryIntent,
+      definition: definition(),
+      targetingContext: { candidates: candidates(state, {}, 'z-ally') },
+    }));
+    const scheduled = expectOk(scheduleCoreV1EncounterAction(state, auxiliaryAction));
+    const interleaved = {
+      ...scheduled,
+      scheduledEvents: scheduled.scheduledEvents.map((event) => event.actionRef === auxiliaryAction.actionRef
+        && event.type === 'action_effect'
+        ? { ...event, timelineEvent: { ...event.timelineEvent, tick: scheduled.currentTick } }
+        : event),
+    };
+    const firstIntent = intent({ intentRef: 'target-loss-first', requestedTargetRefs: ['enemy'] });
+    const secondIntent = intent({ intentRef: 'target-loss-second', requestedTargetRefs: ['enemy-two'] });
+    return expectOk(applyCoreV1EncounterActionPlan({
+      encounter: interleaved,
+      plan: {
+        planRef: 'plan-target-loss', actorRef: 'hero', expectedStateVersion: interleaved.stateVersion,
+        intents: [firstIntent, secondIntent], stopConditions,
+      },
+      definitions: {
+        [firstIntent.intentRef]: definition(),
+        [secondIntent.intentRef]: definition(),
+      },
+      targetingContexts: {
+        [firstIntent.intentRef]: { candidates: candidates(interleaved) },
+        [secondIntent.intentRef]: { candidates: candidates(interleaved) },
+      },
+      runtime,
+    }));
+  }
+
   it.each([
     ['block', 1000n, 150n],
     ['active_dodge', 1200n, 250n],
@@ -1212,6 +1341,19 @@ describe('core-v1 reactions, casting, movement, combos and plans', () => {
     expect(targetChanged.stopReason).toBe('target_set_changed');
     expect(targetChanged.resolvedActions).toContain('encounter-test-action-2');
     expect(targetChanged.resolvedActions).not.toContain('encounter-test-action-3');
+  });
+
+  it('keeps untouched target loss conditional for action plans', () => {
+    const stopped = planAfterUntouchedTargetLoss(['noValidTarget']);
+    expect(stopped.stopReason).toBe('no_valid_target');
+    expect(stopped.stopReason).not.toBe('new_intent_required');
+    expect(stopped.invalidatedEvents.some((entry) => entry.reason === 'NO_VALID_TARGET')).toBe(true);
+    expect(stopped.effectResolutions.some((entry) => entry.targetBefore.actorRef === 'enemy-two')).toBe(false);
+
+    const continued = planAfterUntouchedTargetLoss();
+    expect(continued.stopReason).toBe('plan_completed');
+    expect(continued.stopReason).not.toBe('new_intent_required');
+    expect(continued.effectResolutions.some((entry) => entry.targetBefore.actorRef === 'enemy-two')).toBe(true);
   });
 
   it('preserves a terminally invalidated plan and requires a new intent', () => {

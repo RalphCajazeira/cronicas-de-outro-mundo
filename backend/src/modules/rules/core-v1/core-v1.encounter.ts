@@ -1501,6 +1501,28 @@ function promoteEncounterCompletion(
     : stopReason;
 }
 
+function stopReasonForInvalidEvent(
+  encounter: Pick<CoreV1EncounterState, 'completionCandidate'>,
+  invalidReason: 'NO_VALID_TARGET' | 'STATE_CHANGED',
+  terminalState: 'invalidated' | 'resolved' | null,
+): CoreV1EncounterStopReason | null {
+  return promoteEncounterCompletion(
+    encounter,
+    invalidReason === 'NO_VALID_TARGET'
+      ? 'no_valid_target'
+      : terminalState === 'invalidated' ? 'new_intent_required' : null,
+  );
+}
+
+function batchContinuationRequired(
+  stopReason: CoreV1EncounterStopReason | null,
+  technicalLimit: boolean,
+  reports: readonly CoreV1EncounterBatchResult[],
+): boolean {
+  if (stopReason === 'encounter_completed' || stopReason === 'encounter_failed') return false;
+  return technicalLimit || reports.some((report) => report.continuationRequired);
+}
+
 function removeEvents(
   encounter: CoreV1EncounterState,
   refs: ReadonlySet<string>,
@@ -1780,12 +1802,7 @@ export function processNextCoreV1EncounterEvent(
       stateVersion: safeIntegerAdd(next.stateVersion, 1, 'encounter state version'),
       completionCandidate: completionCandidate(next),
     };
-    const stopReason = promoteEncounterCompletion(
-      next,
-      terminalState === 'invalidated'
-        ? 'new_intent_required'
-        : invalidReason === 'NO_VALID_TARGET' ? 'no_valid_target' : null,
-    );
+    const stopReason = stopReasonForInvalidEvent(next, invalidReason, terminalState);
     return success({
       ...report,
       encounterAfter: next,
@@ -2026,7 +2043,7 @@ export function processCoreV1EncounterBatch(
     current,
     reports,
     stopReason,
-    technicalLimit || reports.some((report) => report.continuationRequired),
+    batchContinuationRequired(stopReason, technicalLimit, reports),
   ));
 }
 
