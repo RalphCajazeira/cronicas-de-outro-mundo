@@ -537,6 +537,55 @@ describe('core-v1 action compile, timeline and effects composition', () => {
     expect(readied.resolvedActions).toEqual([]);
   });
 
+  it('keeps a partially applied action invalidated when its source becomes unavailable', () => {
+    const state = readyEncounter([
+      participant('hero', 'party'),
+      participant('enemy', 'hostile'),
+      participant('enemy-two', 'hostile'),
+    ]);
+    const profile: CoreV1MechanicalContentProfile = {
+      ...strikeProfile,
+      code: 'double-strike',
+      name: 'Double Strike',
+      effects: [{
+        type: 'damage',
+        targeting: {
+          type: 'multi_target', rangeBand: 'engaged', maxTargets: 2,
+          damageMultiplierPerTargetBps: [5000, 5000],
+        },
+        damageComponents: [{
+          id: 'double-hit', channel: 'physical', element: null,
+          baseDamage: 8, scaling: 'full', canCrit: true,
+        }],
+      }],
+    };
+    const compiled = expectOk(compileCoreV1EncounterAction({
+      encounter: state,
+      intent: intent({
+        contentRef: { scope: 'world', contentType: 'skill', code: 'double-strike', versionNumber: 1 },
+        requestedTargetRefs: ['enemy', 'enemy-two'],
+      }),
+      definition: definition(profile),
+      targetingContext: { candidates: candidates(state) },
+    }));
+    const scheduled = expectOk(scheduleCoreV1EncounterAction(state, compiled));
+    const started = expectOk(processNextCoreV1EncounterEvent(scheduled, runtime));
+    const firstEffect = expectOk(processNextCoreV1EncounterEvent(started.encounterAfter, runtime));
+    expect(firstEffect.effectResolutions).toHaveLength(1);
+    const sourceRemoved = {
+      ...firstEffect.encounterAfter,
+      participants: firstEffect.encounterAfter.participants.map((entry) => entry.actorRef === 'hero'
+        ? { ...entry, combatState: 'removed' as const }
+        : entry),
+    };
+    const invalidated = expectOk(processNextCoreV1EncounterEvent(sourceRemoved, runtime));
+    expect(invalidated.invalidatedEvents[0]?.reason).toBe('STATE_CHANGED');
+    expect(invalidated.encounterAfter.activeActions[0]?.state).toBe('invalidated');
+    const readied = expectOk(processNextCoreV1EncounterEvent(invalidated.encounterAfter, runtime));
+    expect(readied.encounterAfter.activeActions).toEqual([]);
+    expect(readied.resolvedActions).toEqual([]);
+  });
+
   it('applies single-target damage and action cost once with deterministic rolls', () => {
     const { state, context } = setup();
     const report = expectOk(applyCoreV1EncounterIntent({

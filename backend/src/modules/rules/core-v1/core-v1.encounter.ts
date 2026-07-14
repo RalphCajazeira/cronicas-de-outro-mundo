@@ -1758,7 +1758,9 @@ export function processNextCoreV1EncounterEvent(
       && next.scheduledEvents.some((candidate) => candidate.actionRef === event.actionRef
         && ['action_effect', 'movement_effect', 'channel_pulse', 'upkeep_due'].includes(candidate.type));
     const terminalState = action !== undefined && !hasRemainingExecutionEvent
-      ? action.costApplied ? 'resolved' as const : 'invalidated' as const
+      ? invalidReason === 'STATE_CHANGED' || !action.costApplied
+        ? 'invalidated' as const
+        : 'resolved' as const
       : null;
     if (terminalState !== null && event.actionRef !== undefined) {
       next = updateAction(next, event.actionRef, (candidate) => ({ ...candidate, state: terminalState }));
