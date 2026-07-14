@@ -486,6 +486,22 @@ describe('core-v1 action compile, timeline and effects composition', () => {
     }), 'UNKNOWN_FIELD');
   });
 
+  it('matches authoritative content refs by identity instead of property insertion order', () => {
+    const { state, context } = setup();
+    const reorderedContentRef = {
+      versionNumber: 1,
+      code: 'strike',
+      contentType: 'skill' as const,
+      scope: 'world' as const,
+    };
+    expect(compileCoreV1EncounterAction({
+      encounter: state,
+      intent: intent({ contentRef: reorderedContentRef }),
+      definition: definition(),
+      targetingContext: context,
+    }).ok).toBe(true);
+  });
+
   it('jumps to events, processes same-tick sequentially and rejects past/duplicate queue sequences', () => {
     const { state, context } = setup();
     const compiled = expectOk(compileCoreV1EncounterAction({ encounter: state, intent: intent(), definition: definition(), targetingContext: context }));
@@ -498,6 +514,27 @@ describe('core-v1 action compile, timeline and effects composition', () => {
     expectInvalid(validateCoreV1EncounterState(duplicate), 'EVENT_QUEUE');
     const past = { ...scheduled, currentTick: compiled.effectTick + 1n };
     expectInvalid(validateCoreV1EncounterState(past), 'EVENT_QUEUE');
+  });
+
+  it('terminalizes an action when its last effect is invalidated before resolution', () => {
+    const { state, context } = setup();
+    const compiled = expectOk(compileCoreV1EncounterAction({
+      encounter: state, intent: intent(), definition: definition(), targetingContext: context,
+    }));
+    const scheduled = expectOk(scheduleCoreV1EncounterAction(state, compiled));
+    const started = expectOk(processNextCoreV1EncounterEvent(scheduled, runtime));
+    const targetRemoved = {
+      ...started.encounterAfter,
+      participants: started.encounterAfter.participants.map((entry) => entry.actorRef === 'enemy'
+        ? { ...entry, combatState: 'removed' as const }
+        : entry),
+    };
+    const invalidated = expectOk(processNextCoreV1EncounterEvent(targetRemoved, runtime));
+    expect(invalidated.invalidatedEvents.some((entry) => entry.event.type === 'action_effect')).toBe(true);
+    expect(invalidated.encounterAfter.activeActions[0]?.state).toBe('invalidated');
+    const readied = expectOk(processNextCoreV1EncounterEvent(invalidated.encounterAfter, runtime));
+    expect(readied.encounterAfter.activeActions).toEqual([]);
+    expect(readied.resolvedActions).toEqual([]);
   });
 
   it('applies single-target damage and action cost once with deterministic rolls', () => {
@@ -977,6 +1014,26 @@ describe('core-v1 reactions, casting, movement, combos and plans', () => {
       ...planInput,
       plan: { ...planInput.plan, stopConditions: ['unknown-condition' as never] },
     }), 'STOP_CONDITION');
+  });
+
+  it('stops a multi-action plan when the encounter state version changes', () => {
+    const state = readyEncounter([participant('hero', 'party'), participant('enemy', 'hostile')]);
+    const intents = [intent({ intentRef: 'intent-first' }), intent({ intentRef: 'intent-second' })];
+    const result = expectOk(applyCoreV1EncounterActionPlan({
+      encounter: state,
+      plan: {
+        planRef: 'plan-state-version', actorRef: 'hero', expectedStateVersion: state.stateVersion,
+        intents, stopConditions: ['stateVersionChanged'],
+      },
+      definitions: Object.fromEntries(intents.map((entry) => [entry.intentRef, definition()])),
+      targetingContexts: Object.fromEntries(intents.map((entry) => [
+        entry.intentRef, { candidates: candidates(state) },
+      ])),
+      runtime,
+    }));
+    expect(result.stopReason).toBe('state_version_changed');
+    expect(result.resolvedActions).toHaveLength(1);
+    expect(result.continuationRequired).toBe(true);
   });
 });
 

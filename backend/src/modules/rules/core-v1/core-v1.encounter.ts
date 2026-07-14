@@ -746,7 +746,7 @@ function assertDefinitionMatchesIntent(
   if (definition.actionSource !== intent.actionSource) issues.push(issue('definition.actionSource', 'ACTION_SOURCE_MATCH', 'Resolved definition must match the intent action source'));
   if (definition.contentRef !== undefined) {
     if (intent.contentRef === undefined
-      || JSON.stringify(definition.contentRef) !== JSON.stringify(intent.contentRef)) {
+      || !contentRefMatches(definition.contentRef, intent.contentRef)) {
       issues.push(issue('intent.contentRef', 'CONTENT_VERSION_MATCH', 'Intent and authoritative definition must use the same content version'));
     }
   } else if (intent.contentRef !== undefined) issues.push(issue('intent.contentRef', 'UNEXPECTED_CONTENT_REF', 'This action source does not accept a content ref'));
@@ -1752,6 +1752,17 @@ export function processNextCoreV1EncounterEvent(
   };
   const invalidReason = eventInvalidReason(next, event);
   if (invalidReason !== null) {
+    const action = event.actionRef === undefined ? undefined
+      : next.activeActions.find((candidate) => candidate.actionRef === event.actionRef);
+    const hasRemainingExecutionEvent = event.actionRef !== undefined
+      && next.scheduledEvents.some((candidate) => candidate.actionRef === event.actionRef
+        && ['action_effect', 'movement_effect', 'channel_pulse', 'upkeep_due'].includes(candidate.type));
+    const terminalState = action !== undefined && !hasRemainingExecutionEvent
+      ? action.costApplied ? 'resolved' as const : 'invalidated' as const
+      : null;
+    if (terminalState !== null && event.actionRef !== undefined) {
+      next = updateAction(next, event.actionRef, (candidate) => ({ ...candidate, state: terminalState }));
+    }
     next = {
       ...next,
       stateVersion: safeIntegerAdd(next.stateVersion, 1, 'encounter state version'),
@@ -1760,6 +1771,9 @@ export function processNextCoreV1EncounterEvent(
     return success({
       ...report,
       encounterAfter: next,
+      resolvedActions: terminalState === 'resolved' && event.actionRef !== undefined
+        ? [event.actionRef]
+        : [],
       invalidatedEvents: [{ event, reason: invalidReason }],
       stopReason: invalidReason === 'NO_VALID_TARGET' ? 'no_valid_target' : null,
     });
@@ -1892,7 +1906,7 @@ export function processNextCoreV1EncounterEvent(
       if (event.actionRef !== undefined) {
         const action = next.activeActions.find((candidate) => candidate.actionRef === event.actionRef);
         if (action !== undefined && ['resolved', 'interrupted', 'invalidated'].includes(action.state)) {
-          resolvedActions.push(action.actionRef);
+          if (action.state !== 'invalidated') resolvedActions.push(action.actionRef);
           next = { ...next, activeActions: next.activeActions.filter((candidate) => candidate.actionRef !== action.actionRef) };
         }
       }
@@ -2030,7 +2044,7 @@ function planStopReason(
   if (conditions.has('noValidTarget') && report.stopReason === 'no_valid_target') return 'no_valid_target';
   if (conditions.has('reactionRequired') && report.stopReason === 'reaction_required') return 'reaction_required';
   if (conditions.has('newThreatDetected') && before.participants.length !== report.encounterAfter.participants.length) return 'new_threat_detected';
-  if (conditions.has('stateVersionChanged') && before.encounterRef !== report.encounterAfter.encounterRef) return 'state_version_changed';
+  if (conditions.has('stateVersionChanged') && before.stateVersion !== report.encounterAfter.stateVersion) return 'state_version_changed';
   if (conditions.has('processingLimit') && report.continuationRequired) return 'processing_limit';
   if (conditions.has('newPlayerIntentRequired') && report.stopReason === 'new_intent_required') return 'new_intent_required';
   return report.stopReason === 'encounter_completed' ? 'encounter_completed' : null;
