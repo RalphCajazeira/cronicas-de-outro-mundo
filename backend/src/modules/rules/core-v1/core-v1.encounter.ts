@@ -1491,6 +1491,61 @@ function completionCandidate(encounter: CoreV1EncounterState): CoreV1EncounterCo
   return null;
 }
 
+function promoteEncounterCompletion(
+  encounter: Pick<CoreV1EncounterState, 'completionCandidate'>,
+  stopReason: CoreV1EncounterStopReason | null,
+): CoreV1EncounterStopReason | null {
+  if (encounter.completionCandidate === null) return stopReason;
+  return stopReason === null || stopReason === 'new_intent_required' || stopReason === 'no_valid_target'
+    ? 'encounter_completed'
+    : stopReason;
+}
+
+function stopReasonForInvalidEvent(
+  encounter: Pick<CoreV1EncounterState, 'completionCandidate'>,
+  invalidReason: 'NO_VALID_TARGET' | 'STATE_CHANGED',
+  terminalState: 'invalidated' | 'resolved' | null,
+  hasRemainingExecutionEvent: boolean,
+): CoreV1EncounterStopReason | null {
+  const stopReason = invalidReason === 'NO_VALID_TARGET'
+    ? 'no_valid_target'
+    : terminalState === 'invalidated' ? 'new_intent_required' : null;
+  if (hasRemainingExecutionEvent || terminalState === null) return stopReason;
+  return promoteEncounterCompletion(encounter, stopReason);
+}
+
+function isTerminalStopReason(stopReason: CoreV1EncounterStopReason | null): boolean {
+  return stopReason === 'encounter_completed' || stopReason === 'encounter_failed';
+}
+
+function isMandatoryStopReason(stopReason: CoreV1EncounterStopReason | null): boolean {
+  return stopReason === 'processing_limit'
+    || stopReason === 'reaction_required'
+    || stopReason === 'new_intent_required';
+}
+
+function mergeEncounterBatchStopReason(
+  current: CoreV1EncounterStopReason | null,
+  incoming: CoreV1EncounterStopReason | null,
+): CoreV1EncounterStopReason | null {
+  if (incoming === null) return current;
+  if (isTerminalStopReason(incoming)) return incoming;
+  if (isTerminalStopReason(current)) return current;
+  if (isMandatoryStopReason(current)) return current;
+  if (isMandatoryStopReason(incoming)) return incoming;
+  return incoming;
+}
+
+function batchContinuationRequired(
+  stopReason: CoreV1EncounterStopReason | null,
+  technicalLimit: boolean,
+  reports: readonly CoreV1EncounterBatchResult[],
+): boolean {
+  if (isTerminalStopReason(stopReason)) return false;
+  if (technicalLimit || isMandatoryStopReason(stopReason)) return true;
+  return reports.some((report) => report.continuationRequired);
+}
+
 function removeEvents(
   encounter: CoreV1EncounterState,
   refs: ReadonlySet<string>,
@@ -1758,7 +1813,9 @@ export function processNextCoreV1EncounterEvent(
       && next.scheduledEvents.some((candidate) => candidate.actionRef === event.actionRef
         && ['action_effect', 'movement_effect', 'channel_pulse', 'upkeep_due'].includes(candidate.type));
     const terminalState = action !== undefined && !hasRemainingExecutionEvent
-      ? action.costApplied ? 'resolved' as const : 'invalidated' as const
+      ? invalidReason === 'STATE_CHANGED' || !action.costApplied
+        ? 'invalidated' as const
+        : 'resolved' as const
       : null;
     if (terminalState !== null && event.actionRef !== undefined) {
       next = updateAction(next, event.actionRef, (candidate) => ({ ...candidate, state: terminalState }));
@@ -1768,6 +1825,12 @@ export function processNextCoreV1EncounterEvent(
       stateVersion: safeIntegerAdd(next.stateVersion, 1, 'encounter state version'),
       completionCandidate: completionCandidate(next),
     };
+    const stopReason = stopReasonForInvalidEvent(
+      next,
+      invalidReason,
+      terminalState,
+      hasRemainingExecutionEvent,
+    );
     return success({
       ...report,
       encounterAfter: next,
@@ -1775,7 +1838,8 @@ export function processNextCoreV1EncounterEvent(
         ? [event.actionRef]
         : [],
       invalidatedEvents: [{ event, reason: invalidReason }],
-      stopReason: invalidReason === 'NO_VALID_TARGET' ? 'no_valid_target' : null,
+      stopReason,
+      continuationRequired: stopReason === 'new_intent_required',
     });
   }
   const processedEvents = [event];
@@ -1919,7 +1983,7 @@ export function processNextCoreV1EncounterEvent(
     };
     const validated = validateCoreV1EncounterState(next);
     if (!validated.ok) return validated;
-    if (validated.value.completionCandidate !== null && stopReason === null) stopReason = 'encounter_completed';
+    stopReason = promoteEncounterCompletion(validated.value, stopReason);
     return success({
       encounterBefore: report.encounterBefore,
       encounterAfter: validated.value,
@@ -1980,7 +2044,7 @@ export function processCoreV1EncounterBatch(
     if (nextTick === undefined) break;
     if (nextTick - startTick > CORE_V1_MAX_ENCOUNTER_BATCH_ADVANCE
       || nextTick - startTick > CORE_V1_MAX_PROCESSING_ADVANCE) {
-      stopReason = 'processing_limit';
+      stopReason = mergeEncounterBatchStopReason(stopReason, 'processing_limit');
       break;
     }
     const processed = processNextCoreV1EncounterEvent(current, runtime);
@@ -1989,25 +2053,22 @@ export function processCoreV1EncounterBatch(
       && processed.value.invalidatedEvents.length === 0) break;
     reports.push(processed.value);
     current = processed.value.encounterAfter;
-    if (processed.value.stopReason === 'encounter_completed'
-      || processed.value.stopReason === 'encounter_failed'
-      || processed.value.stopReason === 'reaction_required') {
-      stopReason = processed.value.stopReason;
+    stopReason = mergeEncounterBatchStopReason(stopReason, processed.value.stopReason);
+    if (isTerminalStopReason(stopReason) || isMandatoryStopReason(stopReason)) {
       break;
     }
-    if (processed.value.stopReason !== null) stopReason = processed.value.stopReason;
   }
   const technicalLimit = current.scheduledEvents.length > 0
     && (reports.length >= CORE_V1_MAX_ENCOUNTER_BATCH_EVENTS
       || reports.length >= CORE_V1_MAX_PROCESSING_EVENTS
       || (current.scheduledEvents[0]?.timelineEvent.tick ?? current.currentTick) - startTick > CORE_V1_MAX_ENCOUNTER_BATCH_ADVANCE);
-  if (technicalLimit) stopReason = 'processing_limit';
+  if (technicalLimit) stopReason = mergeEncounterBatchStopReason(stopReason, 'processing_limit');
   return success(mergeBatchReports(
     encounter.value,
     current,
     reports,
     stopReason,
-    technicalLimit,
+    batchContinuationRequired(stopReason, technicalLimit, reports),
   ));
 }
 
@@ -2047,7 +2108,11 @@ function planStopReason(
   if (conditions.has('stateVersionChanged') && before.stateVersion !== report.encounterAfter.stateVersion) return 'state_version_changed';
   if (conditions.has('processingLimit') && report.continuationRequired) return 'processing_limit';
   if (conditions.has('newPlayerIntentRequired') && report.stopReason === 'new_intent_required') return 'new_intent_required';
-  return report.stopReason === 'encounter_completed' ? 'encounter_completed' : null;
+  if (report.stopReason !== null && [
+    'processing_limit', 'reaction_required', 'new_intent_required',
+    'encounter_completed', 'encounter_failed',
+  ].includes(report.stopReason)) return report.stopReason;
+  return null;
 }
 
 function refreshPlanTargetingContext(
@@ -2152,11 +2217,14 @@ export function applyCoreV1EncounterActionPlan(
     }
   }
   const completedActions = reports.flatMap((report) => report.resolvedActions).length;
-  const continuationRequired = stopReason === 'processing_limit'
-    || stopReason === 'new_intent_required'
-    || stopReason === 'reaction_required'
-    || completedActions < input.plan.intents.length;
   if (stopReason === null) stopReason = 'plan_completed';
+  const continuationRequired = stopReason === 'plan_completed'
+    || stopReason === 'encounter_completed' || stopReason === 'encounter_failed'
+    ? false
+    : stopReason === 'processing_limit'
+      || stopReason === 'new_intent_required'
+      || stopReason === 'reaction_required'
+      || completedActions < input.plan.intents.length;
   current = {
     ...current,
     actionPlans: stopReason === 'plan_completed'
