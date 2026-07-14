@@ -1,5 +1,19 @@
 # Decision Log
 
+## 2026-07-13 — Fase 1K de orquestração pura de encontros
+
+Decisões:
+
+- adotar a identidade interna `core-v1-encounter-v1`, schema 1, sem publicar ou alterar manifestos/hashes das Fases 1C, 1E, 1G ou 1I;
+- compor a event queue, ticks, prioridades, action slots, iniciativa, targeting, inventário/equipamento e resolução de efeitos existentes em um `CoreV1EncounterState` imutável e ordenado;
+- exigir relações autoritativas e contexto espacial fechado para area/cleave/chain, sem inferência por tipo de ator, grid, coordenadas ou expressão livre;
+- manter rolls fora das intenções e injetá-los por `EncounterRollProvider`; manter outcomes de reação sem fórmula publicada atrás de `ReactionOutcomeResolver`;
+- processar eventos do mesmo tick sequencialmente, revalidar após cada evento, aplicar custo/self effects uma vez e resolver cada alvo de forma independente;
+- limitar participantes, targets, eventos, lotes, combos, planos e avanço de ticks como proteção operacional, sem tratá-los como novo balanceamento;
+- deixar Prisma, migrations, persistência de combate, HTTP/OpenAPI, tokens, RNG persistido, XP, loot, deploy e GPT ao vivo para fases próprias; a Fase 1L será o adaptador autoritativo futuro.
+
+Status: implementada e validada na Fase 1K; revisão e integração rastreadas pelo PR correspondente
+
 ## 2026-07-13 — Fase 1I de resolução pura de efeitos, recursos e estados ativos
 
 Decisão:

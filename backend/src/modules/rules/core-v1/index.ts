@@ -9,6 +9,7 @@ export * from './core-v1.content-mechanics.js';
 export * from './core-v1.inventory.js';
 export * from './core-v1.equipment.js';
 export * from './core-v1.effects.js';
+export * from './core-v1.encounter.js';
 export * from './core-v1.effects.manifest.js';
 export * from './core-v1.damage.js';
 export * from './core-v1.progression.js';
@@ -16,6 +17,7 @@ export type * from './core-v1.action-economy.types.js';
 export type * from './core-v1.content-mechanics.types.js';
 export type * from './core-v1.inventory.types.js';
 export type * from './core-v1.effects.types.js';
+export type * from './core-v1.encounter.types.js';
 export type * from './core-v1.types.js';
 export { CORE_V1_ACTION_ECONOMY_REVISION } from './core-v1.action-economy.config.js';
 export {
@@ -59,4 +61,17 @@ export {
   CORE_V1_MAX_RUNTIME_STATUS_STACKS,
   CORE_V1_MIN_ROLL_BPS,
 } from './core-v1.effects.config.js';
+export {
+  CORE_V1_ENCOUNTER_RULES_CODE,
+  CORE_V1_ENCOUNTER_RULESET_CODE,
+  CORE_V1_ENCOUNTER_SCHEMA_VERSION,
+  CORE_V1_MAX_ENCOUNTER_BATCH_ADVANCE,
+  CORE_V1_MAX_ENCOUNTER_BATCH_EVENTS,
+  CORE_V1_MAX_ENCOUNTER_COMBO_EVENTS,
+  CORE_V1_MAX_ENCOUNTER_EVENTS,
+  CORE_V1_MAX_ENCOUNTER_PARTICIPANTS,
+  CORE_V1_MAX_ENCOUNTER_PLAN_ACTIONS,
+  CORE_V1_MAX_ENCOUNTER_TARGETS,
+  CORE_V1_MAX_ENCOUNTER_TICK,
+} from './core-v1.encounter.config.js';
 export { ceilDiv, clamp, roundHalfUp } from './core-v1.math.js';

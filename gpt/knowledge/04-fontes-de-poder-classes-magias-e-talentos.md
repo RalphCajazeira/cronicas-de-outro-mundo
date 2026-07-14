@@ -15,7 +15,7 @@ Uma ficha de poder canônica descreve no `profile` fechado e em `presentation`, 
 - requisitos e progressão;
 - aparência e efeitos sensoriais.
 
-O backend valida esses campos, publica uma versão imutável e executa conteúdo ativo pela Action futura `resolveActorEffect`. Rolls, custos, dano, restauração e estados ativos são calculados e persistidos pelo backend; o GPT nunca envia roll nem calcula dano final, defesa final, precisão, crítico ou escalonamento como autoridade. Conteúdo triggered/reaction/passive não pode ser disparado manualmente, e multi-target exige orquestrador futuro.
+O backend valida esses campos, publica uma versão imutável e executa conteúdo ativo por `resolveActorEffect`. Rolls, custos, dano, restauração e estados ativos são calculados e persistidos pelo backend; o GPT nunca envia roll nem calcula dano final, defesa final, precisão, crítico ou escalonamento como autoridade. O núcleo puro de encounter já sabe orquestrar targeting, reações, casting/channel e efeitos por alvo, mas ainda não possui Action nem persistência; conteúdo triggered/reaction/passive não pode ser disparado manualmente pelo GPT.
 
 Antes de executar, consulte a ficha/efeitos para obter `mechanicsStateVersion`, `inventoryStateVersion`, `effectsStateVersion` e versões de HP/Mana/SP. Use a versão exata conhecida/mastered ou equipada, selecione somente self/single target/weapon attack e preserve a idempotency key no replay. Conflito exige releitura; recurso insuficiente ou `REQUIRES_ACTION_ORCHESTRATOR` não autoriza inventar resultado.
 
