@@ -382,3 +382,22 @@ Impacto:
 - rollout remoto e atualização da Action continuam pendentes.
 
 Status: implementada e validada na Fase 1J; revisão e integração rastreadas pelo PR correspondente
+
+## 2026-07-14 — Fundação persistida de encontros e replay auditável
+
+Decisão:
+- persistir `Encounter`, participantes, operações mutantes e rolls individuais em quatro models separados;
+- permitir somente um encontro aberto por Campaign e múltiplos encontros finais;
+- representar o estado completo da Fase 1K em `EncounterStateSnapshotV1`, com ticks decimais canônicos, schema fechado, limite público canônico de 1 MiB e SHA-256; a guarda física de 2 MiB no `jsonb::text` apenas acomoda a formatação do PostgreSQL;
+- manter Actor, recursos, efeitos e inventário como autoridades dos participantes persistidos, sem auto-heal de drift;
+- exigir vínculo explícito para efêmeros e tornar participantes, operações e rolls imutáveis/append-only;
+- ligar cada operação a um único `IdempotencyRecord`, sem duplicar a chave textual, e registrar somente rolls efetivamente consumidos;
+- aplicar migration aditiva, sem backfill, com FKs restritas, RLS sem policies e partial index SQL para os lifecycles abertos;
+- manter service/repository de execução, HTTP, OpenAPI, GPT, XP, loot e integração transacional fora desta subfase.
+
+Impacto:
+- a próxima subfase poderá reidratar o core e confirmar mutações com versão otimista e replay auditável;
+- UUIDs, hashes, snapshots e rolls permanecem exclusivamente internos;
+- nenhuma migration ou banco remoto foi executado nesta decisão.
+
+Status: implementada localmente na Fase 1L-A; revisão técnica pendente

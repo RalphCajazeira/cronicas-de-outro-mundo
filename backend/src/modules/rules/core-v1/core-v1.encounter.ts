@@ -6,6 +6,12 @@ import {
   CORE_V1_MAX_PROCESSING_EVENTS,
 } from './core-v1.action-economy.config.js';
 import {
+  CORE_V1_MAX_CONTENT_EFFECTS,
+  CORE_V1_MAX_DURATION_ACTIONS,
+  CORE_V1_MAX_DURATION_TICKS,
+} from './core-v1.content-mechanics.config.js';
+import { CORE_V1_MAX_DAMAGE_COMPONENTS } from './core-v1.config.js';
+import {
   calculateMovement,
   calculateMobileCastTime,
   completeCasting,
@@ -82,7 +88,8 @@ import type {
   CoreV1MechanicalContentProfile,
   CoreV1Targeting,
 } from './core-v1.content-mechanics.types.js';
-import { validateCoreV1ContentProfile } from './core-v1.content-mechanics.js';
+import { getCoreV1ContentKinds, validateCoreV1ContentProfile } from './core-v1.content-mechanics.js';
+import { createRawDamageComponent } from './core-v1.damage.js';
 import {
   isCoreV1ActorEffectContext,
   resolveCoreV1ConsumableUse,
@@ -105,6 +112,7 @@ import {
   assertIntegerInRange,
   isPlainRecord,
   safeIntegerAdd,
+  sumAuthorizedModifiers,
 } from './core-v1.math.js';
 import { addTicks, assertCombatTick, validateCooldown } from './core-v1.ticks.js';
 import type { ValidationIssue } from './core-v1.types.js';
@@ -118,6 +126,13 @@ const combatStates = new Set<CoreV1EncounterCombatState>([
 ]);
 const relations = new Set<CoreV1EncounterRelation>(['ally', 'hostile', 'neutral', 'self']);
 const targetSelectors = new Set(['self', 'explicit', 'nearest_hostile', 'lowest_hp_hostile', 'nearest_ally']);
+const encounterActionSources = new Set(['content', 'consumable', 'basic_weapon_attack', 'movement', 'wait']);
+const contentKinds: ReadonlySet<string> = new Set(getCoreV1ContentKinds());
+const reactionKinds = new Set(['block', 'active_dodge', 'interrupt', 'counter_attack']);
+const preferredReactionKinds = new Set(['block', 'active_dodge', 'interrupt']);
+const castingPhases = new Set(['reserved', 'casting', 'completed', 'interrupted', 'channeling']);
+const movementKinds = new Set(['approach', 'retreat', 'run', 'disengage', 'move_and_act']);
+const terrainTypes = new Set(['normal', 'difficult', 'severe']);
 const actionPlanStopConditions = new Set([
   'actorIncapacitated', 'hostileBecomesReady', 'targetSetChangedMaterially',
   'resourceBelowRequired', 'zoneChanged', 'newThreatDetected', 'stateVersionChanged',
@@ -130,6 +145,20 @@ const eventTypes = new Set<CoreV1EncounterEventType>([
   'upkeep_due', 'movement_effect', 'actor_ready', 'cooldown_expired',
   'participant_incapacitated_candidate',
 ]);
+const compiledActionKinds = new Set<CoreV1CompiledEncounterAction['actionKind']>([
+  'physical', 'magic', 'hybrid', 'movement', 'item', 'wait',
+]);
+const compiledActionStates = new Set<CoreV1CompiledEncounterAction['state']>([
+  'scheduled', 'active', 'interrupted', 'invalidated', 'resolved',
+]);
+const completionCandidates = new Set<CoreV1EncounterCompletionCandidate>([
+  'party_victory_candidate', 'hostile_victory_candidate', 'stalemate_candidate', 'cancelled',
+]);
+const compiledActionBooleanFields = [
+  'interruptible', 'blockable', 'dodgeable', 'canRetargetBeforeEffect',
+  'costApplied', 'selfEffectsApplied',
+] as const;
+const maximumResolvedTargetMultiplierBps = 10_000;
 
 function issue(
   path: string,
@@ -178,6 +207,10 @@ function isArrayValue(value: unknown): boolean {
   return Array.isArray(value);
 }
 
+function isDenseArray(value: unknown): value is readonly unknown[] {
+  return Array.isArray(value) && Object.keys(value).length === value.length;
+}
+
 function unknownFieldIssues(
   value: Record<string, unknown>,
   allowed: ReadonlySet<string>,
@@ -188,6 +221,384 @@ function unknownFieldIssues(
     'UNKNOWN_FIELD',
     'Field is not part of the closed encounter contract',
   ));
+}
+
+function contentReferenceIssues(value: unknown, path: string): ValidationIssue[] {
+  if (!isPlainRecord(value)) return [issue(path, 'CONTENT_REF_SHAPE', 'Content reference must be a plain object')];
+  const result = unknownFieldIssues(value, new Set(['scope', 'contentType', 'code', 'versionNumber']), path);
+  if (value.scope !== 'world' && value.scope !== 'campaign') {
+    result.push(issue(`${path}.scope`, 'ENUM', 'Content reference scope is invalid'));
+  }
+  if (typeof value.contentType !== 'string' || !contentKinds.has(value.contentType)) {
+    result.push(issue(`${path}.contentType`, 'ENUM', 'Content reference type is invalid'));
+  }
+  if (!isStableRef(value.code) || value.code.length > 100) {
+    result.push(issue(`${path}.code`, 'PUBLIC_REF', 'Content reference code must be stable'));
+  }
+  if (!Number.isSafeInteger(value.versionNumber) || (value.versionNumber as number) < 1) {
+    result.push(issue(`${path}.versionNumber`, 'POSITIVE_STATE_VERSION', 'Content version must be a positive safe integer'));
+  }
+  return result;
+}
+
+function reactionPolicyIssues(value: unknown, path: string): ValidationIssue[] {
+  if (!isPlainRecord(value)) return [issue(path, 'REACTION_POLICY_SHAPE', 'Reaction policy must be a plain object')];
+  const result = unknownFieldIssues(value, new Set(['mode', 'preferredReaction', 'allowCounterAttack']), path);
+  if (value.mode !== 'none' && value.mode !== 'allow' && value.mode !== 'require') {
+    result.push(issue(`${path}.mode`, 'ENUM', 'Reaction policy mode is invalid'));
+  }
+  if (value.preferredReaction !== undefined
+    && (typeof value.preferredReaction !== 'string' || !preferredReactionKinds.has(value.preferredReaction))) {
+    result.push(issue(`${path}.preferredReaction`, 'ENUM', 'Preferred reaction is invalid'));
+  }
+  if (typeof value.allowCounterAttack !== 'boolean') {
+    result.push(issue(`${path}.allowCounterAttack`, 'BOOLEAN', 'Counter-attack policy must be boolean'));
+  }
+  return result;
+}
+
+function encounterIntentIssues(value: unknown, path: string): ValidationIssue[] {
+  if (!isPlainRecord(value)) return [issue(path, 'INTENT_SHAPE', 'Stored intent must be a plain object')];
+  const result = unknownFieldIssues(value, new Set([
+    'intentRef', 'sourceActorRef', 'slotRef', 'actionSource', 'targetSelector',
+    'requestedTargetRefs', 'contentRef', 'weaponEntryRef', 'versatileMode', 'reactionPolicy',
+  ]), path);
+  for (const field of ['intentRef', 'sourceActorRef', 'slotRef'] as const) {
+    if (!isStableRef(value[field])) result.push(issue(`${path}.${field}`, 'PUBLIC_REF', 'Stored intent ref must be stable'));
+  }
+  if (typeof value.actionSource !== 'string' || !encounterActionSources.has(value.actionSource)) {
+    result.push(issue(`${path}.actionSource`, 'ENUM', 'Stored intent action source is invalid'));
+  }
+  if (typeof value.targetSelector !== 'string' || !targetSelectors.has(value.targetSelector)) {
+    result.push(issue(`${path}.targetSelector`, 'ENUM', 'Stored intent target selector is invalid'));
+  }
+  if (!isDenseArray(value.requestedTargetRefs)) {
+    result.push(issue(`${path}.requestedTargetRefs`, 'ARRAY', 'Requested target refs must be a dense array'));
+  } else {
+    const refs = new Set<string>();
+    value.requestedTargetRefs.forEach((ref, index) => {
+      if (!isStableRef(ref)) result.push(issue(`${path}.requestedTargetRefs.${index}`, 'PUBLIC_REF', 'Requested target ref must be stable'));
+      else if (refs.has(ref)) result.push(issue(`${path}.requestedTargetRefs.${index}`, 'DUPLICATE_TARGET_REF', 'Requested target refs must be unique'));
+      else refs.add(ref);
+    });
+  }
+  if (value.contentRef !== undefined) result.push(...contentReferenceIssues(value.contentRef, `${path}.contentRef`));
+  if (value.weaponEntryRef !== undefined && !isStableRef(value.weaponEntryRef)) {
+    result.push(issue(`${path}.weaponEntryRef`, 'PUBLIC_REF', 'Stored inventory entry ref must be stable'));
+  }
+  if (value.versatileMode !== undefined
+    && value.versatileMode !== 'one_handed' && value.versatileMode !== 'two_handed') {
+    result.push(issue(`${path}.versatileMode`, 'ENUM', 'Versatile mode is invalid'));
+  }
+  if (value.reactionPolicy !== undefined) result.push(...reactionPolicyIssues(value.reactionPolicy, `${path}.reactionPolicy`));
+  return result;
+}
+
+function durationIssues(value: unknown, path: string): ValidationIssue[] {
+  if (!isPlainRecord(value)) return [issue(path, 'DURATION_SHAPE', 'Runtime duration must be a plain object')];
+  const result = unknownFieldIssues(value, new Set(['type', 'value']), path);
+  const type = value.type;
+  if (type !== 'instant' && type !== 'ticks' && type !== 'actions'
+    && type !== 'scene' && type !== 'encounter' && type !== 'permanent') {
+    result.push(issue(`${path}.type`, 'ENUM', 'Runtime duration type is invalid'));
+    return result;
+  }
+  const requiresValue = type === 'ticks' || type === 'actions';
+  if (!requiresValue && value.value !== undefined) {
+    result.push(issue(`${path}.value`, 'UNEXPECTED_FIELD', 'Runtime duration value is valid only for ticks or actions'));
+  }
+  if (requiresValue) {
+    const maximum = type === 'ticks' ? CORE_V1_MAX_DURATION_TICKS : CORE_V1_MAX_DURATION_ACTIONS;
+    if (!Number.isSafeInteger(value.value) || (value.value as number) < 1 || (value.value as number) > maximum) {
+      result.push(issue(`${path}.value`, 'INTEGER_RANGE', 'Runtime duration value is outside the core-v1 limit'));
+    }
+  }
+  return result;
+}
+
+function costModifierSetIssues(value: unknown, path: string): ValidationIssue[] {
+  if (!isPlainRecord(value)) return [issue(path, 'COST_MODIFIER_SHAPE', 'Cost modifiers must be a plain object')];
+  const result = unknownFieldIssues(value, new Set(['manaCostBps', 'spCostBps', 'hpCostBps']), path);
+  for (const field of ['manaCostBps', 'spCostBps', 'hpCostBps'] as const) {
+    const entries = value[field];
+    if (entries === undefined) continue;
+    if (!isDenseArray(entries)) {
+      result.push(issue(`${path}.${field}`, 'ARRAY', 'Cost modifiers must be a dense array'));
+      continue;
+    }
+    try {
+      sumAuthorizedModifiers(entries as Parameters<typeof sumAuthorizedModifiers>[0], `${path}.${field}`);
+    } catch {
+      result.push(issue(`${path}.${field}`, 'AUTHORIZED_MODIFIER', 'Cost modifiers are invalid'));
+    }
+  }
+  return result;
+}
+
+function defenseIssues(
+  value: unknown,
+  path: string,
+): ValidationIssue[] {
+  if (!isPlainRecord(value)) return [issue(path, 'DEFENSE_SHAPE', 'Damage defense must be a plain object')];
+  const result = unknownFieldIssues(value, new Set([
+    'blockValue', 'completeBlock', 'temporaryImmunities', 'temporaryResistances',
+  ]), path);
+  if (!Number.isSafeInteger(value.blockValue) || (value.blockValue as number) < 0) {
+    result.push(issue(`${path}.blockValue`, 'NON_NEGATIVE_SAFE_INTEGER', 'Block value must be a non-negative safe integer'));
+  }
+  if (typeof value.completeBlock !== 'boolean') result.push(issue(`${path}.completeBlock`, 'BOOLEAN', 'Complete block must be boolean'));
+  if (value.temporaryImmunities !== undefined) {
+    if (!isPlainRecord(value.temporaryImmunities)) {
+      result.push(issue(`${path}.temporaryImmunities`, 'IMMUNITY_SHAPE', 'Temporary immunities must be a plain object'));
+    } else {
+      const immunities = value.temporaryImmunities;
+      result.push(...unknownFieldIssues(immunities, new Set(['physical', 'magical', 'elements', 'componentIds']), `${path}.temporaryImmunities`));
+      for (const field of ['physical', 'magical'] as const) {
+        if (immunities[field] !== undefined && typeof immunities[field] !== 'boolean') {
+          result.push(issue(`${path}.temporaryImmunities.${field}`, 'BOOLEAN', 'Temporary immunity flags must be boolean'));
+        }
+      }
+      for (const field of ['elements', 'componentIds'] as const) {
+        const entries = immunities[field];
+        if (entries === undefined) continue;
+        if (!isDenseArray(entries)) {
+          result.push(issue(`${path}.temporaryImmunities.${field}`, 'ARRAY', 'Temporary immunity refs must be a dense array'));
+        } else entries.forEach((entry, index) => {
+          const valid = field === 'elements' ? isStableRef(entry) : typeof entry === 'string' && entry.trim().length > 0;
+          if (!valid) result.push(issue(`${path}.temporaryImmunities.${field}.${index}`, 'PUBLIC_REF', 'Temporary immunity ref is invalid'));
+        });
+      }
+    }
+  }
+  if (value.temporaryResistances !== undefined) {
+    if (!isPlainRecord(value.temporaryResistances)) {
+      result.push(issue(`${path}.temporaryResistances`, 'RESISTANCE_SHAPE', 'Temporary resistances must be a plain object'));
+    } else {
+      const resistances = value.temporaryResistances;
+      result.push(...unknownFieldIssues(resistances, new Set([
+        'physicalResistanceBps', 'magicalResistanceBps', 'elementalResistanceBps',
+      ]), `${path}.temporaryResistances`));
+      for (const field of ['physicalResistanceBps', 'magicalResistanceBps'] as const) {
+        if (!Number.isSafeInteger(resistances[field])
+          || (resistances[field] as number) < -5000 || (resistances[field] as number) > 7500) {
+          result.push(issue(`${path}.temporaryResistances.${field}`, 'INTEGER_RANGE', 'Temporary resistance is outside the core-v1 range'));
+        }
+      }
+      if (resistances.elementalResistanceBps !== undefined) {
+        if (!isPlainRecord(resistances.elementalResistanceBps)) {
+          result.push(issue(`${path}.temporaryResistances.elementalResistanceBps`, 'RESISTANCE_SHAPE', 'Elemental resistances must be a plain object'));
+        } else for (const [element, resistance] of Object.entries(resistances.elementalResistanceBps)) {
+          if (!isStableRef(element) || !Number.isSafeInteger(resistance)
+            || (resistance as number) < -5000 || (resistance as number) > 7500) {
+            result.push(issue(`${path}.temporaryResistances.elementalResistanceBps.${element}`, 'INTEGER_RANGE', 'Elemental resistance is invalid'));
+          }
+        }
+      }
+    }
+  }
+  return result;
+}
+
+function mechanicalProfileIssues(value: unknown, path: string): ValidationIssue[] {
+  const validated = validateCoreV1ContentProfile(value);
+  if (!validated.ok) {
+    return validated.issues.map((entry) => ({
+      ...entry,
+      path: entry.path === '$' ? path : `${path}.${entry.path.replace(/^\$\.?/, '')}`,
+    }));
+  }
+  return validated.value.profileMode === 'mechanical'
+    ? []
+    : [issue(`${path}.profileMode`, 'MECHANICAL_PROFILE', 'Encounter execution requires a mechanical profile')];
+}
+
+function executionPlanIssues(
+  value: unknown,
+  path: string,
+  participantRefs: ReadonlySet<string>,
+): ValidationIssue[] {
+  if (!isPlainRecord(value)) return [issue(path, 'EXECUTION_PLAN', 'Execution plan must be a plain object')];
+  const result = unknownFieldIssues(value, new Set([
+    'profile', 'contentRef', 'effectRefs', 'statusDefinitions', 'runtimeDurations',
+    'weaponDamageComponents', 'costModifiers', 'defenses', 'movement', 'castingState',
+    'reactionPolicy', 'comboStopOnMiss', 'consumedEntryRef',
+  ]), path);
+  if (value.profile !== undefined) result.push(...mechanicalProfileIssues(value.profile, `${path}.profile`));
+  if (value.contentRef !== undefined) result.push(...contentReferenceIssues(value.contentRef, `${path}.contentRef`));
+
+  const effectRefs: string[] = [];
+  if (!isDenseArray(value.effectRefs) || value.effectRefs.length > CORE_V1_MAX_CONTENT_EFFECTS) {
+    result.push(issue(`${path}.effectRefs`, 'EFFECT_REF_LIMIT', 'Effect refs must be a dense array within the core-v1 limit'));
+  } else {
+    const seen = new Set<string>();
+    value.effectRefs.forEach((ref, index) => {
+      if (!isDeterministicInternalRef(ref)) result.push(issue(`${path}.effectRefs.${index}`, 'EVENT_REF', 'Effect ref must be deterministic'));
+      else if (seen.has(ref)) result.push(issue(`${path}.effectRefs.${index}`, 'DUPLICATE_EFFECT_REF', 'Effect refs must be unique'));
+      else {
+        seen.add(ref);
+        effectRefs.push(ref);
+      }
+    });
+  }
+  if (value.profile !== undefined && isDenseArray(value.effectRefs)) {
+    const profile = validateCoreV1ContentProfile(value.profile);
+    if (profile.ok && profile.value.profileMode === 'mechanical'
+      && resolvedEffectCount(profile.value) !== value.effectRefs.length) {
+      result.push(issue(`${path}.effectRefs`, 'EFFECT_REF_COUNT', 'Every resolved effect requires one deterministic ref'));
+    }
+  }
+
+  const statusIndexes = new Set<number>();
+  if (!isDenseArray(value.statusDefinitions)) {
+    result.push(issue(`${path}.statusDefinitions`, 'ARRAY', 'Status definitions must be a dense array'));
+  } else value.statusDefinitions.forEach((binding, index) => {
+    const bindingPath = `${path}.statusDefinitions.${index}`;
+    if (!isPlainRecord(binding)) {
+      result.push(issue(bindingPath, 'STATUS_DEFINITION_SHAPE', 'Status definition must be a plain object'));
+      return;
+    }
+    result.push(...unknownFieldIssues(binding, new Set(['effectIndex', 'effectRef', 'contentVersion', 'profile']), bindingPath));
+    if (!Number.isSafeInteger(binding.effectIndex) || (binding.effectIndex as number) < 0
+      || (binding.effectIndex as number) >= effectRefs.length) {
+      result.push(issue(`${bindingPath}.effectIndex`, 'EFFECT_INDEX', 'Status definition effect index is invalid'));
+    } else if (statusIndexes.has(binding.effectIndex as number)) {
+      result.push(issue(`${bindingPath}.effectIndex`, 'DUPLICATE_EFFECT_INDEX', 'Status definition effect indexes must be unique'));
+    } else statusIndexes.add(binding.effectIndex as number);
+    if (typeof binding.effectIndex === 'number' && binding.effectRef !== effectRefs[binding.effectIndex]) {
+      result.push(issue(`${bindingPath}.effectRef`, 'EFFECT_REF_MATCH', 'Status definition ref must match its effect index'));
+    }
+    result.push(...contentReferenceIssues(binding.contentVersion, `${bindingPath}.contentVersion`));
+    if (binding.profile !== undefined) result.push(...mechanicalProfileIssues(binding.profile, `${bindingPath}.profile`));
+  });
+
+  const durationIndexes = new Set<number>();
+  if (!isDenseArray(value.runtimeDurations)) {
+    result.push(issue(`${path}.runtimeDurations`, 'ARRAY', 'Runtime durations must be a dense array'));
+  } else value.runtimeDurations.forEach((binding, index) => {
+    const bindingPath = `${path}.runtimeDurations.${index}`;
+    if (!isPlainRecord(binding)) {
+      result.push(issue(bindingPath, 'RUNTIME_DURATION_SHAPE', 'Runtime duration binding must be a plain object'));
+      return;
+    }
+    result.push(...unknownFieldIssues(binding, new Set(['effectIndex', 'duration']), bindingPath));
+    if (!Number.isSafeInteger(binding.effectIndex) || (binding.effectIndex as number) < 0
+      || (binding.effectIndex as number) >= effectRefs.length) {
+      result.push(issue(`${bindingPath}.effectIndex`, 'EFFECT_INDEX', 'Runtime duration effect index is invalid'));
+    } else if (durationIndexes.has(binding.effectIndex as number)) {
+      result.push(issue(`${bindingPath}.effectIndex`, 'DUPLICATE_EFFECT_INDEX', 'Runtime duration effect indexes must be unique'));
+    } else durationIndexes.add(binding.effectIndex as number);
+    result.push(...durationIssues(binding.duration, `${bindingPath}.duration`));
+  });
+
+  if (!isDenseArray(value.weaponDamageComponents)
+    || value.weaponDamageComponents.length > CORE_V1_MAX_DAMAGE_COMPONENTS) {
+    result.push(issue(`${path}.weaponDamageComponents`, 'DAMAGE_COMPONENT_LIMIT', 'Weapon damage components must be a dense array within the core-v1 limit'));
+  } else {
+    const componentIds = new Set<string>();
+    value.weaponDamageComponents.forEach((component, index) => {
+      try {
+        const checked = createRawDamageComponent(component as Parameters<typeof createRawDamageComponent>[0], 0);
+        if (componentIds.has(checked.id)) result.push(issue(`${path}.weaponDamageComponents.${index}.id`, 'DUPLICATE_COMPONENT_ID', 'Damage component ids must be unique'));
+        componentIds.add(checked.id);
+      } catch {
+        result.push(issue(`${path}.weaponDamageComponents.${index}`, 'DAMAGE_COMPONENT', 'Weapon damage component is invalid'));
+      }
+    });
+  }
+  if (value.costModifiers !== undefined) result.push(...costModifierSetIssues(value.costModifiers, `${path}.costModifiers`));
+  if (!isPlainRecord(value.defenses)) {
+    result.push(issue(`${path}.defenses`, 'DEFENSES_SHAPE', 'Defenses must be a plain object'));
+  } else Object.entries(value.defenses).forEach(([actorRef, defense]) => {
+    if (!isStableRef(actorRef) || !participantRefs.has(actorRef)) {
+      result.push(issue(`${path}.defenses.${actorRef}`, 'UNKNOWN_ACTOR_REF', 'Defense must belong to a known participant'));
+    }
+    result.push(...defenseIssues(defense, `${path}.defenses.${actorRef}`));
+  });
+
+  if (value.movement !== undefined) {
+    const movementPath = `${path}.movement`;
+    if (!isPlainRecord(value.movement)) result.push(issue(movementPath, 'MOVEMENT_SHAPE', 'Movement must be a plain object'));
+    else {
+      const movement = value.movement;
+      result.push(...unknownFieldIssues(movement, new Set(['kind', 'from', 'to', 'terrain', 'combinedActionAllowed']), movementPath));
+      if (typeof movement.kind !== 'string' || !movementKinds.has(movement.kind)) result.push(issue(`${movementPath}.kind`, 'ENUM', 'Movement kind is invalid'));
+      if (typeof movement.from !== 'string' || !(zones as readonly string[]).includes(movement.from)) result.push(issue(`${movementPath}.from`, 'ENUM', 'Movement origin is invalid'));
+      if (typeof movement.to !== 'string' || !(zones as readonly string[]).includes(movement.to)) result.push(issue(`${movementPath}.to`, 'ENUM', 'Movement destination is invalid'));
+      if (typeof movement.terrain !== 'string' || !terrainTypes.has(movement.terrain)) result.push(issue(`${movementPath}.terrain`, 'ENUM', 'Movement terrain is invalid'));
+      if (movement.combinedActionAllowed !== undefined && typeof movement.combinedActionAllowed !== 'boolean') {
+        result.push(issue(`${movementPath}.combinedActionAllowed`, 'BOOLEAN', 'Combined movement permission must be boolean'));
+      }
+      if (movement.kind === 'move_and_act' && movement.combinedActionAllowed !== true) {
+        result.push(issue(`${movementPath}.combinedActionAllowed`, 'MOVEMENT_POLICY', 'move_and_act requires explicit authoritative permission'));
+      }
+      if (movementKinds.has(movement.kind as string)
+        && (zones as readonly unknown[]).includes(movement.from)
+        && (zones as readonly unknown[]).includes(movement.to)
+        && terrainTypes.has(movement.terrain as string)) {
+        try {
+          calculateMovement(
+            movement.from as CombatZone,
+            movement.to as CombatZone,
+            (movement.kind === 'move_and_act' ? 'approach' : movement.kind) as Parameters<typeof calculateMovement>[2],
+            movement.terrain as Parameters<typeof calculateMovement>[3],
+          );
+        } catch { result.push(issue(movementPath, 'MOVEMENT_POLICY', 'Movement violates the core-v1 movement contract')); }
+      }
+    }
+  }
+
+  if (value.castingState !== undefined) {
+    const castingPath = `${path}.castingState`;
+    if (!isPlainRecord(value.castingState)) result.push(issue(castingPath, 'CASTING_STATE_SHAPE', 'Casting state must be a plain object'));
+    else {
+      const casting = value.castingState;
+      result.push(...unknownFieldIssues(casting, new Set([
+        'startTick', 'completionTick', 'reservedMana', 'phase', 'preparedUntilTick', 'channelNextPulseTick',
+      ]), castingPath));
+      for (const field of ['startTick', 'completionTick'] as const) {
+        try { assertCombatTick(casting[field] as bigint, field); } catch { result.push(issue(`${castingPath}.${field}`, 'TICK', 'Casting tick is invalid')); }
+      }
+      for (const field of ['preparedUntilTick', 'channelNextPulseTick'] as const) {
+        if (casting[field] !== null) {
+          try { assertCombatTick(casting[field] as bigint, field); } catch { result.push(issue(`${castingPath}.${field}`, 'TICK', 'Optional casting tick must be null or valid')); }
+        }
+      }
+      if (!Number.isSafeInteger(casting.reservedMana) || (casting.reservedMana as number) < 0) result.push(issue(`${castingPath}.reservedMana`, 'NON_NEGATIVE_SAFE_INTEGER', 'Reserved mana must be non-negative'));
+      if (typeof casting.phase !== 'string' || !castingPhases.has(casting.phase)) result.push(issue(`${castingPath}.phase`, 'ENUM', 'Casting phase is invalid'));
+    }
+  }
+  result.push(...reactionPolicyIssues(value.reactionPolicy, `${path}.reactionPolicy`));
+  if (typeof value.comboStopOnMiss !== 'boolean') result.push(issue(`${path}.comboStopOnMiss`, 'BOOLEAN', 'Combo stop policy must be boolean'));
+  if (value.consumedEntryRef !== undefined && !isStableRef(value.consumedEntryRef)) result.push(issue(`${path}.consumedEntryRef`, 'PUBLIC_REF', 'Consumed entry ref must be stable'));
+  return result;
+}
+
+function storedActionPlanIssues(
+  value: unknown,
+  path: string,
+  participantRefs: ReadonlySet<string>,
+): ValidationIssue[] {
+  if (!isPlainRecord(value)) return [issue(path, 'ACTION_PLAN_SHAPE', 'Stored action plan must be a plain object')];
+  const result = unknownFieldIssues(value, new Set([
+    'planRef', 'actorRef', 'expectedStateVersion', 'intents', 'stopConditions',
+  ]), path);
+  if (!isStableRef(value.planRef)) result.push(issue(`${path}.planRef`, 'PUBLIC_REF', 'Plan ref must be stable'));
+  if (!isStableRef(value.actorRef) || !participantRefs.has(value.actorRef)) result.push(issue(`${path}.actorRef`, 'UNKNOWN_ACTOR_REF', 'Plan actor must be a known participant'));
+  if (!Number.isSafeInteger(value.expectedStateVersion) || (value.expectedStateVersion as number) < 1) result.push(issue(`${path}.expectedStateVersion`, 'POSITIVE_STATE_VERSION', 'Expected state version must be positive'));
+  if (!isDenseArray(value.intents) || value.intents.length === 0
+    || value.intents.length > CORE_V1_MAX_ENCOUNTER_PLAN_ACTIONS) {
+    result.push(issue(`${path}.intents`, 'PLAN_ACTION_LIMIT', 'Plan intents must be a non-empty dense array within the core-v1 limit'));
+  } else value.intents.forEach((intent, index) => {
+    result.push(...encounterIntentIssues(intent, `${path}.intents.${index}`));
+    if (isPlainRecord(intent) && intent.sourceActorRef !== value.actorRef) {
+      result.push(issue(`${path}.intents.${index}.sourceActorRef`, 'PLAN_ACTOR_MATCH', 'Every plan intent must use the plan actor'));
+    }
+  });
+  if (!isDenseArray(value.stopConditions)) result.push(issue(`${path}.stopConditions`, 'ARRAY', 'Plan stop conditions must be a dense array'));
+  else value.stopConditions.forEach((condition, index) => {
+    if (typeof condition !== 'string' || !actionPlanStopConditions.has(condition)) result.push(issue(`${path}.stopConditions.${index}`, 'ENUM', 'Plan stop condition is invalid'));
+  });
+  return result;
 }
 
 function relationKey(left: string, right: string): string {
@@ -302,14 +713,311 @@ function queueType(type: CoreV1EncounterEventType): TimelineEventType {
   return 'action_effect';
 }
 
-function sortedEncounterEvents(events: readonly CoreV1EncounterEvent[], currentTick: bigint): readonly CoreV1EncounterEvent[] {
+function sortedEncounterEvents(events: readonly CoreV1EncounterEvent[], currentTick?: bigint): readonly CoreV1EncounterEvent[] {
   const byId = new Map(events.map((event) => [event.timelineEvent.eventId, event]));
-  const ordered = createEventQueue(events.map((event) => event.timelineEvent), currentTick);
+  const ordered = createEventQueue(events.map((event) => event.timelineEvent), currentTick ?? 0n);
   return ordered.map((event) => {
     const wrapper = byId.get(event.eventId);
     if (wrapper === undefined) throw new RangeError('Encounter event wrapper is missing');
     return cloneValue(wrapper);
   });
+}
+
+function resolvedCostIssues(value: unknown, path: string): ValidationIssue[] {
+  if (!isPlainRecord(value) || typeof value.type !== 'string') {
+    return [issue(path, 'COST_SHAPE', 'Compiled action cost must be a supported plain object')];
+  }
+  const fieldsByType: Readonly<Record<string, readonly string[]>> = {
+    mana: ['type', 'amount'],
+    sp: ['type', 'amount'],
+    hybrid: ['type', 'mana', 'sp'],
+    active_defense: ['type', 'sp'],
+    special_dodge: ['type', 'sp'],
+    maintenance: ['type', 'resource', 'amount', 'activationCost'],
+    hp: ['type', 'percentBps'],
+    none: ['type'],
+    custom: ['type', 'resourceRef', 'amount'],
+  };
+  const allowed = fieldsByType[value.type];
+  if (allowed === undefined) return [issue(`${path}.type`, 'ENUM', 'Compiled action cost type is not supported')];
+  const result = unknownFieldIssues(value, new Set(allowed), path);
+  const positiveIntegerFields = value.type === 'hybrid' ? ['mana', 'sp']
+    : value.type === 'maintenance' ? ['amount', 'activationCost']
+      : value.type === 'hp' ? ['percentBps']
+        : value.type === 'none' ? [] : value.type === 'active_defense' || value.type === 'special_dodge'
+          ? ['sp'] : ['amount'];
+  for (const field of positiveIntegerFields) {
+    if (!Number.isSafeInteger(value[field]) || (value[field] as number) <= 0) {
+      result.push(issue(`${path}.${field}`, 'POSITIVE_SAFE_INTEGER', 'Compiled action cost values must be positive safe integers'));
+    }
+  }
+  if (value.type === 'maintenance' && value.resource !== 'mana' && value.resource !== 'sp') {
+    result.push(issue(`${path}.resource`, 'ENUM', 'Maintenance cost resource is not supported'));
+  }
+  if (value.type === 'custom' && !isStableRef(value.resourceRef)) {
+    result.push(issue(`${path}.resourceRef`, 'PUBLIC_REF', 'Custom cost resource ref must be stable'));
+  }
+  return result;
+}
+
+function encounterCooldownIssues(
+  value: unknown,
+  path: string,
+  participantRefs: ReadonlySet<string>,
+): ValidationIssue[] {
+  if (!isPlainRecord(value)) return [issue(path, 'COOLDOWN_SHAPE', 'Cooldown must be a plain object')];
+  const result = unknownFieldIssues(value, new Set([
+    'actorRef', 'cooldownRef', 'readyAtTick', 'sourceKind',
+  ]), path);
+  if (!isStableRef(value.actorRef) || !isStableRef(value.cooldownRef)
+    || !participantRefs.has(value.actorRef)) {
+    result.push(issue(path, 'COOLDOWN_REF', 'Cooldown must use a known actor and stable ref'));
+  }
+  if (value.sourceKind !== 'reaction' && value.sourceKind !== 'content') {
+    result.push(issue(`${path}.sourceKind`, 'ENUM', 'Cooldown source kind is invalid'));
+  }
+  try { assertCombatTick(value.readyAtTick as bigint, 'readyAtTick'); } catch {
+    result.push(issue(`${path}.readyAtTick`, 'COOLDOWN_TICK', 'Cooldown ready tick is invalid'));
+  }
+  return result;
+}
+
+function encounterEventIssues(
+  value: unknown,
+  path: string,
+  participantRefs: ReadonlySet<string>,
+  currentTick?: bigint,
+  expectedActionRef?: string,
+): ValidationIssue[] {
+  if (!isPlainRecord(value)) return [issue(path, 'EVENT_SHAPE', 'Encounter event must be a plain object')];
+  const result = unknownFieldIssues(value, new Set([
+    'eventRef', 'type', 'timelineEvent', 'actionRef', 'targetRef', 'targetOrdinal',
+    'comboStepRef', 'reactionKind',
+  ]), path);
+  if (!isDeterministicInternalRef(value.eventRef)) {
+    result.push(issue(`${path}.eventRef`, 'EVENT_REF', 'Event ref must be a deterministic internal ref'));
+  }
+  if (!eventTypes.has(value.type as CoreV1EncounterEventType)) {
+    result.push(issue(`${path}.type`, 'ENUM', 'Encounter event type is not supported'));
+  }
+  if (value.actionRef !== undefined && !isDeterministicInternalRef(value.actionRef)) {
+    result.push(issue(`${path}.actionRef`, 'EVENT_REF', 'Event action ref must be deterministic'));
+  }
+  if (expectedActionRef !== undefined && value.actionRef !== expectedActionRef) {
+    result.push(issue(`${path}.actionRef`, 'ACTION_REF_MATCH', 'Internal event must reference its compiled action'));
+  }
+  if (value.targetRef !== undefined
+    && (!isStableRef(value.targetRef) || !participantRefs.has(value.targetRef))) {
+    result.push(issue(`${path}.targetRef`, 'UNKNOWN_ACTOR_REF', 'Event target must be a known participant'));
+  }
+  if (value.targetOrdinal !== undefined
+    && (!Number.isSafeInteger(value.targetOrdinal) || (value.targetOrdinal as number) < 0
+      || (value.targetOrdinal as number) >= CORE_V1_MAX_ENCOUNTER_TARGETS)) {
+    result.push(issue(`${path}.targetOrdinal`, 'TARGET_ORDINAL', 'Event target ordinal is invalid'));
+  }
+  if (value.comboStepRef !== undefined
+    && (typeof value.comboStepRef !== 'string' || value.comboStepRef.length === 0)) {
+    result.push(issue(`${path}.comboStepRef`, 'COMBO_STEP_REF', 'Combo step ref must be non-empty'));
+  }
+  if (value.reactionKind !== undefined
+    && (typeof value.reactionKind !== 'string' || !reactionKinds.has(value.reactionKind))) {
+    result.push(issue(`${path}.reactionKind`, 'ENUM', 'Reaction kind is invalid'));
+  }
+  if (!isPlainRecord(value.timelineEvent)) {
+    result.push(issue(`${path}.timelineEvent`, 'EVENT_QUEUE', 'Encounter timeline event is invalid'));
+    return result;
+  }
+  if (value.eventRef !== value.timelineEvent.eventId) {
+    result.push(issue(`${path}.eventRef`, 'EVENT_REF', 'Event ref must match the queue event id'));
+  }
+  if (!isStableRef(value.timelineEvent.actorRef)
+    || !participantRefs.has(value.timelineEvent.actorRef)) {
+    result.push(issue(`${path}.timelineEvent.actorRef`, 'UNKNOWN_ACTOR_REF', 'Timeline actor must be a known participant'));
+  }
+  if (value.timelineEvent.actionRef !== value.actionRef) {
+    result.push(issue(`${path}.timelineEvent.actionRef`, 'ACTION_REF_MATCH', 'Timeline action ref must match the encounter event'));
+  }
+  if (eventTypes.has(value.type as CoreV1EncounterEventType)
+    && value.timelineEvent.type !== queueType(value.type as CoreV1EncounterEventType)) {
+    result.push(issue(`${path}.timelineEvent.type`, 'EVENT_PRIORITY', 'Encounter event must use its canonical queue priority'));
+  }
+  try { createEventQueue([value.timelineEvent as unknown as TimelineEvent], currentTick ?? 0n); } catch {
+    result.push(issue(`${path}.timelineEvent`, 'EVENT_QUEUE', 'Encounter timeline event violates the queue contract'));
+  }
+  return result;
+}
+
+function compiledActionIssues(
+  value: unknown,
+  path: string,
+  state: CoreV1EncounterState,
+): ValidationIssue[] {
+  if (!isPlainRecord(value)) return [issue(path, 'ACTIVE_ACTION_SHAPE', 'Active action must be a plain object')];
+  const result = unknownFieldIssues(value, new Set([
+    'actionRef', 'intentRef', 'sourceActorRef', 'slotRef', 'actionKind', 'contentRef',
+    'startTick', 'effectTick', 'nextActionAtTick', 'preparationTicks', 'recoveryTicks',
+    'targets', 'reactionDepth', 'interruptible', 'blockable', 'dodgeable',
+    'canRetargetBeforeEffect', 'resourceReservationPlan', 'cooldownPlan', 'upkeepPlan',
+    'internalEvents', 'executionPlan', 'state', 'costApplied', 'selfEffectsApplied',
+    'dodgedTargetRefs',
+  ]), path);
+  if (!isDeterministicInternalRef(value.actionRef)) {
+    result.push(issue(`${path}.actionRef`, 'PUBLIC_REF', 'Action ref must be a deterministic stable ref'));
+  }
+  for (const field of ['intentRef', 'sourceActorRef', 'slotRef'] as const) {
+    if (!isStableRef(value[field])) result.push(issue(`${path}.${field}`, 'PUBLIC_REF', 'Action ref must be stable and must not be a UUID'));
+  }
+  if (!compiledActionKinds.has(value.actionKind as CoreV1CompiledEncounterAction['actionKind'])) {
+    result.push(issue(`${path}.actionKind`, 'ENUM', 'Compiled action kind is not supported'));
+  }
+  if (!compiledActionStates.has(value.state as CoreV1CompiledEncounterAction['state'])) {
+    result.push(issue(`${path}.state`, 'ENUM', 'Compiled action state is not supported'));
+  }
+  if (!Number.isSafeInteger(value.reactionDepth)
+    || (value.reactionDepth as number) < 0 || (value.reactionDepth as number) > 2) {
+    result.push(issue(`${path}.reactionDepth`, 'REACTION_DEPTH', 'Reaction depth must be an integer between 0 and 2'));
+  }
+  for (const field of compiledActionBooleanFields) {
+    if (typeof value[field] !== 'boolean') result.push(issue(`${path}.${field}`, 'BOOLEAN', 'Compiled action flag must be boolean'));
+  }
+  for (const field of ['startTick', 'effectTick', 'nextActionAtTick', 'preparationTicks', 'recoveryTicks'] as const) {
+    try { assertCombatTick(value[field] as bigint, field); } catch {
+      result.push(issue(`${path}.${field}`, 'TICK', 'Compiled action tick is invalid'));
+    }
+  }
+  const participantRefs = new Set(state.participants.map((participant) => participant.actorRef));
+  const source = state.participants.find((participant) => participant.actorRef === value.sourceActorRef);
+  if (source === undefined) result.push(issue(`${path}.sourceActorRef`, 'UNKNOWN_ACTOR_REF', 'Action source must be a known participant'));
+  else if (!source.actionSlots.some((slot) => slot.slotRef === value.slotRef)) {
+    result.push(issue(`${path}.slotRef`, 'UNKNOWN_ACTION_SLOT', 'Action slot must belong to the source participant'));
+  }
+  if (value.contentRef !== undefined) result.push(...contentReferenceIssues(value.contentRef, `${path}.contentRef`));
+  if (!isDenseArray(value.targets) || value.targets.length > CORE_V1_MAX_ENCOUNTER_TARGETS) {
+    result.push(issue(`${path}.targets`, 'TARGET_LIMIT', 'Compiled action targets must be a dense array within the encounter target limit'));
+  } else {
+    const seenTargetRefs = new Set<string>();
+    value.targets.forEach((target, index) => {
+      const targetPath = `${path}.targets.${index}`;
+      if (!isPlainRecord(target)) {
+        result.push(issue(targetPath, 'TARGET_SHAPE', 'Compiled action target must be a plain object'));
+        return;
+      }
+      result.push(...unknownFieldIssues(target, new Set([
+        'targetRef', 'targetOrdinal', 'damageMultiplierBps', 'effectTickOffset',
+      ]), targetPath));
+      if (!isStableRef(target.targetRef)) result.push(issue(`${targetPath}.targetRef`, 'PUBLIC_REF', 'Target ref must be stable'));
+      else if (!participantRefs.has(target.targetRef)) result.push(issue(`${targetPath}.targetRef`, 'UNKNOWN_ACTOR_REF', 'Target ref must identify a known participant'));
+      else if (seenTargetRefs.has(target.targetRef)) result.push(issue(`${targetPath}.targetRef`, 'DUPLICATE_TARGET_REF', 'Compiled target refs must be unique'));
+      else seenTargetRefs.add(target.targetRef);
+      if (!Number.isSafeInteger(target.targetOrdinal)
+        || (target.targetOrdinal as number) < 0
+        || (target.targetOrdinal as number) >= CORE_V1_MAX_ENCOUNTER_TARGETS) {
+        result.push(issue(`${targetPath}.targetOrdinal`, 'TARGET_ORDINAL', 'Target ordinal is outside the encounter target limit'));
+      } else if (target.targetOrdinal !== index) {
+        result.push(issue(`${targetPath}.targetOrdinal`, 'TARGET_ORDINAL', 'Target ordinal must match deterministic target order'));
+      }
+      if (!Number.isSafeInteger(target.damageMultiplierBps)
+        || (target.damageMultiplierBps as number) < 1
+        || (target.damageMultiplierBps as number) > maximumResolvedTargetMultiplierBps) {
+        result.push(issue(`${targetPath}.damageMultiplierBps`, 'TARGET_MULTIPLIER', 'Resolved target multiplier is invalid'));
+      }
+      try { assertCombatTick(target.effectTickOffset as bigint, 'effectTickOffset'); } catch {
+        result.push(issue(`${targetPath}.effectTickOffset`, 'TICK', 'Target effect tick offset is invalid'));
+      }
+    });
+  }
+  if (!isDenseArray(value.dodgedTargetRefs)) {
+    result.push(issue(`${path}.dodgedTargetRefs`, 'ARRAY', 'Dodged target refs must be a dense array'));
+  } else {
+    const targetRefs = new Set(isDenseArray(value.targets)
+      ? value.targets.flatMap((target) => isPlainRecord(target) && typeof target.targetRef === 'string' ? [target.targetRef] : [])
+      : []);
+    const dodgedRefs = new Set<string>();
+    value.dodgedTargetRefs.forEach((ref, index) => {
+      if (!isStableRef(ref)) result.push(issue(`${path}.dodgedTargetRefs.${index}`, 'PUBLIC_REF', 'Dodged target ref must be stable'));
+      else if (!targetRefs.has(ref)) result.push(issue(`${path}.dodgedTargetRefs.${index}`, 'UNKNOWN_TARGET_REF', 'Dodged target must be part of the compiled target set'));
+      else if (dodgedRefs.has(ref)) result.push(issue(`${path}.dodgedTargetRefs.${index}`, 'DUPLICATE_TARGET_REF', 'Dodged target refs must be unique'));
+      else dodgedRefs.add(ref);
+    });
+  }
+  if (!isPlainRecord(value.resourceReservationPlan)) {
+    result.push(issue(`${path}.resourceReservationPlan`, 'RESERVATION_PLAN', 'Resource reservation plan must be a plain object'));
+  } else {
+    const planPath = `${path}.resourceReservationPlan`;
+    result.push(...unknownFieldIssues(value.resourceReservationPlan, new Set([
+      'cost', 'affordable', 'reservations',
+    ]), planPath));
+    result.push(...resolvedCostIssues(value.resourceReservationPlan.cost, `${planPath}.cost`));
+    if (typeof value.resourceReservationPlan.affordable !== 'boolean') {
+      result.push(issue(`${planPath}.affordable`, 'BOOLEAN', 'Resource affordability must be boolean'));
+    }
+    if (!isDenseArray(value.resourceReservationPlan.reservations)) {
+      result.push(issue(`${planPath}.reservations`, 'ARRAY', 'Resource reservations must be a dense array'));
+    } else value.resourceReservationPlan.reservations.forEach((reservation, index) => {
+      const reservationPath = `${planPath}.reservations.${index}`;
+      if (!isPlainRecord(reservation)) {
+        result.push(issue(reservationPath, 'RESERVATION_SHAPE', 'Resource reservation must be a plain object'));
+        return;
+      }
+      result.push(...unknownFieldIssues(reservation, new Set(['resource', 'amount']), reservationPath));
+      if (!isStableRef(reservation.resource)) result.push(issue(`${reservationPath}.resource`, 'PUBLIC_REF', 'Reserved resource must be stable'));
+      if (!Number.isSafeInteger(reservation.amount) || (reservation.amount as number) < 0) {
+        result.push(issue(`${reservationPath}.amount`, 'NON_NEGATIVE_SAFE_INTEGER', 'Reserved amount must be a non-negative safe integer'));
+      }
+    });
+  }
+  if (!isDenseArray(value.cooldownPlan)) result.push(issue(`${path}.cooldownPlan`, 'ARRAY', 'Cooldown plan must be a dense array'));
+  else value.cooldownPlan.forEach((cooldown, index) => {
+    result.push(...encounterCooldownIssues(cooldown, `${path}.cooldownPlan.${index}`, participantRefs));
+  });
+  if (!isDenseArray(value.upkeepPlan)) result.push(issue(`${path}.upkeepPlan`, 'ARRAY', 'Upkeep plan must be a dense array'));
+  else value.upkeepPlan.forEach((upkeep, index) => {
+    const upkeepPath = `${path}.upkeepPlan.${index}`;
+    if (!isPlainRecord(upkeep)) {
+      result.push(issue(upkeepPath, 'UPKEEP_SHAPE', 'Upkeep entry must be a plain object'));
+      return;
+    }
+    result.push(...unknownFieldIssues(upkeep, new Set(['resource', 'amount']), upkeepPath));
+    if (upkeep.resource !== 'mana' && upkeep.resource !== 'sp') result.push(issue(`${upkeepPath}.resource`, 'ENUM', 'Upkeep resource is not supported'));
+    if (!Number.isSafeInteger(upkeep.amount) || (upkeep.amount as number) < 0) result.push(issue(`${upkeepPath}.amount`, 'NON_NEGATIVE_SAFE_INTEGER', 'Upkeep amount must be a non-negative safe integer'));
+  });
+  if (!isDenseArray(value.internalEvents)) result.push(issue(`${path}.internalEvents`, 'ARRAY', 'Internal events must be a dense array'));
+  else {
+    value.internalEvents.forEach((event, index) => {
+      const eventPath = `${path}.internalEvents.${index}`;
+      result.push(...encounterEventIssues(
+        event,
+        eventPath,
+        participantRefs,
+        undefined,
+        typeof value.actionRef === 'string' ? value.actionRef : undefined,
+      ));
+      if (isPlainRecord(event) && Number.isSafeInteger(event.targetOrdinal)
+        && isDenseArray(value.targets)) {
+        const target = value.targets[event.targetOrdinal as number];
+        if (target === undefined || !isPlainRecord(target) || event.targetRef !== target.targetRef) {
+          result.push(issue(`${eventPath}.targetOrdinal`, 'TARGET_REF_MATCH', 'Event target ordinal must identify its compiled target'));
+        }
+      }
+    });
+    try {
+      const events = value.internalEvents as unknown as readonly CoreV1EncounterEvent[];
+      const ordered = sortedEncounterEvents(events);
+      if (events.some((event, index) => event.eventRef !== ordered[index]?.eventRef)) {
+        result.push(issue(`${path}.internalEvents`, 'DETERMINISTIC_ORDER', 'Internal events must use queue order'));
+      }
+    } catch { result.push(issue(`${path}.internalEvents`, 'EVENT_QUEUE', 'Internal events violate the queue contract')); }
+  }
+  result.push(...executionPlanIssues(value.executionPlan, `${path}.executionPlan`, participantRefs));
+  if (isPlainRecord(value.executionPlan)
+    && (value.contentRef !== undefined || value.executionPlan.contentRef !== undefined)
+    && !contentRefMatches(
+      value.contentRef as CoreV1EncounterActionDefinition['contentRef'],
+      value.executionPlan.contentRef as CoreV1EncounterActionDefinition['contentRef'],
+    )) {
+    result.push(issue(`${path}.executionPlan.contentRef`, 'CONTENT_VERSION_MATCH', 'Action and execution plan content refs must match'));
+  }
+  return result;
 }
 
 export function validateCoreV1EncounterState(input: unknown): CoreV1EncounterResult<CoreV1EncounterState> {
@@ -344,9 +1052,12 @@ export function validateCoreV1EncounterState(input: unknown): CoreV1EncounterRes
       issues.push(issue('participants', 'DETERMINISTIC_ORDER', 'Participants must be ordered by actor ref'));
     }
   }
+  const participantRefs = new Set<string>(isArrayValue(state.participants)
+    ? state.participants.flatMap((participant) => isPlainRecord(participant)
+      && typeof participant.actorRef === 'string' ? [participant.actorRef] : [])
+    : []);
   if (!isArrayValue(state.relations)) issues.push(issue('relations', 'ARRAY', 'Relations must be an array'));
   else if (isArrayValue(state.participants)) {
-    const participantRefs = new Set(state.participants.map((participant) => participant.actorRef));
     const seen = new Set<string>();
     for (const [index, relation] of state.relations.entries()) {
       if (!participantRefs.has(relation.leftActorRef) || !participantRefs.has(relation.rightActorRef)) {
@@ -367,9 +1078,7 @@ export function validateCoreV1EncounterState(input: unknown): CoreV1EncounterRes
     issues.push(issue('scheduledEvents', 'EVENT_LIMIT', 'Encounter event queue exceeds 256 events'));
   } else {
     state.scheduledEvents.forEach((event, index) => {
-      if (!isDeterministicInternalRef(event.eventRef) || event.eventRef !== event.timelineEvent.eventId) issues.push(issue(`scheduledEvents.${index}.eventRef`, 'EVENT_REF', 'Event ref must match the queue event id'));
-      if (!eventTypes.has(event.type)) issues.push(issue(`scheduledEvents.${index}.type`, 'ENUM', 'Encounter event type is not supported'));
-      if (event.timelineEvent.type !== queueType(event.type)) issues.push(issue(`scheduledEvents.${index}.timelineEvent.type`, 'EVENT_PRIORITY', 'Encounter event must use its canonical queue priority'));
+      issues.push(...encounterEventIssues(event, `scheduledEvents.${index}`, participantRefs, state.currentTick));
     });
     try {
       const ordered = sortedEncounterEvents(state.scheduledEvents, state.currentTick);
@@ -377,27 +1086,47 @@ export function validateCoreV1EncounterState(input: unknown): CoreV1EncounterRes
     } catch { issues.push(issue('scheduledEvents', 'EVENT_QUEUE', 'Scheduled events violate the core-v1 event queue contract')); }
   }
   if (!isArrayValue(state.activeActions)) issues.push(issue('activeActions', 'ARRAY', 'Active actions must be an array'));
-  else if (new Set(state.activeActions.map((action) => action.actionRef)).size !== state.activeActions.length) issues.push(issue('activeActions', 'DUPLICATE_ACTION_REF', 'Active action refs must be unique'));
+  else {
+    const refs = new Set<string>();
+    for (const [index, action] of (state.activeActions as readonly unknown[]).entries()) {
+      issues.push(...compiledActionIssues(action, `activeActions.${index}`, state));
+      if (isPlainRecord(action) && typeof action.actionRef === 'string') {
+        if (refs.has(action.actionRef)) issues.push(issue(`activeActions.${index}.actionRef`, 'DUPLICATE_ACTION_REF', 'Active action refs must be unique'));
+        refs.add(action.actionRef);
+      }
+    }
+  }
   if (!isArrayValue(state.cooldowns)) issues.push(issue('cooldowns', 'ARRAY', 'Cooldowns must be an array'));
   else {
     const refs = new Set<string>();
-    state.cooldowns.forEach((cooldown, index) => {
-      const key = `${cooldown.actorRef}\u0000${cooldown.cooldownRef}`;
-      if (!isStableRef(cooldown.actorRef) || !isStableRef(cooldown.cooldownRef)
-        || !state.participants.some((participant) => participant.actorRef === cooldown.actorRef)) {
-        issues.push(issue(`cooldowns.${index}`, 'COOLDOWN_REF', 'Cooldown must use a known actor and stable ref'));
-      }
-      if (cooldown.sourceKind !== 'reaction' && cooldown.sourceKind !== 'content') {
-        issues.push(issue(`cooldowns.${index}.sourceKind`, 'ENUM', 'Cooldown source kind is invalid'));
-      }
-      if (refs.has(key)) issues.push(issue(`cooldowns.${index}`, 'DUPLICATE_COOLDOWN', 'Cooldown refs must be unique per actor'));
-      refs.add(key);
-      try { assertCombatTick(cooldown.readyAtTick, 'readyAtTick'); } catch {
-        issues.push(issue(`cooldowns.${index}.readyAtTick`, 'COOLDOWN_TICK', 'Cooldown ready tick is invalid'));
+    (state.cooldowns as readonly unknown[]).forEach((cooldown, index) => {
+      issues.push(...encounterCooldownIssues(cooldown, `cooldowns.${index}`, participantRefs));
+      if (!isPlainRecord(cooldown)) return;
+      if (typeof cooldown.actorRef === 'string' && typeof cooldown.cooldownRef === 'string') {
+        const key = `${cooldown.actorRef}\u0000${cooldown.cooldownRef}`;
+        if (refs.has(key)) issues.push(issue(`cooldowns.${index}`, 'DUPLICATE_COOLDOWN', 'Cooldown refs must be unique per actor'));
+        refs.add(key);
       }
     });
   }
-  if (!isArrayValue(state.actionPlans)) issues.push(issue('actionPlans', 'ARRAY', 'Action plans must be an array'));
+  if (!isDenseArray(state.actionPlans)) issues.push(issue('actionPlans', 'ARRAY', 'Action plans must be a dense array'));
+  else {
+    const planRefs = new Set<string>();
+    state.actionPlans.forEach((plan, index) => {
+      issues.push(...storedActionPlanIssues(plan, `actionPlans.${index}`, participantRefs));
+      if (isPlainRecord(plan) && typeof plan.planRef === 'string') {
+        if (planRefs.has(plan.planRef)) issues.push(issue(`actionPlans.${index}.planRef`, 'DUPLICATE_PLAN_REF', 'Stored action plan refs must be unique'));
+        planRefs.add(plan.planRef);
+      }
+    });
+    const ordered = [...state.actionPlans].sort((left, right) => left.planRef.localeCompare(right.planRef));
+    if (state.actionPlans.some((plan, index) => plan.planRef !== ordered[index]?.planRef)) {
+      issues.push(issue('actionPlans', 'DETERMINISTIC_ORDER', 'Stored action plans must be ordered by plan ref'));
+    }
+  }
+  if (state.completionCandidate !== null && !completionCandidates.has(state.completionCandidate)) {
+    issues.push(issue('completionCandidate', 'ENUM', 'Encounter completion candidate is not supported'));
+  }
     if (issues.length > 0) return failure(issues);
     return success(state);
   } catch (error) {
@@ -590,7 +1319,9 @@ function validateTargetingContext(
 }
 
 function multiplierAt(targeting: CoreV1Targeting, ordinal: number): number {
-  if (targeting.type === 'self' || targeting.type === 'single_target' || targeting.type === 'weapon_attack') return 10_000;
+  if (targeting.type === 'self' || targeting.type === 'single_target' || targeting.type === 'weapon_attack') {
+    return maximumResolvedTargetMultiplierBps;
+  }
   return targeting.damageMultiplierPerTargetBps?.[ordinal] ?? 0;
 }
 
@@ -702,7 +1433,8 @@ export function resolveCoreV1EncounterTargets(
       ? BigInt(request.targeting.chainInterval ?? 0) * BigInt(targetOrdinal)
       : 0n,
   }));
-  if (result.some((target) => target.damageMultiplierBps < 1 || target.damageMultiplierBps > 10_000)) {
+  if (result.some((target) => target.damageMultiplierBps < 1
+    || target.damageMultiplierBps > maximumResolvedTargetMultiplierBps)) {
     return failure([issue('targets', 'TARGET_MULTIPLIER', 'Resolved target multiplier is invalid')]);
   }
   return success(result);
@@ -1118,7 +1850,7 @@ export function compileCoreV1EncounterAction(
       ...(input.intent.actionSource === 'consumable' && input.intent.weaponEntryRef !== undefined
         ? { consumedEntryRef: input.intent.weaponEntryRef } : {}),
     };
-    return success({
+    const compiledAction: CoreV1CompiledEncounterAction = {
       actionRef,
       intentRef: input.intent.intentRef,
       sourceActorRef: source.actorRef,
@@ -1148,7 +1880,9 @@ export function compileCoreV1EncounterAction(
       costApplied: false,
       selfEffectsApplied: false,
       dodgedTargetRefs: [],
-    });
+    };
+    const compiledIssues = compiledActionIssues(compiledAction, 'action', encounter.value);
+    return compiledIssues.length > 0 ? failure(compiledIssues) : success(compiledAction);
   } catch (error) {
     return caughtFailure(error, 'action');
   }
@@ -2160,6 +2894,12 @@ export function applyCoreV1EncounterActionPlan(
   if (input.plan.intents.some((intent) => intent.sourceActorRef !== input.plan.actorRef)) {
     return failure([issue('plan.intents', 'PLAN_ACTOR_MATCH', 'Every plan intent must use the plan actor')]);
   }
+  const storedPlanIssues = storedActionPlanIssues(
+    input.plan,
+    'plan',
+    new Set(encounter.value.participants.map((participant) => participant.actorRef)),
+  );
+  if (storedPlanIssues.length > 0) return failure(storedPlanIssues);
   let current: CoreV1EncounterState = {
     ...encounter.value,
     actionPlans: [...encounter.value.actionPlans.filter((plan) => plan.planRef !== input.plan.planRef), cloneValue(input.plan)]
