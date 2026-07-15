@@ -324,8 +324,20 @@ export function validateCoreV1ResourceState(
 }
 
 function assertRolls(rolls: CoreV1InjectedRolls): void {
-  assertIntegerInRange(rolls.hitRollBps, CORE_V1_MIN_ROLL_BPS, CORE_V1_MAX_ROLL_BPS, 'hitRollBps');
-  assertIntegerInRange(rolls.criticalRollBps, CORE_V1_MIN_ROLL_BPS, CORE_V1_MAX_ROLL_BPS, 'criticalRollBps');
+  if (!isPlainRecord(rolls)) throw new TypeError('rolls must be a plain object');
+  if (rolls.forcedMiss === true) {
+    const keys = rolls.concentrationRoll === undefined ? ['forcedMiss'] : ['forcedMiss', 'concentrationRoll'];
+    if (!hasOnlyKeys(rolls, keys)) throw new TypeError('forcedMiss rolls contain unsupported fields');
+  } else {
+    if (rolls.forcedMiss !== undefined && rolls.forcedMiss !== false) throw new TypeError('forcedMiss must be false when present');
+    const keys = [
+      ...(Object.hasOwn(rolls, 'forcedMiss') ? ['forcedMiss'] : []),
+      'hitRollBps', 'criticalRollBps',
+      ...(rolls.concentrationRoll === undefined ? [] : ['concentrationRoll']),
+    ];
+    if (!hasOnlyKeys(rolls, keys)) throw new TypeError('rolls contain unsupported or missing fields');
+    assertIntegerInRange(rolls.hitRollBps, CORE_V1_MIN_ROLL_BPS, CORE_V1_MAX_ROLL_BPS, 'hitRollBps');
+  }
   if (rolls.concentrationRoll !== undefined) assertInteger(rolls.concentrationRoll, 'concentrationRoll');
 }
 
@@ -549,13 +561,21 @@ export function resolveCoreV1DamageApplication(
       input.target.secondaryAttributes.evasion,
       input.situationalHitModifiersBps ?? 0,
     );
-    const hit = input.rolls.hitRollBps <= hitChanceBps;
+    const hit = input.rolls.forcedMiss !== true && input.rolls.hitRollBps <= hitChanceBps;
     const criticalProfile = calculateCriticalProfile(
       input.attacker.primaryAttributes,
       components.some((component) => component.canCrit),
     );
-    const critical = hit && criticalProfile.canCrit
-      && input.rolls.criticalRollBps <= criticalProfile.criticalChanceBps;
+    let critical = false;
+    if (hit && criticalProfile.canCrit) {
+      assertIntegerInRange(
+        input.rolls.criticalRollBps,
+        CORE_V1_MIN_ROLL_BPS,
+        CORE_V1_MAX_ROLL_BPS,
+        'criticalRollBps',
+      );
+      critical = input.rolls.criticalRollBps <= criticalProfile.criticalChanceBps;
+    }
     const raw = scaledDamageComponents(components, input.attacker, input.targeting.damageMultiplierBps);
     const resistances = input.defense.temporaryResistances ?? {
       physicalResistanceBps: input.target.secondaryAttributes.physicalResistanceBps,

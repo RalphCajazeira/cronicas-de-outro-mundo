@@ -89,11 +89,17 @@ export interface CoreV1CostResolution {
   readonly affordable: boolean;
 }
 
-export interface CoreV1InjectedRolls {
-  readonly hitRollBps: number;
-  readonly criticalRollBps: number;
-  readonly concentrationRoll?: number;
-}
+export type CoreV1InjectedRolls =
+  | {
+    readonly forcedMiss: true;
+    readonly concentrationRoll?: number;
+  }
+  | {
+    readonly forcedMiss?: false;
+    readonly hitRollBps: number;
+    readonly criticalRollBps: number;
+    readonly concentrationRoll?: number;
+  };
 
 export interface CoreV1EffectContentVersionReference {
   readonly scope: 'world' | 'campaign';

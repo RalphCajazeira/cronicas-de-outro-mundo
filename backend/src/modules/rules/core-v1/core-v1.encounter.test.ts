@@ -6,12 +6,17 @@ import {
   compareTimelineEvents,
   compileCoreV1EncounterAction,
   CORE_V1_MAX_ENCOUNTER_TARGETS,
+  cancelCoreV1Encounter,
+  confirmCoreV1EncounterCompletion,
+  createCoreV1EncounterActionSlots,
   createCoreV1EmptyEquipmentLoadout,
   createCoreV1EncounterState,
   getInitialAttributePreset,
   processCoreV1EncounterBatch,
   processNextCoreV1EncounterEvent,
   resolveCoreV1EncounterTargets,
+  resolveCoreV1DamageApplication,
+  resolveCoreV1DeterministicReactionOutcome,
   scheduleCoreV1EncounterAction,
   validateCoreV1EncounterState,
 } from './index.js';
@@ -742,6 +747,87 @@ describe('core-v1 compiled encounter action validation', () => {
   });
 });
 
+describe('core-v1 encounter adapter policies', () => {
+  it('creates canonical backend-owned action slots', () => {
+    expect(createCoreV1EncounterActionSlots(25n)).toEqual([
+      expect.objectContaining({ slotRef: 'primary', slotType: 'primary', nextActionAtTick: 25n }),
+      expect.objectContaining({ slotRef: 'secondary', slotType: 'secondary', nextActionAtTick: 25n }),
+    ]);
+  });
+
+  it('resolves every approved reaction deterministically without a roll', () => {
+    expect(resolveCoreV1DeterministicReactionOutcome({ kind: 'block', blockValue: 7 }))
+      .toEqual({ kind: 'block', success: true, blockValue: 7, completeBlock: false });
+    expect(resolveCoreV1DeterministicReactionOutcome({ kind: 'active_dodge' }))
+      .toEqual({ kind: 'active_dodge', success: true });
+    expect(resolveCoreV1DeterministicReactionOutcome({ kind: 'interrupt' }))
+      .toEqual({ kind: 'interrupt', success: true });
+    expect(resolveCoreV1DeterministicReactionOutcome({ kind: 'counter_attack' }))
+      .toEqual({ kind: 'counter_attack', success: true });
+    expect(() => resolveCoreV1DeterministicReactionOutcome({ kind: 'unknown' } as never)).toThrow();
+  });
+
+  it('makes forcedMiss authoritative at the RC1.1 maximum hit chance', () => {
+    const attacker = participant('hero', 'party');
+    const target = participant('enemy', 'hostile');
+    const resolved = resolveCoreV1DamageApplication({
+      attacker: {
+        actorRef: attacker.actorRef,
+        primaryAttributes: attacker.primaryAttributes,
+        resources: attacker.resources,
+        secondaryAttributes: { ...attacker.secondaryAttributes, accuracy: 100 },
+        activeEffects: [],
+        stateVersion: 1,
+      },
+      target: {
+        actorRef: target.actorRef,
+        primaryAttributes: target.primaryAttributes,
+        resources: target.resources,
+        secondaryAttributes: { ...target.secondaryAttributes, evasion: 0 },
+        activeEffects: [],
+        stateVersion: 1,
+      },
+      damageComponents: [{ id: 'forced-miss', channel: 'physical', element: null, baseDamage: 10, scaling: 'full', canCrit: true }],
+      rolls: { forcedMiss: true },
+      targeting: { targetRef: target.actorRef, targetOrdinal: 0, damageMultiplierBps: 10_000 },
+      defense: { blockValue: 0, completeBlock: false },
+    });
+    if (!resolved.ok) throw new Error(JSON.stringify(resolved.issues));
+    const result = resolved.value;
+    expect(result.hitChanceBps).toBe(9_500);
+    expect(result.hit).toBe(false);
+    expect(result.damageApplied).toBe(0);
+    const openForcedMiss = resolveCoreV1DamageApplication({
+      attacker: {
+        actorRef: attacker.actorRef, primaryAttributes: attacker.primaryAttributes,
+        resources: attacker.resources, secondaryAttributes: attacker.secondaryAttributes,
+        activeEffects: [], stateVersion: 1,
+      },
+      target: {
+        actorRef: target.actorRef, primaryAttributes: target.primaryAttributes,
+        resources: target.resources, secondaryAttributes: target.secondaryAttributes,
+        activeEffects: [], stateVersion: 1,
+      },
+      damageComponents: [{ id: 'invalid-forced-miss', channel: 'physical', element: null, baseDamage: 10, scaling: 'full', canCrit: true }],
+      rolls: { forcedMiss: true, hitRollBps: 1 } as never,
+      targeting: { targetRef: target.actorRef, targetOrdinal: 0, damageMultiplierBps: 10_000 },
+      defense: { blockValue: 0, completeBlock: false },
+    });
+    expect(openForcedMiss.ok).toBe(false);
+  });
+
+  it('closes and cancels purely while incrementing state exactly once', () => {
+    const state = readyEncounter([participant('hero', 'party'), participant('enemy', 'hostile')]);
+    const candidate = { ...state, completionCandidate: 'party_victory_candidate' as const };
+    const completed = expectOk(confirmCoreV1EncounterCompletion(candidate));
+    expect(completed).toMatchObject({ status: 'completed', stateVersion: candidate.stateVersion + 1 });
+    const cancelled = expectOk(cancelCoreV1Encounter(state));
+    expect(cancelled).toMatchObject({
+      status: 'cancelled', completionCandidate: 'cancelled', stateVersion: state.stateVersion + 1,
+    });
+  });
+});
+
 describe('core-v1 encounter targeting', () => {
   const state = readyEncounter([
     participant('hero', 'party'),
@@ -1311,6 +1397,16 @@ describe('core-v1 action compile, timeline and effects composition', () => {
   });
 
   it('uses a consumable on self exactly once through the pure inventory/effects adapter', () => {
+    let effectRollRequests = 0;
+    const noDamageRuntime: CoreV1EncounterRuntime = {
+      rolls: {
+        ...runtime.rolls,
+        effectRolls: () => {
+          effectRollRequests += 1;
+          return { hitRollBps: 1, criticalRollBps: 1 };
+        },
+      },
+    };
     const potionProfile: CoreV1MechanicalContentProfile = {
       schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical',
       contentKind: 'consumable', code: 'healing-potion', name: 'Healing Potion',
@@ -1352,14 +1448,15 @@ describe('core-v1 action compile, timeline and effects composition', () => {
     });
     const applied = expectOk(applyCoreV1EncounterIntent({
       encounter: state, intent: potionIntent, definition: potionDefinition,
-      targetingContext: { candidates: candidates(state) }, runtime,
+      targetingContext: { candidates: candidates(state) }, runtime: noDamageRuntime,
     }));
-    const report = expectOk(processCoreV1EncounterBatch(applied.encounterAfter, runtime));
+    const report = expectOk(processCoreV1EncounterBatch(applied.encounterAfter, noDamageRuntime));
     expect(report.invalidatedEvents).toEqual([]);
     expect(report.effectResolutions[0]?.sourceAfter.resources.hp.current).toBe(90);
     const finalHero = report.encounterAfter.participants.find((entry) => entry.actorRef === 'hero');
     expect(finalHero?.resources.hp.current).toBe(90);
     expect(finalHero?.equipmentContext.inventory.entries).toEqual([]);
+    expect(effectRollRequests).toBe(0);
   });
 
   it('preserves action cost on miss, injects critical independently and carries updated actors', () => {
@@ -1623,6 +1720,36 @@ describe('core-v1 reactions, casting, movement, combos and plans', () => {
       : 0n);
     const enemy = report.encounterAfter.participants.find((entry) => entry.actorRef === 'enemy');
     expect(enemy?.actionSlots[0]?.nextActionAtTick).toBeGreaterThanOrEqual(state.currentTick + penalty);
+  });
+
+  it('does not request hit or critical rolls after active dodge forced a miss', () => {
+    let requests = 0;
+    const dodgeRuntime: CoreV1EncounterRuntime = {
+      rolls: {
+        tieBreak: (request) => runtime.rolls.tieBreak(request),
+        effectRolls: () => {
+          requests += 1;
+          return { hitRollBps: 1, criticalRollBps: 1 };
+        },
+      },
+      reactionOutcomes: {
+        resolve: () => ({ kind: 'active_dodge', success: true }),
+      },
+    };
+    const state = readyEncounter([
+      participant('hero', 'party'),
+      participant('enemy', 'hostile', { reactionCapabilities: [reactive('active_dodge')] }),
+    ]);
+    const applied = expectOk(applyCoreV1EncounterIntent({
+      encounter: state,
+      intent: intent({ reactionPolicy: { mode: 'require', preferredReaction: 'active_dodge', allowCounterAttack: false } }),
+      definition: definition(),
+      targetingContext: { candidates: candidates(state) },
+      runtime: dodgeRuntime,
+    }));
+    const report = expectOk(processCoreV1EncounterBatch(applied.encounterAfter, dodgeRuntime));
+    expect(report.effectResolutions[0]?.damageResults[0]?.hit).toBe(false);
+    expect(requests).toBe(0);
   });
 
   it('keeps reaction cooldown after a lost trigger, rejects a second defense and requires an outcome resolver', () => {

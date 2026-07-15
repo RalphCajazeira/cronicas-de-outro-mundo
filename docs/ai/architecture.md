@@ -236,4 +236,16 @@ Status: implementada e validada na Fase 1K; revisão e integração rastreadas p
 
 A migration é aditiva, sem backfill, usa FKs restritas, checks, RLS sem policies e índice único parcial em SQL para um encontro aberto por Campaign. O Prisma 7.8 não expressa filtros parciais por catálogo `IN`, por isso somente esse índice permanece como SQL explícito. Service/repository operacional, aplicação transacional de recursos/efeitos/inventário, HTTP, OpenAPI e GPT continuam fora da Fase 1L-A.
 
-Status: implementada localmente na Fase 1L-A; revisão técnica pendente
+Status: implementada, revisada e integrada na Fase 1L-A pelo PR #23
+
+### Fase 1L-B — adaptador transacional de encontros
+
+O módulo interno de encontros reidrata e valida `EncounterStateSnapshotV1`, confere SHA-256, colunas denormalizadas, toda a cadeia append-only (versões, hashes e vínculo idempotente) e o vetor fechado `resultSummary.adapterState` schema 1. Esse vetor contém somente participantes persistidos ordenados e as versões mecânica, de inventário, de efeitos e individuais de HP/Mana/SP; qualquer diferença contra Actor, recursos, inventário/equipamento ou efeitos é drift específico e nunca provoca auto-heal.
+
+Cada operação mutante usa uma transação e `IdempotencyRecord`: claim, Campaign, Encounter, participantes, todos os Actors por UUID, recursos, inventário, slots e efeitos, sempre em fases e ordens estáveis. `expectedStateVersion` é validada após os locks; payload idêntico reproduz o DTO JSON-safe persistido sem core, reroll ou locks de Actor. Deadlock `40P01` e serialization failure `40001` são retornados como retryable, sem retry automático da callback.
+
+`create`, `submit_intent`, `resolve_reaction`, `continue`, `confirm_completion` e `cancel` persistem snapshot/hash, uma operação e somente rolls consumidos atomicamente. CREATE audita 0→1; batches podem saltar versões. O provider criptográfico é lazy e injetável; cada `rollRef` inclui identidade derivada da execução idempotente para não colidir entre batches. A política pura inicial faz reação válida/custeada ter sucesso determinístico; active dodge usa `forcedMiss`, que não solicita hit/crítico. Area, chain e cleave sem geometria autoritativa são rejeitados antes de RNG.
+
+Recursos usam update condicional por versão; inventário e efeitos incrementam suas versões e `mechanicsStateVersion` uma vez por Actor alterado, recompõem o derivado e são recarregados antes do snapshot. Efêmeros permanecem locais; origem efêmera para efeito persistente é recusada. Confirmação/cancelamento apenas fecham o encontro: recompensas, progressão, consequências finais e limpeza de efeitos `scope=encounter` permanecem na Fase 1M. HTTP/OpenAPI permanecem na 1L-C; staging e GPT na 1L-D.
+
+Status: implementada e validada localmente na Fase 1L-B; revisão e integração pendentes
