@@ -64,4 +64,17 @@ describe('Phase 1L-A encounter persistence migration', () => {
     expect(sql).toContain('CREATE TRIGGER "Encounter_validate_ruleset" BEFORE INSERT ON "Encounter"');
     expect(sql).not.toMatch(/CREATE TRIGGER "Encounter_[^"]+" BEFORE UPDATE ON "Encounter"/);
   });
+
+  it('binds persisted participants to their Actor code and protects referenced Actor identity', () => {
+    expect(sql).toContain('actor."code" = NEW."actorRef"');
+    expect(sql).toContain("MESSAGE = 'EncounterParticipant Actor must match its Encounter Campaign and actorRef'");
+    expect(sql).toContain('CREATE FUNCTION "actor_reject_encounter_binding_change"()');
+    expect(sql).toContain('NEW."code" IS DISTINCT FROM OLD."code"');
+    expect(sql).toContain('NEW."campaignId" IS DISTINCT FROM OLD."campaignId"');
+    expect(sql).toContain('participant."bindingKind" = \'PERSISTED_ACTOR\'');
+    expect(sql).toContain('participant."actorId" = OLD."id"');
+    expect(sql).toContain("MESSAGE = 'Actor code and Campaign are immutable while referenced by an EncounterParticipant'");
+    expect(sql).toContain('CREATE TRIGGER "Actor_reject_encounter_binding_change" BEFORE UPDATE OF "code", "campaignId" ON "Actor"');
+    expect(sql).not.toContain('CREATE TRIGGER "Actor_reject_encounter_binding_change" BEFORE UPDATE ON "Actor"');
+  });
 });

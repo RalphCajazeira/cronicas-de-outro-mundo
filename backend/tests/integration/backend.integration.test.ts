@@ -411,11 +411,12 @@ describe('migration and PostgreSQL schema', () => {
     const triggers = await prisma.$queryRaw<Array<{ tgname: string }>>`
       SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgname IN (
         'Encounter_validate_ruleset', 'Encounter_reject_scope_change', 'EncounterParticipant_validate_actor',
+        'Actor_reject_encounter_binding_change',
         'EncounterParticipant_reject_update', 'EncounterOperation_reject_update',
         'EncounterRoll_reject_update'
       )
     `;
-    expect(triggers).toHaveLength(6);
+    expect(triggers).toHaveLength(7);
   });
 
   it('installs Phase 1J clocks, optimistic versions, constraints and immutable triggers', async () => {
@@ -632,7 +633,7 @@ describe('encounter persistence constraints', () => {
     })).rejects.toThrow();
   });
 
-  it('accepts persisted Actor versions >= 1, enforces ephemeral bindings and rejects a duplicate Actor', async () => {
+  it('binds persisted Actor refs to the matching Actor code while preserving ephemeral participants', async () => {
     const fixture = await createEncounterFixture('participant-binding');
     const persisted = await prisma.encounterParticipant.create({
       data: {
@@ -652,13 +653,44 @@ describe('encounter persistence constraints', () => {
       data: {
         encounterId: fixture.encounter.id,
         actorId: fixture.actor.id,
-        actorRef: 'same-actor-again',
+        actorRef: fixture.actor.code,
         bindingKind: EncounterParticipantBindingKind.PERSISTED_ACTOR,
         initialMechanicsStateVersion: 1,
         initialInventoryStateVersion: 1,
         initialEffectsStateVersion: 1,
       },
     })).rejects.toMatchObject({ code: 'P2002' });
+    const otherActor = await createMechanicalActor({
+      campaignId: fixture.campaign.id,
+      code: 'participant-binding-other-actor',
+      name: 'Participant Binding Other Actor',
+      actorType: ActorType.NPC,
+    });
+    const mismatchedRefError = await prisma.encounterParticipant.create({
+      data: {
+        encounterId: fixture.encounter.id,
+        actorId: fixture.actor.id,
+        actorRef: otherActor.code,
+        bindingKind: EncounterParticipantBindingKind.PERSISTED_ACTOR,
+        initialMechanicsStateVersion: 1,
+        initialInventoryStateVersion: 1,
+        initialEffectsStateVersion: 1,
+      },
+    }).then(() => undefined, (error: unknown) => error);
+    expect(String(mismatchedRefError)).toContain('Actor must match its Encounter Campaign and actorRef');
+    expect(String(mismatchedRefError)).not.toContain(fixture.actor.id);
+    expect(String(mismatchedRefError)).not.toContain('SELECT 1');
+    await expect(prisma.encounterParticipant.create({
+      data: {
+        encounterId: fixture.encounter.id,
+        actorId: otherActor.id,
+        actorRef: 'participant-binding-missing-code',
+        bindingKind: EncounterParticipantBindingKind.PERSISTED_ACTOR,
+        initialMechanicsStateVersion: 1,
+        initialInventoryStateVersion: 1,
+        initialEffectsStateVersion: 1,
+      },
+    })).rejects.toThrow(/Actor must match its Encounter Campaign and actorRef/);
     await expect(prisma.encounterParticipant.create({
       data: {
         encounterId: fixture.encounter.id,
@@ -680,13 +712,49 @@ describe('encounter persistence constraints', () => {
       data: {
         encounterId: fixture.encounter.id,
         actorId: foreign.actor.id,
-        actorRef: 'foreign-actor',
+        actorRef: foreign.actor.code,
         bindingKind: EncounterParticipantBindingKind.PERSISTED_ACTOR,
         initialMechanicsStateVersion: 1,
         initialInventoryStateVersion: 1,
         initialEffectsStateVersion: 1,
       },
-    })).rejects.toThrow(/Actor must belong to the Encounter Campaign/);
+    })).rejects.toThrow(/Actor must match its Encounter Campaign and actorRef/);
+  });
+
+  it('prevents referenced Actors from changing their encounter binding identity', async () => {
+    const fixture = await createEncounterFixture('participant-actor-identity');
+    const target = await createEncounterFixture('participant-actor-identity-target');
+    await prisma.encounterParticipant.create({
+      data: {
+        encounterId: fixture.encounter.id,
+        actorId: fixture.actor.id,
+        actorRef: fixture.actor.code,
+        bindingKind: EncounterParticipantBindingKind.PERSISTED_ACTOR,
+        initialMechanicsStateVersion: 1,
+        initialInventoryStateVersion: 1,
+        initialEffectsStateVersion: 1,
+      },
+    });
+
+    await expect(prisma.actor.update({
+      where: { id: fixture.actor.id }, data: { code: 'participant-actor-identity-renamed' },
+    })).rejects.toThrow(/Actor code and Campaign are immutable/);
+    await expect(prisma.actor.update({
+      where: { id: fixture.actor.id }, data: { campaignId: target.campaign.id },
+    })).rejects.toThrow(/Actor code and Campaign are immutable/);
+    await expect(prisma.actor.update({
+      where: { id: fixture.actor.id },
+      data: {
+        name: 'Participant Actor Identity Narrative Update',
+        mechanicsStateVersion: fixture.actor.mechanicsStateVersion + 1,
+      },
+    })).resolves.toMatchObject({
+      name: 'Participant Actor Identity Narrative Update',
+      mechanicsStateVersion: fixture.actor.mechanicsStateVersion + 1,
+    });
+    await expect(prisma.actor.update({
+      where: { id: fixture.actor.id }, data: { code: fixture.actor.code, campaignId: fixture.campaign.id },
+    })).resolves.toMatchObject({ code: fixture.actor.code, campaignId: fixture.campaign.id });
   });
 
   it('enforces operation sequencing, next-version uniqueness and one use per IdempotencyRecord', async () => {

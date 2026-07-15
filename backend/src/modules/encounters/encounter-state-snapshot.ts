@@ -6,6 +6,7 @@ import {
   validateCoreV1EncounterState,
 } from '../rules/core-v1/index.js';
 import type { CoreV1EncounterCompletionCandidate, CoreV1EncounterState } from '../rules/core-v1/index.js';
+import { CORE_V1_MAX_TECHNICAL_TICK } from '../rules/core-v1/core-v1.action-economy.config.js';
 import { canonicalJson, canonicalizeJson } from '../../shared/json/canonical-json.js';
 
 export const ENCOUNTER_STATE_SNAPSHOT_SCHEMA_VERSION = 1 as const;
@@ -31,6 +32,7 @@ const tickFields = new Set([
   'preparationTicks', 'recoveryTicks', 'effectTickOffset', 'readyAtTick',
   'completionTick', 'preparedUntilTick', 'channelNextPulseTick',
 ]);
+const activeEffectTechnicalTickPath = /^\$\.participants\.\d+\.activeEffects\.\d+\.(?:appliedAtTick|durationState\.expiresAtTick)$/;
 const primaryAttributeFields = [
   'strength', 'vitality', 'agility', 'dexterity', 'intelligence',
   'wisdom', 'perception', 'willpower', 'luck',
@@ -386,17 +388,22 @@ function encodeBigInts(value: unknown): unknown {
   return value;
 }
 
-function parseTick(value: unknown, path: string): bigint {
+function parseTick(value: unknown, path: string, maximum: bigint): bigint {
   if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value)) {
     throw new TypeError(`${path} must be a canonical non-negative decimal tick`);
   }
   const tick = BigInt(value);
-  if (tick > CORE_V1_MAX_ENCOUNTER_TICK) throw new RangeError(`${path} exceeds the core-v1 tick limit`);
+  if (tick > maximum) throw new RangeError(`${path} exceeds the core-v1 tick limit`);
   return tick;
 }
 
 function decodeBigInts(value: unknown, path = '$', field?: string): unknown {
-  if (field !== undefined && tickFields.has(field) && value !== null) return parseTick(value, path);
+  if (field !== undefined && tickFields.has(field) && value !== null) {
+    const maximum = activeEffectTechnicalTickPath.test(path)
+      ? CORE_V1_MAX_TECHNICAL_TICK
+      : CORE_V1_MAX_ENCOUNTER_TICK;
+    return parseTick(value, path, maximum);
+  }
   if (Array.isArray(value)) return value.map((child, index) => decodeBigInts(child, `${path}.${index}`));
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, decodeBigInts(child, `${path}.${key}`, key)]));

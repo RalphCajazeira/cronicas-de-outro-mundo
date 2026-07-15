@@ -20,6 +20,8 @@ import type {
   CoreV1EncounterState,
   CoreV1MechanicalContentProfile,
 } from '../rules/core-v1/index.js';
+import { CORE_V1_MAX_TECHNICAL_TICK } from '../rules/core-v1/core-v1.action-economy.config.js';
+import { CORE_V1_MAX_ENCOUNTER_TICK } from '../rules/core-v1/index.js';
 import { canonicalJson } from '../../shared/json/canonical-json.js';
 import {
   createCoreV1EncounterSnapshotHash,
@@ -228,6 +230,26 @@ function encounterWithStoredRuntimeStructures(): CoreV1EncounterState {
   };
 }
 
+function encounterWithTechnicalEffectTicks(
+  appliedAtTick: bigint,
+  expiresAtTick: bigint,
+): CoreV1EncounterState {
+  const state = encounterWithStoredRuntimeStructures();
+  return {
+    ...state,
+    participants: state.participants.map((participant) => participant.actorRef !== 'hero' ? participant : {
+      ...participant,
+      activeEffects: participant.activeEffects.map((effect) => ({
+        ...effect,
+        appliedAtTick,
+        durationState: effect.durationState.type === 'ticks'
+          ? { ...effect.durationState, expiresAtTick }
+          : effect.durationState,
+      })),
+    }),
+  };
+}
+
 describe('EncounterStateSnapshotV1', () => {
   it('round-trips a real Phase 1K state and converts every present bigint tick to canonical decimal strings', () => {
     const state = realEncounterState();
@@ -290,6 +312,32 @@ describe('EncounterStateSnapshotV1', () => {
     expect(parseCoreV1EncounterSnapshot(snapshot)).toEqual(state);
   });
 
+  it('round-trips active-effect ticks through the technical cap without expanding encounter ticks', () => {
+    const state = encounterWithTechnicalEffectTicks(
+      CORE_V1_MAX_ENCOUNTER_TICK + 1n,
+      CORE_V1_MAX_TECHNICAL_TICK,
+    );
+    const snapshot = serializeCoreV1EncounterState(state);
+    const effect = snapshot.participants.find((participant) => participant.actorRef === 'hero')?.activeEffects[0];
+
+    expect(effect?.appliedAtTick).toBe((CORE_V1_MAX_ENCOUNTER_TICK + 1n).toString());
+    expect(effect?.durationState).toEqual({ type: 'ticks', expiresAtTick: CORE_V1_MAX_TECHNICAL_TICK.toString() });
+    expect(parseCoreV1EncounterSnapshot(snapshot)).toEqual(state);
+  });
+
+  it('rejects active-effect ticks above the technical cap', () => {
+    const snapshot = serializeCoreV1EncounterState(encounterWithTechnicalEffectTicks(
+      CORE_V1_MAX_TECHNICAL_TICK - 1n,
+      CORE_V1_MAX_TECHNICAL_TICK,
+    )) as unknown as {
+      participants: Array<{ activeEffects: Array<{ appliedAtTick: string; durationState: { type: string; expiresAtTick?: string } }> }>;
+    };
+    const effect = snapshot.participants.find((participant) => participant.activeEffects.length > 0)!.activeEffects[0]!;
+    effect.appliedAtTick = (CORE_V1_MAX_TECHNICAL_TICK + 1n).toString();
+
+    expect(() => parseCoreV1EncounterSnapshot(snapshot)).toThrow(/tick limit/i);
+  });
+
   it('hashes canonical content deterministically regardless of object key insertion order', () => {
     const snapshot = serializeCoreV1EncounterState(realEncounterState());
     const reversed = Object.fromEntries(Object.entries(snapshot).reverse());
@@ -336,10 +384,24 @@ describe('EncounterStateSnapshotV1', () => {
     expect(Buffer.byteLength(canonicalJson(snapshot), 'utf8')).toBeLessThan(ENCOUNTER_STATE_SNAPSHOT_MAX_BYTES);
   });
 
-  it.each(['-1', '+1', '01', '1 ', '1.0', '', '1000000001'])('rejects invalid canonical tick %j', (tick) => {
+  it.each(['-1', '+1', '01', '1 ', '1.0', '', (CORE_V1_MAX_ENCOUNTER_TICK + 1n).toString()])('rejects invalid canonical tick %j', (tick) => {
     const snapshot = mutableSnapshot();
     snapshot.currentTick = tick;
     expect(() => parseCoreV1EncounterSnapshot(snapshot)).toThrow(/tick/i);
+  });
+
+  it('keeps timeline events and cooldowns within the encounter tick cap', () => {
+    const timeline = mutableSnapshot() as unknown as {
+      scheduledEvents: Array<{ timelineEvent: { tick: string } }>;
+    };
+    timeline.scheduledEvents[0]!.timelineEvent.tick = (CORE_V1_MAX_ENCOUNTER_TICK + 1n).toString();
+    expect(() => parseCoreV1EncounterSnapshot(timeline)).toThrow(/tick limit/i);
+
+    const cooldown = serializeCoreV1EncounterState(encounterWithStoredRuntimeStructures()) as unknown as {
+      cooldowns: Array<{ readyAtTick: string }>;
+    };
+    cooldown.cooldowns[0]!.readyAtTick = (CORE_V1_MAX_ENCOUNTER_TICK + 1n).toString();
+    expect(() => parseCoreV1EncounterSnapshot(cooldown)).toThrow(/tick limit/i);
   });
 
   it('rejects non-string ticks, open objects and sparse arrays', () => {

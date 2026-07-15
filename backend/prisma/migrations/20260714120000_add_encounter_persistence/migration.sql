@@ -252,15 +252,37 @@ BEGIN
     SELECT 1
     FROM "Actor" actor
     JOIN "Encounter" encounter ON encounter."id" = NEW."encounterId"
-    WHERE actor."id" = NEW."actorId" AND actor."campaignId" = encounter."campaignId"
+    WHERE actor."id" = NEW."actorId"
+      AND actor."campaignId" = encounter."campaignId"
+      AND actor."code" = NEW."actorRef"
   ) THEN
-    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'EncounterParticipant Actor must belong to the Encounter Campaign';
+    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'EncounterParticipant Actor must match its Encounter Campaign and actorRef';
   END IF;
   RETURN NEW;
 END
 $function$;
 CREATE TRIGGER "EncounterParticipant_validate_actor" BEFORE INSERT ON "EncounterParticipant"
   FOR EACH ROW EXECUTE FUNCTION "encounter_participant_validate_actor"();
+
+CREATE FUNCTION "actor_reject_encounter_binding_change"()
+RETURNS TRIGGER LANGUAGE plpgsql AS $function$
+BEGIN
+  IF (NEW."code" IS DISTINCT FROM OLD."code"
+      OR NEW."campaignId" IS DISTINCT FROM OLD."campaignId")
+    AND EXISTS (
+      SELECT 1
+      FROM "EncounterParticipant" participant
+      WHERE participant."bindingKind" = 'PERSISTED_ACTOR'
+        AND participant."actorId" = OLD."id"
+    )
+  THEN
+    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'Actor code and Campaign are immutable while referenced by an EncounterParticipant';
+  END IF;
+  RETURN NEW;
+END
+$function$;
+CREATE TRIGGER "Actor_reject_encounter_binding_change" BEFORE UPDATE OF "code", "campaignId" ON "Actor"
+  FOR EACH ROW EXECUTE FUNCTION "actor_reject_encounter_binding_change"();
 
 DO $security$
 DECLARE table_name text;
