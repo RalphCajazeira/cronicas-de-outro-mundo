@@ -54,4 +54,14 @@ describe('Phase 1L-A encounter persistence migration', () => {
     expect(sql).toContain("rolname = 'anon'");
     expect(sql).toContain("rolname = 'authenticated'");
   });
+
+  it('keeps Encounter campaign and ruleset identity immutable without blocking its normal updates', () => {
+    expect(sql).toContain('CREATE FUNCTION "encounter_reject_scope_change"()');
+    expect(sql).toContain('NEW."campaignId" IS DISTINCT FROM OLD."campaignId"');
+    expect(sql).toContain('NEW."rulesetVersionId" IS DISTINCT FROM OLD."rulesetVersionId"');
+    expect(sql).toContain("MESSAGE = 'Encounter campaign and ruleset identity is immutable'");
+    expect(sql).toContain('CREATE TRIGGER "Encounter_reject_scope_change" BEFORE UPDATE OF "campaignId", "rulesetVersionId" ON "Encounter"');
+    expect(sql).toContain('CREATE TRIGGER "Encounter_validate_ruleset" BEFORE INSERT ON "Encounter"');
+    expect(sql).not.toMatch(/CREATE TRIGGER "Encounter_[^"]+" BEFORE UPDATE ON "Encounter"/);
+  });
 });

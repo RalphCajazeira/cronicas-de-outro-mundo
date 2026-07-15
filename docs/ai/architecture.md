@@ -230,7 +230,7 @@ Status: implementada e validada na Fase 1K; revisão e integração rastreadas p
 
 ### Fase 1L-A — persistência mínima de encontros
 
-`Encounter`, `EncounterParticipant`, `EncounterOperation` e `EncounterRoll` formam a fundação persistida do adaptador futuro. O encontro fixa Campaign e `RulesetVersion`, mantém versão otimista, tick, lifecycle e o snapshot interno completo; participantes mapeiam refs do core para Actor canônico ou entidade efêmera explícita; operações e rolls são trilhas append-only ligadas à idempotência.
+`Encounter`, `EncounterParticipant`, `EncounterOperation` e `EncounterRoll` formam a fundação persistida do adaptador futuro. O encontro fixa imutavelmente Campaign e `RulesetVersion`, mantém versão otimista, tick, lifecycle e o snapshot interno completo; participantes mapeiam refs do core para Actor canônico ou entidade efêmera explícita; operações e rolls são trilhas append-only ligadas à idempotência.
 
 `EncounterStateSnapshotV1` codifica todos os ticks `bigint` como decimais canônicos, valida schema fechado, faz round-trip defensivo, limita o JSON canônico a 1 MiB UTF-8 e usa SHA-256. O banco aplica apenas uma guarda física de 2 MiB ao `jsonb::text`, para acomodar sua formatação; esse não é um limite público. O snapshot é interno e não é projeção pública do GPT.
 

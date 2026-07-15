@@ -410,12 +410,12 @@ describe('migration and PostgreSQL schema', () => {
     expect(indexes[0]?.indexdef).toContain('WHERE ("lifecycleStatus" = ANY');
     const triggers = await prisma.$queryRaw<Array<{ tgname: string }>>`
       SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgname IN (
-        'Encounter_validate_ruleset', 'EncounterParticipant_validate_actor',
+        'Encounter_validate_ruleset', 'Encounter_reject_scope_change', 'EncounterParticipant_validate_actor',
         'EncounterParticipant_reject_update', 'EncounterOperation_reject_update',
         'EncounterRoll_reject_update'
       )
     `;
-    expect(triggers).toHaveLength(5);
+    expect(triggers).toHaveLength(6);
   });
 
   it('installs Phase 1J clocks, optimistic versions, constraints and immutable triggers', async () => {
@@ -541,6 +541,76 @@ describe('encounter persistence constraints', () => {
     await expect(prisma.encounter.create({
       data: { ...common, encounterRef: 'completed-one', lifecycleStatus: EncounterLifecycleStatus.CANCELLED },
     })).rejects.toMatchObject({ code: 'P2002' });
+  });
+
+  it('rejects moving an Encounter with a persisted participant to another Campaign using the same RulesetVersion', async () => {
+    const fixture = await createEncounterFixture('scope-participant');
+    const target = await createEncounterFixture('scope-participant-target');
+    await prisma.encounterParticipant.create({
+      data: {
+        encounterId: fixture.encounter.id,
+        actorId: fixture.actor.id,
+        actorRef: fixture.actor.code,
+        bindingKind: EncounterParticipantBindingKind.PERSISTED_ACTOR,
+        initialMechanicsStateVersion: 1,
+        initialInventoryStateVersion: 1,
+        initialEffectsStateVersion: 1,
+      },
+    });
+
+    await expect(prisma.encounter.update({
+      where: { id: fixture.encounter.id }, data: { campaignId: target.campaign.id },
+    })).rejects.toThrow(/identity is immutable/);
+  });
+
+  it('rejects replacing both Encounter scope identities with another valid Campaign and RulesetVersion pair', async () => {
+    const fixture = await createEncounterFixture('scope-pair');
+    const alternateRulesetVersion = await createAlternateRulesetVersion('encounter-scope-pair');
+    const alternateCampaign = await prisma.campaign.create({
+      data: {
+        worldId: fixture.world.id,
+        rulesetVersionId: alternateRulesetVersion.id,
+        code: 'encounter-scope-pair-target',
+        name: 'Encounter Scope Pair Target',
+        status: CampaignStatus.ACTIVE,
+      },
+    });
+
+    await expect(prisma.encounter.update({
+      where: { id: fixture.encounter.id },
+      data: { campaignId: alternateCampaign.id, rulesetVersionId: alternateRulesetVersion.id },
+    })).rejects.toThrow(/identity is immutable/);
+  });
+
+  it('rejects moving an Encounter without participants to another Campaign', async () => {
+    const fixture = await createEncounterFixture('scope-empty');
+    const target = await createEncounterFixture('scope-empty-target');
+
+    await expect(prisma.encounter.update({
+      where: { id: fixture.encounter.id }, data: { campaignId: target.campaign.id },
+    })).rejects.toThrow(/identity is immutable/);
+  });
+
+  it('allows normal Encounter state updates and scope updates that keep both identities unchanged', async () => {
+    const fixture = await createEncounterFixture('scope-normal');
+    await expect(prisma.encounter.update({
+      where: { id: fixture.encounter.id },
+      data: {
+        lifecycleStatus: EncounterLifecycleStatus.PROCESSING_PAUSED,
+        stateVersion: 2,
+        currentTick: 1n,
+        stateSnapshot: { snapshotSchemaVersion: 1, updated: true },
+        stateHash: 'b'.repeat(64),
+      },
+    })).resolves.toMatchObject({
+      lifecycleStatus: EncounterLifecycleStatus.PROCESSING_PAUSED,
+      stateVersion: 2,
+      currentTick: 1n,
+    });
+    await expect(prisma.encounter.update({
+      where: { id: fixture.encounter.id },
+      data: { campaignId: fixture.campaign.id, rulesetVersionId: fixture.rulesetVersion.id },
+    })).resolves.toMatchObject({ campaignId: fixture.campaign.id, rulesetVersionId: fixture.rulesetVersion.id });
   });
 
   it.each([

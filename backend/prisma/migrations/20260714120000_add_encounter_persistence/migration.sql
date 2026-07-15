@@ -228,8 +228,22 @@ BEGIN
   RETURN NEW;
 END
 $function$;
-CREATE TRIGGER "Encounter_validate_ruleset" BEFORE INSERT OR UPDATE OF "campaignId", "rulesetVersionId" ON "Encounter"
+CREATE TRIGGER "Encounter_validate_ruleset" BEFORE INSERT ON "Encounter"
   FOR EACH ROW EXECUTE FUNCTION "encounter_validate_ruleset"();
+
+CREATE FUNCTION "encounter_reject_scope_change"()
+RETURNS TRIGGER LANGUAGE plpgsql AS $function$
+BEGIN
+  IF NEW."campaignId" IS DISTINCT FROM OLD."campaignId"
+    OR NEW."rulesetVersionId" IS DISTINCT FROM OLD."rulesetVersionId"
+  THEN
+    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'Encounter campaign and ruleset identity is immutable';
+  END IF;
+  RETURN NEW;
+END
+$function$;
+CREATE TRIGGER "Encounter_reject_scope_change" BEFORE UPDATE OF "campaignId", "rulesetVersionId" ON "Encounter"
+  FOR EACH ROW EXECUTE FUNCTION "encounter_reject_scope_change"();
 
 CREATE FUNCTION "encounter_participant_validate_actor"()
 RETURNS TRIGGER LANGUAGE plpgsql AS $function$
