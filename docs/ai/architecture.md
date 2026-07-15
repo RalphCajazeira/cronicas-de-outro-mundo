@@ -232,7 +232,7 @@ Status: implementada e validada na Fase 1K; revisão e integração rastreadas p
 
 `Encounter`, `EncounterParticipant`, `EncounterOperation` e `EncounterRoll` formam a fundação persistida do adaptador futuro. O encontro fixa Campaign e `RulesetVersion`, mantém versão otimista, tick, lifecycle e o snapshot interno completo; participantes mapeiam refs do core para Actor canônico ou entidade efêmera explícita; operações e rolls são trilhas append-only ligadas à idempotência.
 
-`EncounterStateSnapshotV1` codifica todos os ticks `bigint` como decimais canônicos, valida schema fechado, faz round-trip defensivo, limita o JSON canônico a 1 MiB UTF-8 e usa SHA-256. O snapshot é interno e não é projeção pública do GPT.
+`EncounterStateSnapshotV1` codifica todos os ticks `bigint` como decimais canônicos, valida schema fechado, faz round-trip defensivo, limita o JSON canônico a 1 MiB UTF-8 e usa SHA-256. O banco aplica apenas uma guarda física de 2 MiB ao `jsonb::text`, para acomodar sua formatação; esse não é um limite público. O snapshot é interno e não é projeção pública do GPT.
 
 A migration é aditiva, sem backfill, usa FKs restritas, checks, RLS sem policies e índice único parcial em SQL para um encontro aberto por Campaign. O Prisma 7.8 não expressa filtros parciais por catálogo `IN`, por isso somente esse índice permanece como SQL explícito. Service/repository operacional, aplicação transacional de recursos/efeitos/inventário, HTTP, OpenAPI e GPT continuam fora da Fase 1L-A.
 

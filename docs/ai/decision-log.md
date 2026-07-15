@@ -388,7 +388,7 @@ Status: implementada e validada na Fase 1J; revisão e integração rastreadas p
 Decisão:
 - persistir `Encounter`, participantes, operações mutantes e rolls individuais em quatro models separados;
 - permitir somente um encontro aberto por Campaign e múltiplos encontros finais;
-- representar o estado completo da Fase 1K em `EncounterStateSnapshotV1`, com ticks decimais canônicos, schema fechado, limite de 1 MiB e SHA-256;
+- representar o estado completo da Fase 1K em `EncounterStateSnapshotV1`, com ticks decimais canônicos, schema fechado, limite público canônico de 1 MiB e SHA-256; a guarda física de 2 MiB no `jsonb::text` apenas acomoda a formatação do PostgreSQL;
 - manter Actor, recursos, efeitos e inventário como autoridades dos participantes persistidos, sem auto-heal de drift;
 - exigir vínculo explícito para efêmeros e tornar participantes, operações e rolls imutáveis/append-only;
 - ligar cada operação a um único `IdempotencyRecord`, sem duplicar a chave textual, e registrar somente rolls efetivamente consumidos;

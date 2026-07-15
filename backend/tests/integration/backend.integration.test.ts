@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import process from 'node:process';
 import request from 'supertest';
@@ -33,6 +34,7 @@ import { ensureCoreV1RulesetVersion } from '../../src/modules/rules/ruleset.regi
 import { CORE_V1_CONFIG_HASH, CORE_V1_CONFIG_SNAPSHOT } from '../../src/modules/rules/core-v1/core-v1.manifest.js';
 import { getInitialAttributePreset } from '../../src/modules/rules/core-v1/index.js';
 import { disconnectPrisma, prisma } from '../../src/shared/database/prisma.js';
+import { canonicalJson } from '../../src/shared/json/canonical-json.js';
 
 const config = parseConfig(process.env);
 const dependencies = { actorRepository: prismaActorRepository, contentRepository: prismaContentRepository, gptRepository: prismaGptRepository, readiness: prismaReadinessCheck };
@@ -541,9 +543,28 @@ describe('encounter persistence constraints', () => {
     })).rejects.toMatchObject({ code: 'P2002' });
   });
 
-  it('enforces persisted versus ephemeral bindings and rejects a duplicate Actor in one Encounter', async () => {
+  it.each([
+    ['initialMechanicsStateVersion', 'mechanics'],
+    ['initialInventoryStateVersion', 'inventory'],
+    ['initialEffectsStateVersion', 'effects'],
+  ] as const)('rejects a persisted Actor with %s as NULL', async (missingVersion, slug) => {
+    const fixture = await createEncounterFixture(`participant-missing-${slug}`);
+    await expect(prisma.encounterParticipant.create({
+      data: {
+        encounterId: fixture.encounter.id,
+        actorId: fixture.actor.id,
+        actorRef: `missing-${slug}`,
+        bindingKind: EncounterParticipantBindingKind.PERSISTED_ACTOR,
+        initialMechanicsStateVersion: missingVersion === 'initialMechanicsStateVersion' ? null : 1,
+        initialInventoryStateVersion: missingVersion === 'initialInventoryStateVersion' ? null : 1,
+        initialEffectsStateVersion: missingVersion === 'initialEffectsStateVersion' ? null : 1,
+      },
+    })).rejects.toThrow();
+  });
+
+  it('accepts persisted Actor versions >= 1, enforces ephemeral bindings and rejects a duplicate Actor', async () => {
     const fixture = await createEncounterFixture('participant-binding');
-    await prisma.encounterParticipant.create({
+    const persisted = await prisma.encounterParticipant.create({
       data: {
         encounterId: fixture.encounter.id,
         actorId: fixture.actor.id,
@@ -554,6 +575,9 @@ describe('encounter persistence constraints', () => {
         initialEffectsStateVersion: fixture.actor.effectsStateVersion,
       },
     });
+    expect(persisted.initialMechanicsStateVersion).toBeGreaterThanOrEqual(1);
+    expect(persisted.initialInventoryStateVersion).toBeGreaterThanOrEqual(1);
+    expect(persisted.initialEffectsStateVersion).toBeGreaterThanOrEqual(1);
     await expect(prisma.encounterParticipant.create({
       data: {
         encounterId: fixture.encounter.id,
@@ -715,6 +739,26 @@ describe('encounter persistence constraints', () => {
     await expect(prisma.encounter.create({ data: { ...base, encounterRef: 'invalid-tick', currentTick: -1n } })).rejects.toThrow();
     await expect(prisma.encounter.create({ data: { ...base, encounterRef: 'invalid-schema', snapshotSchemaVersion: 2 } })).rejects.toThrow();
     await expect(prisma.encounter.create({ data: { ...base, encounterRef: 'invalid-hash', stateHash: 'A'.repeat(64) } })).rejects.toThrow();
+  });
+
+  it('accepts canonical JSON within 1 MiB despite JSONB rendering, but rejects physical JSONB text above 2 MiB', async () => {
+    const fixture = await createEncounterFixture('snapshot-size', EncounterLifecycleStatus.COMPLETED);
+    const payload = { payload: 'x'.repeat(1_048_576 - Buffer.byteLength(canonicalJson({ payload: '' }), 'utf8')) };
+    const canonical = canonicalJson(payload);
+    const jsonbBytes = await prisma.$queryRaw<Array<{ bytes: number }>>`
+      SELECT octet_length((${canonical}::jsonb)::text)::int AS bytes
+    `;
+
+    expect(Buffer.byteLength(canonical, 'utf8')).toBe(1_048_576);
+    expect(jsonbBytes[0]?.bytes).toBeGreaterThan(1_048_576);
+    await expect(prisma.encounter.update({
+      where: { id: fixture.encounter.id }, data: { stateSnapshot: payload },
+    })).resolves.toBeTruthy();
+
+    const overPhysicalGuard = { payload: 'x'.repeat(2_097_152) };
+    await expect(prisma.encounter.update({
+      where: { id: fixture.encounter.id }, data: { stateSnapshot: overPhysicalGuard },
+    })).rejects.toThrow();
   });
 
   it('restricts deletes and makes participant mappings, operations and rolls append-only', async () => {

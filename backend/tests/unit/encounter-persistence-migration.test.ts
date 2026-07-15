@@ -33,7 +33,10 @@ describe('Phase 1L-A encounter persistence migration', () => {
       'EncounterOperation_idempotencyRecordId_key', 'EncounterRoll_encounterId_rollRef_key',
       'Encounter_stateSnapshot_check', 'Encounter_stateHash_check',
     ]) expect(sql).toContain(value);
-    expect(sql).toContain('octet_length("stateSnapshot"::text) <= 1048576');
+    expect(sql).toContain('-- Application limits canonical UTF-8 JSON to 1 MiB; JSONB text may render larger.');
+    expect(sql).toContain('-- Keep a 2 MiB physical guard for JSONB formatting overhead.');
+    expect(sql).toContain('octet_length("stateSnapshot"::text) <= 2097152');
+    expect(sql).not.toContain('octet_length("stateSnapshot"::text) <= 1048576');
     expect(sql).toContain('ON DELETE RESTRICT');
     expect(sql).not.toMatch(/ON DELETE CASCADE/);
   });

@@ -48,9 +48,11 @@ CREATE TABLE "Encounter" (
   CONSTRAINT "Encounter_stateVersion_check" CHECK ("stateVersion" >= 1),
   CONSTRAINT "Encounter_currentTick_check" CHECK ("currentTick" BETWEEN 0 AND 1000000000),
   CONSTRAINT "Encounter_snapshotSchemaVersion_check" CHECK ("snapshotSchemaVersion" = 1),
+  -- Application limits canonical UTF-8 JSON to 1 MiB; JSONB text may render larger.
+  -- Keep a 2 MiB physical guard for JSONB formatting overhead.
   CONSTRAINT "Encounter_stateSnapshot_check" CHECK (
     jsonb_typeof("stateSnapshot") = 'object'
-    AND octet_length("stateSnapshot"::text) <= 1048576
+    AND octet_length("stateSnapshot"::text) <= 2097152
   ),
   CONSTRAINT "Encounter_stateHash_check" CHECK ("stateHash" ~ '^[0-9a-f]{64}$')
 );
@@ -77,8 +79,11 @@ CREATE TABLE "EncounterParticipant" (
       "bindingKind" = 'PERSISTED_ACTOR'
       AND "actorId" IS NOT NULL
       AND "ephemeralKind" IS NULL
+      AND "initialMechanicsStateVersion" IS NOT NULL
       AND "initialMechanicsStateVersion" >= 1
+      AND "initialInventoryStateVersion" IS NOT NULL
       AND "initialInventoryStateVersion" >= 1
+      AND "initialEffectsStateVersion" IS NOT NULL
       AND "initialEffectsStateVersion" >= 1
     )
     OR (
