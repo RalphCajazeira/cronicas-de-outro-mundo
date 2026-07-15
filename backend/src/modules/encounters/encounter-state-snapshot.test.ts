@@ -299,6 +299,43 @@ describe('EncounterStateSnapshotV1', () => {
     expect(first).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it.each([
+    null,
+    'party_victory_candidate',
+    'hostile_victory_candidate',
+    'stalemate_candidate',
+    'cancelled',
+  ])('accepts the closed completion candidate %j and preserves snapshot round-tripping', (completionCandidate) => {
+    const snapshot = mutableSnapshot();
+    snapshot.completionCandidate = completionCandidate;
+
+    expect(parseCoreV1EncounterSnapshot(snapshot)).toMatchObject({ completionCandidate });
+  });
+
+  it.each([
+    ['unknown string', 'victory_candidate'],
+    ['different case', 'PARTY_VICTORY_CANDIDATE'],
+    ['number', 1],
+    ['object', { candidate: 'party_victory_candidate' }],
+    ['array', ['party_victory_candidate']],
+  ] as const)('rejects a %s completion candidate before returning an Encounter state', (_label, completionCandidate) => {
+    const snapshot = mutableSnapshot();
+    snapshot.completionCandidate = completionCandidate;
+    let parsed: CoreV1EncounterState | undefined;
+
+    expect(() => { parsed = parseCoreV1EncounterSnapshot(snapshot); }).toThrow(/\$\.completionCandidate.*supported completion candidate/i);
+    expect(parsed).toBeUndefined();
+  });
+
+  it('keeps canonical hashing and the 1 MiB snapshot limit unchanged', () => {
+    const snapshot = mutableSnapshot();
+    const hash = createCoreV1EncounterSnapshotHash(snapshot);
+
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(ENCOUNTER_STATE_SNAPSHOT_MAX_BYTES).toBe(1024 * 1024);
+    expect(Buffer.byteLength(canonicalJson(snapshot), 'utf8')).toBeLessThan(ENCOUNTER_STATE_SNAPSHOT_MAX_BYTES);
+  });
+
   it.each(['-1', '+1', '01', '1 ', '1.0', '', '1000000001'])('rejects invalid canonical tick %j', (tick) => {
     const snapshot = mutableSnapshot();
     snapshot.currentTick = tick;

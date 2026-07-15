@@ -5,7 +5,7 @@ import {
   validateCoreV1ContentProfile,
   validateCoreV1EncounterState,
 } from '../rules/core-v1/index.js';
-import type { CoreV1EncounterState } from '../rules/core-v1/index.js';
+import type { CoreV1EncounterCompletionCandidate, CoreV1EncounterState } from '../rules/core-v1/index.js';
 import { canonicalJson, canonicalizeJson } from '../../shared/json/canonical-json.js';
 
 export const ENCOUNTER_STATE_SNAPSHOT_SCHEMA_VERSION = 1 as const;
@@ -46,6 +46,9 @@ const actionPlanStopConditions = new Set([
   'actorIncapacitated', 'hostileBecomesReady', 'targetSetChangedMaterially',
   'resourceBelowRequired', 'zoneChanged', 'newThreatDetected', 'stateVersionChanged',
   'processingLimit', 'noValidTarget', 'reactionRequired', 'newPlayerIntentRequired',
+]);
+const completionCandidates = new Set<CoreV1EncounterCompletionCandidate>([
+  'party_victory_candidate', 'hostile_victory_candidate', 'stalemate_candidate', 'cancelled',
 ]);
 
 function plainRecord(value: unknown, path: string): PlainRecord {
@@ -330,6 +333,12 @@ function assertActiveAction(value: unknown, path: string): void {
   assertExecutionPlan(action.executionPlan, `${path}.executionPlan`);
 }
 
+function assertCompletionCandidate(value: unknown, path: string): void {
+  if (value !== null && (typeof value !== 'string' || !completionCandidates.has(value as CoreV1EncounterCompletionCandidate))) {
+    throw new TypeError(`${path} must be a supported completion candidate or null`);
+  }
+}
+
 function assertClosedSnapshot(value: unknown): asserts value is EncounterStateSnapshotV1 {
   const snapshot = exactKeys(value, [
     'snapshotSchemaVersion', 'schemaVersion', 'rulesetCode', 'encounterRulesCode', 'encounterRef',
@@ -339,6 +348,7 @@ function assertClosedSnapshot(value: unknown): asserts value is EncounterStateSn
   if (snapshot.snapshotSchemaVersion !== ENCOUNTER_STATE_SNAPSHOT_SCHEMA_VERSION) {
     throw new TypeError('Snapshot schema version is not supported');
   }
+  assertCompletionCandidate(snapshot.completionCandidate, '$.completionCandidate');
   for (const [index, participant] of arrayValue(snapshot.participants, '$.participants').entries()) {
     assertParticipant(participant, `$.participants.${index}`);
   }
