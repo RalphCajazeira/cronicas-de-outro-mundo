@@ -250,6 +250,16 @@ function encounterWithTechnicalEffectTicks(
   };
 }
 
+function mutableRuntimeSnapshot(): {
+  activeActions: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+} {
+  return structuredClone(serializeCoreV1EncounterState(encounterWithStoredRuntimeStructures())) as unknown as {
+    activeActions: Array<Record<string, unknown>>;
+    [key: string]: unknown;
+  };
+}
+
 describe('EncounterStateSnapshotV1', () => {
   it('round-trips a real Phase 1K state and converts every present bigint tick to canonical decimal strings', () => {
     const state = realEncounterState();
@@ -310,6 +320,40 @@ describe('EncounterStateSnapshotV1', () => {
     expect(snapshot.actionPlans[0]).toMatchObject({ planRef: 'snapshot-plan' });
     expect(snapshot.actionPlans[0]?.intents).toEqual(state.actionPlans[0]?.intents);
     expect(parseCoreV1EncounterSnapshot(snapshot)).toEqual(state);
+  });
+
+  it.each([
+    ['action kind', (action: Record<string, unknown>) => { action.actionKind = 'unknown'; }],
+    ['action state', (action: Record<string, unknown>) => { action.state = 'unknown'; }],
+    ['reaction depth', (action: Record<string, unknown>) => { action.reactionDepth = 3; }],
+    ['direct flag', (action: Record<string, unknown>) => { action.interruptible = 'true'; }],
+    ['stable ref', (action: Record<string, unknown>) => { action.sourceActorRef = 'BAD REF'; }],
+    ['dodged target ref', (action: Record<string, unknown>) => { action.dodgedTargetRefs = ['BAD REF']; }],
+    ['target ordinal', (action: Record<string, unknown>) => {
+      const targets = action.targets as Array<Record<string, unknown>>;
+      targets[0]!.targetOrdinal = -1;
+    }],
+    ['reservation affordability', (action: Record<string, unknown>) => {
+      const plan = action.resourceReservationPlan as Record<string, unknown>;
+      plan.affordable = 1;
+    }],
+  ] as const)('rejects a snapshot with an invalid active action %s', (_label, mutate) => {
+    const snapshot = mutableRuntimeSnapshot();
+    mutate(snapshot.activeActions[0]!);
+
+    expect(() => parseCoreV1EncounterSnapshot(snapshot)).toThrow(/valid core-v1 state/i);
+  });
+
+  it('uses core validation as the shared serializer and parser authority for active actions', () => {
+    const invalidState = structuredClone(encounterWithStoredRuntimeStructures()) as unknown as {
+      activeActions: Array<Record<string, unknown>>;
+    };
+    invalidState.activeActions[0]!.state = 'unknown';
+    expect(() => serializeCoreV1EncounterState(invalidState as unknown as CoreV1EncounterState)).toThrow(/state is invalid/i);
+
+    const invalidSnapshot = mutableRuntimeSnapshot();
+    invalidSnapshot.activeActions[0]!.state = 'unknown';
+    expect(() => parseCoreV1EncounterSnapshot(invalidSnapshot)).toThrow(/valid core-v1 state/i);
   });
 
   it('round-trips active-effect ticks through the technical cap without expanding encounter ticks', () => {

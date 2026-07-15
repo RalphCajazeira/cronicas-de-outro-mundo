@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { Buffer } from 'node:buffer';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import process from 'node:process';
+import pg from 'pg';
 import request from 'supertest';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
@@ -37,6 +38,7 @@ import { disconnectPrisma, prisma } from '../../src/shared/database/prisma.js';
 import { canonicalJson } from '../../src/shared/json/canonical-json.js';
 
 const config = parseConfig(process.env);
+const { Client } = pg;
 const dependencies = { actorRepository: prismaActorRepository, contentRepository: prismaContentRepository, gptRepository: prismaGptRepository, readiness: prismaReadinessCheck };
 const app = createApp(config, dependencies);
 const authenticated = (path: string) => request(app).get(path).set('x-rpg-key', config.RPG_API_KEY);
@@ -51,6 +53,113 @@ function responseErrorMessage(response: { body: unknown }): unknown {
 const seedScope = { playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' };
 const seedScopeQuery = 'playerRef=ralph&worldRef=elarion&campaignRef=main-campaign';
 const balancedPrimaryAttributes = getInitialAttributePreset('balanced');
+
+type PostgreSqlClient = InstanceType<typeof Client>;
+type ActorIdentityField = 'code' | 'campaignId';
+
+async function openPostgreSqlClient(applicationName: string): Promise<PostgreSqlClient> {
+  const client = new Client({ connectionString: config.DATABASE_URL, application_name: applicationName });
+  await client.connect();
+  return client;
+}
+
+async function waitForPostgreSqlLock(observer: PostgreSqlClient, applicationName: string): Promise<void> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const result = await observer.query<{ wait_event_type: string | null }>(`
+      SELECT wait_event_type
+      FROM pg_stat_activity
+      WHERE application_name = $1
+    `, [applicationName]);
+    if (result.rows[0]?.wait_event_type === 'Lock') return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('Expected PostgreSQL transaction to wait on a row lock');
+}
+
+async function sessionTimeouts(client: PostgreSqlClient): Promise<{ lock: string; statement: string }> {
+  const lock = await client.query<{ lock_timeout: string }>('SHOW lock_timeout');
+  const statement = await client.query<{ statement_timeout: string }>('SHOW statement_timeout');
+  return {
+    lock: lock.rows[0]?.lock_timeout ?? '',
+    statement: statement.rows[0]?.statement_timeout ?? '',
+  };
+}
+
+async function setLocalConcurrencyTimeouts(client: PostgreSqlClient): Promise<void> {
+  await client.query("SET LOCAL lock_timeout = '2s'");
+  await client.query("SET LOCAL statement_timeout = '5s'");
+}
+
+async function insertPersistedParticipant(
+  client: PostgreSqlClient,
+  encounterId: string,
+  actorId: string,
+  actorRef: string,
+): Promise<void> {
+  await client.query(`
+    INSERT INTO "EncounterParticipant" (
+      "id", "encounterId", "actorId", "actorRef", "bindingKind",
+      "initialMechanicsStateVersion", "initialInventoryStateVersion", "initialEffectsStateVersion"
+    ) VALUES ($1, $2, $3, $4, 'PERSISTED_ACTOR', 1, 1, 1)
+  `, [randomUUID(), encounterId, actorId, actorRef]);
+}
+
+function updateActorIdentity(
+  client: PostgreSqlClient,
+  field: ActorIdentityField,
+  actorId: string,
+  value: string,
+): Promise<pg.QueryResult> {
+  return field === 'code'
+    ? client.query('UPDATE "Actor" SET "code" = $2 WHERE "id" = $1', [actorId, value])
+    : client.query('UPDATE "Actor" SET "campaignId" = $2 WHERE "id" = $1', [actorId, value]);
+}
+
+async function expectNoInconsistentEncounterParticipants(): Promise<void> {
+  const inconsistent = await prisma.$queryRaw<Array<{ count: number }>>`
+    SELECT COUNT(*)::integer AS count
+    FROM "EncounterParticipant" participant
+    JOIN "Encounter" encounter ON encounter."id" = participant."encounterId"
+    LEFT JOIN "Actor" actor ON actor."id" = participant."actorId"
+    WHERE participant."bindingKind" = 'PERSISTED_ACTOR'
+      AND (
+        actor."id" IS NULL
+        OR actor."campaignId" IS DISTINCT FROM encounter."campaignId"
+        OR actor."code" IS DISTINCT FROM participant."actorRef"
+      )
+  `;
+  expect(inconsistent).toEqual([{ count: 0 }]);
+}
+
+interface EncounterConcurrencyClients {
+  readonly first: PostgreSqlClient;
+  readonly second: PostgreSqlClient;
+  readonly readerOne: PostgreSqlClient;
+  readonly readerTwo: PostgreSqlClient;
+  readonly secondApplicationName: string;
+}
+
+async function withEncounterConcurrencyClients(
+  label: string,
+  run: (clients: EncounterConcurrencyClients) => Promise<void>,
+): Promise<void> {
+  const secondApplicationName = `${label}-second`;
+  const [first, second, readerOne, readerTwo] = await Promise.all([
+    openPostgreSqlClient(`${label}-first`),
+    openPostgreSqlClient(secondApplicationName),
+    openPostgreSqlClient(`${label}-reader-1`),
+    openPostgreSqlClient(`${label}-reader-2`),
+  ]);
+  const clients = [first, second, readerOne, readerTwo];
+  try {
+    await run({ first, second, readerOne, readerTwo, secondApplicationName });
+  } finally {
+    for (const client of clients) {
+      try { await client.query('ROLLBACK'); } catch { /* connection cleanup is best-effort */ }
+      await client.end();
+    }
+  }
+}
 
 const inventorySpecBase = {
   schemaVersion: 1 as const,
@@ -755,6 +864,107 @@ describe('encounter persistence constraints', () => {
     await expect(prisma.actor.update({
       where: { id: fixture.actor.id }, data: { code: fixture.actor.code, campaignId: fixture.campaign.id },
     })).resolves.toMatchObject({ code: fixture.actor.code, campaignId: fixture.campaign.id });
+  });
+
+  it.each([
+    ['code', 'code'],
+    ['campaignId', 'campaign'],
+  ] as const)('serializes an Actor %s update after a participant insert and rejects the update', async (field, slug) => {
+    const fixture = await createEncounterFixture(`participant-lock-insert-${slug}`);
+    const target = await createEncounterFixture(`participant-lock-insert-${slug}-target`);
+    const newValue = field === 'code' ? `${fixture.actor.code}-changed` : target.campaign.id;
+
+    await withEncounterConcurrencyClients(`1la-i-${slug}`, async ({
+      first, second, readerOne, readerTwo, secondApplicationName,
+    }) => {
+      const firstDefaults = await sessionTimeouts(first);
+      const secondDefaults = await sessionTimeouts(second);
+      await first.query('BEGIN');
+      await second.query('BEGIN');
+      await setLocalConcurrencyTimeouts(first);
+      await setLocalConcurrencyTimeouts(second);
+      await insertPersistedParticipant(first, fixture.encounter.id, fixture.actor.id, fixture.actor.code);
+
+      const pendingUpdate = updateActorIdentity(second, field, fixture.actor.id, newValue).then(
+        () => ({ ok: true as const, error: undefined }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      await waitForPostgreSqlLock(readerOne, secondApplicationName);
+      const reads = await Promise.all([
+        readerOne.query<{ code: string }>('SELECT "code" FROM "Actor" WHERE "id" = $1', [fixture.actor.id]),
+        readerTwo.query<{ code: string }>('SELECT "code" FROM "Actor" WHERE "id" = $1', [fixture.actor.id]),
+      ]);
+      expect(reads.map((result) => result.rows[0]?.code)).toEqual([fixture.actor.code, fixture.actor.code]);
+
+      await first.query('COMMIT');
+      const update = await pendingUpdate;
+      expect(update.ok).toBe(false);
+      expect(String(update.error)).toContain('Actor code and Campaign are immutable');
+      await second.query('ROLLBACK');
+      expect(await sessionTimeouts(first)).toEqual(firstDefaults);
+      expect(await sessionTimeouts(second)).toEqual(secondDefaults);
+    });
+
+    await expect(prisma.encounterParticipant.count({
+      where: { encounterId: fixture.encounter.id, actorId: fixture.actor.id },
+    })).resolves.toBe(1);
+    await expect(prisma.actor.findUniqueOrThrow({ where: { id: fixture.actor.id } })).resolves.toMatchObject({
+      code: fixture.actor.code,
+      campaignId: fixture.campaign.id,
+    });
+    await expectNoInconsistentEncounterParticipants();
+  });
+
+  it.each([
+    ['code', 'code'],
+    ['campaignId', 'campaign'],
+  ] as const)('revalidates a participant insert after a concurrent Actor %s update and rejects the insert', async (field, slug) => {
+    const fixture = await createEncounterFixture(`participant-lock-update-${slug}`);
+    const target = await createEncounterFixture(`participant-lock-update-${slug}-target`);
+    const newValue = field === 'code' ? `${fixture.actor.code}-changed` : target.campaign.id;
+
+    await withEncounterConcurrencyClients(`1la-u-${slug}`, async ({
+      first, second, readerOne, readerTwo, secondApplicationName,
+    }) => {
+      const firstDefaults = await sessionTimeouts(first);
+      const secondDefaults = await sessionTimeouts(second);
+      await first.query('BEGIN');
+      await second.query('BEGIN');
+      await setLocalConcurrencyTimeouts(first);
+      await setLocalConcurrencyTimeouts(second);
+      await updateActorIdentity(first, field, fixture.actor.id, newValue);
+
+      const pendingInsert = insertPersistedParticipant(
+        second,
+        fixture.encounter.id,
+        fixture.actor.id,
+        fixture.actor.code,
+      ).then(
+        () => ({ ok: true as const, error: undefined }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      await waitForPostgreSqlLock(readerOne, secondApplicationName);
+      const reads = await Promise.all([
+        readerOne.query<{ code: string }>('SELECT "code" FROM "Actor" WHERE "id" = $1', [fixture.actor.id]),
+        readerTwo.query<{ code: string }>('SELECT "code" FROM "Actor" WHERE "id" = $1', [fixture.actor.id]),
+      ]);
+      expect(reads.map((result) => result.rows[0]?.code)).toEqual([fixture.actor.code, fixture.actor.code]);
+
+      await first.query('COMMIT');
+      const insert = await pendingInsert;
+      expect(insert.ok).toBe(false);
+      expect(String(insert.error)).toContain('Actor must match its Encounter Campaign and actorRef');
+      await second.query('ROLLBACK');
+      expect(await sessionTimeouts(first)).toEqual(firstDefaults);
+      expect(await sessionTimeouts(second)).toEqual(secondDefaults);
+    });
+
+    await expect(prisma.encounterParticipant.count({
+      where: { encounterId: fixture.encounter.id, actorId: fixture.actor.id },
+    })).resolves.toBe(0);
+    const actor = await prisma.actor.findUniqueOrThrow({ where: { id: fixture.actor.id } });
+    expect(field === 'code' ? actor.code : actor.campaignId).toBe(newValue);
+    await expectNoInconsistentEncounterParticipants();
   });
 
   it('enforces operation sequencing, next-version uniqueness and one use per IdempotencyRecord', async () => {

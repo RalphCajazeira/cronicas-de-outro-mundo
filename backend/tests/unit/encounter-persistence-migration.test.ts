@@ -66,8 +66,15 @@ describe('Phase 1L-A encounter persistence migration', () => {
   });
 
   it('binds persisted participants to their Actor code and protects referenced Actor identity', () => {
+    expect(sql).toContain('IF NEW."bindingKind" = \'PERSISTED_ACTOR\' THEN');
+    expect(sql).toContain('PERFORM 1\n    FROM "Actor" actor');
+    expect(sql).toContain('actor."id" = NEW."actorId"');
+    expect(sql).toContain('actor."campaignId" = encounter."campaignId"');
     expect(sql).toContain('actor."code" = NEW."actorRef"');
+    expect(sql).toContain('FOR UPDATE OF actor;');
+    expect(sql).toContain('IF NOT FOUND THEN');
     expect(sql).toContain("MESSAGE = 'EncounterParticipant Actor must match its Encounter Campaign and actorRef'");
+    expect(sql).toContain('CREATE TRIGGER "EncounterParticipant_validate_actor" BEFORE INSERT ON "EncounterParticipant"');
     expect(sql).toContain('CREATE FUNCTION "actor_reject_encounter_binding_change"()');
     expect(sql).toContain('NEW."code" IS DISTINCT FROM OLD."code"');
     expect(sql).toContain('NEW."campaignId" IS DISTINCT FROM OLD."campaignId"');
@@ -76,5 +83,7 @@ describe('Phase 1L-A encounter persistence migration', () => {
     expect(sql).toContain("MESSAGE = 'Actor code and Campaign are immutable while referenced by an EncounterParticipant'");
     expect(sql).toContain('CREATE TRIGGER "Actor_reject_encounter_binding_change" BEFORE UPDATE OF "code", "campaignId" ON "Actor"');
     expect(sql).not.toContain('CREATE TRIGGER "Actor_reject_encounter_binding_change" BEFORE UPDATE ON "Actor"');
+    expect(sql).not.toMatch(/LOCK\s+TABLE\s+"Actor"/i);
+    expect(sql).not.toMatch(/CREATE TRIGGER "Actor_[^"]+" BEFORE UPDATE ON "Actor"/);
   });
 });

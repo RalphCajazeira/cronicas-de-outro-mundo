@@ -248,15 +248,17 @@ CREATE TRIGGER "Encounter_reject_scope_change" BEFORE UPDATE OF "campaignId", "r
 CREATE FUNCTION "encounter_participant_validate_actor"()
 RETURNS TRIGGER LANGUAGE plpgsql AS $function$
 BEGIN
-  IF NEW."bindingKind" = 'PERSISTED_ACTOR' AND NOT EXISTS (
-    SELECT 1
+  IF NEW."bindingKind" = 'PERSISTED_ACTOR' THEN
+    PERFORM 1
     FROM "Actor" actor
     JOIN "Encounter" encounter ON encounter."id" = NEW."encounterId"
     WHERE actor."id" = NEW."actorId"
       AND actor."campaignId" = encounter."campaignId"
       AND actor."code" = NEW."actorRef"
-  ) THEN
-    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'EncounterParticipant Actor must match its Encounter Campaign and actorRef';
+    FOR UPDATE OF actor;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'EncounterParticipant Actor must match its Encounter Campaign and actorRef';
+    END IF;
   END IF;
   RETURN NEW;
 END

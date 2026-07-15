@@ -5,6 +5,7 @@ import {
   calculateSecondaryAttributes,
   compareTimelineEvents,
   compileCoreV1EncounterAction,
+  CORE_V1_MAX_ENCOUNTER_TARGETS,
   createCoreV1EmptyEquipmentLoadout,
   createCoreV1EncounterState,
   getInitialAttributePreset,
@@ -16,6 +17,7 @@ import {
 } from './index.js';
 import type {
   CoreV1CreateEncounterInput,
+  CoreV1CompiledEncounterAction,
   CoreV1EncounterActionDefinition,
   CoreV1EncounterEvent,
   CoreV1EncounterActionIntent,
@@ -246,6 +248,26 @@ function intent(overrides: Partial<CoreV1EncounterActionIntent> = {}): CoreV1Enc
     contentRef: { scope: 'world', contentType: 'skill', code: 'strike', versionNumber: 1 },
     ...overrides,
   };
+}
+
+function encounterWithCompiledAction(): CoreV1EncounterState {
+  const state = readyEncounter([participant('hero', 'party'), participant('enemy', 'hostile')]);
+  const compiled = expectOk(compileCoreV1EncounterAction({
+    encounter: state,
+    intent: intent(),
+    definition: definition(),
+    targetingContext: { candidates: candidates(state) },
+  }));
+  return expectOk(scheduleCoreV1EncounterAction(state, compiled));
+}
+
+function validateActionMutation(
+  mutate: (action: Record<string, unknown>) => void,
+): CoreV1EncounterResult<CoreV1EncounterState> {
+  const state = encounterWithCompiledAction();
+  const action = structuredClone(state.activeActions[0]) as unknown as Record<string, unknown>;
+  mutate(action);
+  return validateCoreV1EncounterState({ ...state, activeActions: [action] });
 }
 
 function sourceInvalidationWithRemainingEffects(includeAlly: boolean) {
@@ -482,6 +504,145 @@ describe('core-v1 encounter state and initiative', () => {
     const timeCapped = expectOk(processCoreV1EncounterBatch(delayed, runtime));
     expect(timeCapped.processedEvents).toEqual([]);
     expect(timeCapped).toMatchObject({ stopReason: 'processing_limit', continuationRequired: true });
+  });
+});
+
+describe('core-v1 compiled encounter action validation', () => {
+  it.each([
+    'physical', 'magic', 'hybrid', 'movement', 'item', 'wait',
+  ] as CoreV1CompiledEncounterAction['actionKind'][])('accepts the closed action kind %s', (actionKind) => {
+    const state = encounterWithCompiledAction();
+    expect(validateCoreV1EncounterState({
+      ...state,
+      activeActions: [{ ...state.activeActions[0]!, actionKind }],
+    }).ok).toBe(true);
+  });
+
+  it.each([
+    'scheduled', 'active', 'interrupted', 'invalidated', 'resolved',
+  ] as CoreV1CompiledEncounterAction['state'][])('accepts the closed action state %s', (actionState) => {
+    const state = encounterWithCompiledAction();
+    expect(validateCoreV1EncounterState({
+      ...state,
+      activeActions: [{ ...state.activeActions[0]!, state: actionState }],
+    }).ok).toBe(true);
+  });
+
+  it.each([0, 1, 2] as const)('accepts reaction depth %i', (reactionDepth) => {
+    const state = encounterWithCompiledAction();
+    expect(validateCoreV1EncounterState({
+      ...state,
+      activeActions: [{ ...state.activeActions[0]!, reactionDepth }],
+    }).ok).toBe(true);
+  });
+
+  it.each([
+    ['actionKind', 'unknown', 'ENUM'],
+    ['state', 'unknown', 'ENUM'],
+    ['reactionDepth', -1, 'REACTION_DEPTH'],
+    ['reactionDepth', 0.5, 'REACTION_DEPTH'],
+    ['reactionDepth', 3, 'REACTION_DEPTH'],
+    ['startTick', -1n, 'TICK'],
+    ['effectTick', -1n, 'TICK'],
+    ['nextActionAtTick', -1n, 'TICK'],
+    ['preparationTicks', -1n, 'TICK'],
+    ['recoveryTicks', -1n, 'TICK'],
+  ] as const)('rejects invalid direct scalar %s', (field, value, rule) => {
+    expectInvalid(validateActionMutation((action) => { action[field] = value; }), rule);
+  });
+
+  it.each([
+    'actionRef', 'intentRef', 'sourceActorRef', 'slotRef',
+  ] as const)('rejects an invalid stable ref in %s', (field) => {
+    expectInvalid(validateActionMutation((action) => { action[field] = 'BAD REF'; }), 'PUBLIC_REF');
+  });
+
+  it.each(([
+    'interruptible', 'blockable', 'dodgeable', 'canRetargetBeforeEffect',
+    'costApplied', 'selfEffectsApplied',
+  ] as const).flatMap((field) => ([
+    'not-boolean', 1, null, [], {},
+  ] as const).map((value) => [field, value] as const)))('rejects non-boolean %s value %j', (field, value) => {
+    expectInvalid(validateActionMutation((action) => { action[field] = value; }), 'BOOLEAN');
+  });
+
+  it.each([
+    ['dodged target ref', (action: Record<string, unknown>) => { action.dodgedTargetRefs = ['BAD REF']; }, 'PUBLIC_REF'],
+    ['target ref', (action: Record<string, unknown>) => {
+      const targets = action.targets as Array<Record<string, unknown>>;
+      targets[0]!.targetRef = 'BAD REF';
+    }, 'PUBLIC_REF'],
+    ['negative target ordinal', (action: Record<string, unknown>) => {
+      const targets = action.targets as Array<Record<string, unknown>>;
+      targets[0]!.targetOrdinal = -1;
+    }, 'TARGET_ORDINAL'],
+    ['fractional target ordinal', (action: Record<string, unknown>) => {
+      const targets = action.targets as Array<Record<string, unknown>>;
+      targets[0]!.targetOrdinal = 0.5;
+    }, 'TARGET_ORDINAL'],
+    ['target ordinal at the exclusive limit', (action: Record<string, unknown>) => {
+      const targets = action.targets as Array<Record<string, unknown>>;
+      targets[0]!.targetOrdinal = CORE_V1_MAX_ENCOUNTER_TARGETS;
+    }, 'TARGET_ORDINAL'],
+    ['target multiplier', (action: Record<string, unknown>) => {
+      const targets = action.targets as Array<Record<string, unknown>>;
+      targets[0]!.damageMultiplierBps = 10_001;
+    }, 'TARGET_MULTIPLIER'],
+    ['target effect tick offset', (action: Record<string, unknown>) => {
+      const targets = action.targets as Array<Record<string, unknown>>;
+      targets[0]!.effectTickOffset = -1n;
+    }, 'TICK'],
+    ['reservation cost type', (action: Record<string, unknown>) => {
+      const plan = action.resourceReservationPlan as Record<string, unknown>;
+      plan.cost = { type: 'unknown' };
+    }, 'ENUM'],
+    ['reservation cost amount', (action: Record<string, unknown>) => {
+      const plan = action.resourceReservationPlan as { cost: Record<string, unknown> };
+      plan.cost.amount = 0;
+    }, 'POSITIVE_SAFE_INTEGER'],
+    ['reservation affordability', (action: Record<string, unknown>) => {
+      const plan = action.resourceReservationPlan as Record<string, unknown>;
+      plan.affordable = 'yes';
+    }, 'BOOLEAN'],
+    ['reservation resource', (action: Record<string, unknown>) => {
+      const plan = action.resourceReservationPlan as { reservations: Array<Record<string, unknown>> };
+      plan.reservations[0]!.resource = 'BAD REF';
+    }, 'PUBLIC_REF'],
+    ['reservation amount', (action: Record<string, unknown>) => {
+      const plan = action.resourceReservationPlan as { reservations: Array<Record<string, unknown>> };
+      plan.reservations[0]!.amount = -1;
+    }, 'NON_NEGATIVE_SAFE_INTEGER'],
+    ['fractional reservation amount', (action: Record<string, unknown>) => {
+      const plan = action.resourceReservationPlan as { reservations: Array<Record<string, unknown>> };
+      plan.reservations[0]!.amount = 0.5;
+    }, 'NON_NEGATIVE_SAFE_INTEGER'],
+    ['cooldown actor ref', (action: Record<string, unknown>) => {
+      action.cooldownPlan = [{ actorRef: 'BAD REF', cooldownRef: 'test-cooldown', readyAtTick: 1n, sourceKind: 'content' }];
+    }, 'COOLDOWN_REF'],
+    ['cooldown ref', (action: Record<string, unknown>) => {
+      action.cooldownPlan = [{ actorRef: 'hero', cooldownRef: 'BAD REF', readyAtTick: 1n, sourceKind: 'content' }];
+    }, 'COOLDOWN_REF'],
+    ['cooldown ready tick', (action: Record<string, unknown>) => {
+      action.cooldownPlan = [{ actorRef: 'hero', cooldownRef: 'test-cooldown', readyAtTick: -1n, sourceKind: 'content' }];
+    }, 'COOLDOWN_TICK'],
+    ['cooldown source kind', (action: Record<string, unknown>) => {
+      action.cooldownPlan = [{ actorRef: 'hero', cooldownRef: 'test-cooldown', readyAtTick: 1n, sourceKind: 'unknown' }];
+    }, 'ENUM'],
+    ['upkeep resource', (action: Record<string, unknown>) => {
+      action.upkeepPlan = [{ resource: 'hp', amount: 1 }];
+    }, 'ENUM'],
+    ['upkeep amount', (action: Record<string, unknown>) => {
+      action.upkeepPlan = [{ resource: 'mana', amount: 0 }];
+    }, 'POSITIVE_SAFE_INTEGER'],
+    ['fractional upkeep amount', (action: Record<string, unknown>) => {
+      action.upkeepPlan = [{ resource: 'sp', amount: 0.5 }];
+    }, 'POSITIVE_SAFE_INTEGER'],
+    ['internal event type', (action: Record<string, unknown>) => {
+      const events = action.internalEvents as Array<Record<string, unknown>>;
+      events[0]!.type = 'unknown';
+    }, 'ENUM'],
+  ] as const)('rejects invalid compiled action %s', (_label, mutate, rule) => {
+    expectInvalid(validateActionMutation(mutate), rule);
   });
 });
 
