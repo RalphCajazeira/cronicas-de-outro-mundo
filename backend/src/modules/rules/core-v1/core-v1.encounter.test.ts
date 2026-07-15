@@ -631,18 +631,114 @@ describe('core-v1 compiled encounter action validation', () => {
     ['upkeep resource', (action: Record<string, unknown>) => {
       action.upkeepPlan = [{ resource: 'hp', amount: 1 }];
     }, 'ENUM'],
-    ['upkeep amount', (action: Record<string, unknown>) => {
-      action.upkeepPlan = [{ resource: 'mana', amount: 0 }];
-    }, 'POSITIVE_SAFE_INTEGER'],
-    ['fractional upkeep amount', (action: Record<string, unknown>) => {
-      action.upkeepPlan = [{ resource: 'sp', amount: 0.5 }];
-    }, 'POSITIVE_SAFE_INTEGER'],
     ['internal event type', (action: Record<string, unknown>) => {
       const events = action.internalEvents as Array<Record<string, unknown>>;
       events[0]!.type = 'unknown';
     }, 'ENUM'],
   ] as const)('rejects invalid compiled action %s', (_label, mutate, rule) => {
     expectInvalid(validateActionMutation(mutate), rule);
+  });
+
+  it.each([0, 1, Number.MAX_SAFE_INTEGER])('accepts the non-negative safe upkeep amount %s', (amount) => {
+    const result = validateActionMutation((action) => {
+      action.upkeepPlan = [{ resource: 'mana', amount }];
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it.each([
+    -1,
+    0.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    Number.MAX_SAFE_INTEGER + 1,
+  ])('rejects the invalid upkeep amount %s', (amount) => {
+    expectInvalid(validateActionMutation((action) => {
+      action.upkeepPlan = [{ resource: 'sp', amount }];
+    }), 'NON_NEGATIVE_SAFE_INTEGER');
+  });
+
+  it.each([
+    ['execution effect refs', (action: Record<string, unknown>) => {
+      (action.executionPlan as Record<string, unknown>).effectRefs = 'not-an-array';
+    }, 'EFFECT_REF_LIMIT'],
+    ['execution reaction mode', (action: Record<string, unknown>) => {
+      (action.executionPlan as Record<string, unknown>).reactionPolicy = { mode: 'sometimes', allowCounterAttack: false };
+    }, 'ENUM'],
+    ['execution combo flag', (action: Record<string, unknown>) => {
+      (action.executionPlan as Record<string, unknown>).comboStopOnMiss = 'yes';
+    }, 'BOOLEAN'],
+    ['execution casting phase', (action: Record<string, unknown>) => {
+      (action.executionPlan as Record<string, unknown>).castingState = {
+        startTick: 0n, completionTick: 1n, reservedMana: 0, phase: 'unknown',
+        preparedUntilTick: null, channelNextPulseTick: null,
+      };
+    }, 'ENUM'],
+    ['execution movement kind', (action: Record<string, unknown>) => {
+      (action.executionPlan as Record<string, unknown>).movement = {
+        kind: 'teleport', from: 'engaged', to: 'near', terrain: 'normal',
+      };
+    }, 'ENUM'],
+    ['execution runtime duration', (action: Record<string, unknown>) => {
+      (action.executionPlan as Record<string, unknown>).runtimeDurations = [{
+        effectIndex: 0, duration: { type: 'ticks', value: 0 },
+      }];
+    }, 'INTEGER_RANGE'],
+    ['execution defense actor', (action: Record<string, unknown>) => {
+      (action.executionPlan as Record<string, unknown>).defenses = {
+        outsider: { blockValue: 0, completeBlock: false },
+      };
+    }, 'UNKNOWN_ACTOR_REF'],
+    ['unknown source actor', (action: Record<string, unknown>) => { action.sourceActorRef = 'outsider'; }, 'UNKNOWN_ACTOR_REF'],
+    ['unknown source slot', (action: Record<string, unknown>) => { action.slotRef = 'secondary'; }, 'UNKNOWN_ACTION_SLOT'],
+    ['unknown target actor', (action: Record<string, unknown>) => {
+      const targets = action.targets as Array<Record<string, unknown>>;
+      targets[0]!.targetRef = 'outsider';
+    }, 'UNKNOWN_ACTOR_REF'],
+    ['non-deterministic target ordinal', (action: Record<string, unknown>) => {
+      const targets = action.targets as Array<Record<string, unknown>>;
+      targets[0]!.targetOrdinal = 1;
+    }, 'TARGET_ORDINAL'],
+    ['dodged ref outside targets', (action: Record<string, unknown>) => { action.dodgedTargetRefs = ['hero']; }, 'UNKNOWN_TARGET_REF'],
+    ['event target ordinal', (action: Record<string, unknown>) => {
+      const events = action.internalEvents as Array<Record<string, unknown>>;
+      events[0]!.targetOrdinal = CORE_V1_MAX_ENCOUNTER_TARGETS;
+    }, 'TARGET_ORDINAL'],
+    ['event timeline actor', (action: Record<string, unknown>) => {
+      const events = action.internalEvents as Array<Record<string, unknown>>;
+      (events[0]!.timelineEvent as Record<string, unknown>).actorRef = 'outsider';
+    }, 'UNKNOWN_ACTOR_REF'],
+    ['event action cross-reference', (action: Record<string, unknown>) => {
+      const events = action.internalEvents as Array<Record<string, unknown>>;
+      events[0]!.actionRef = 'other-action';
+      (events[0]!.timelineEvent as Record<string, unknown>).actionRef = 'other-action';
+    }, 'ACTION_REF_MATCH'],
+  ] as const)('rejects semantically invalid stored runtime %s', (_label, mutate, rule) => {
+    expectInvalid(validateActionMutation(mutate), rule);
+  });
+
+  it.each([
+    ['expected state version', (plan: Record<string, unknown>) => { plan.expectedStateVersion = 0; }, 'POSITIVE_STATE_VERSION'],
+    ['intent action source', (plan: Record<string, unknown>) => {
+      const intents = plan.intents as Array<Record<string, unknown>>;
+      intents[0]!.actionSource = 'unknown';
+    }, 'ENUM'],
+    ['intent actor mismatch', (plan: Record<string, unknown>) => {
+      const intents = plan.intents as Array<Record<string, unknown>>;
+      intents[0]!.sourceActorRef = 'enemy';
+    }, 'PLAN_ACTOR_MATCH'],
+    ['stop condition', (plan: Record<string, unknown>) => { plan.stopConditions = ['unknown']; }, 'ENUM'],
+  ] as const)('rejects semantically invalid stored action plan %s', (_label, mutate, rule) => {
+    const state = encounterWithCompiledAction();
+    const plan: Record<string, unknown> = {
+      planRef: 'stored-plan', actorRef: 'hero', expectedStateVersion: state.stateVersion,
+      intents: [intent()], stopConditions: ['newPlayerIntentRequired'],
+    };
+    mutate(plan);
+
+    expectInvalid(validateCoreV1EncounterState({ ...state, actionPlans: [plan] }), rule);
   });
 });
 

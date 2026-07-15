@@ -9,6 +9,7 @@ import {
   getInitialAttributePreset,
   processCoreV1EncounterBatch,
   scheduleCoreV1EncounterAction,
+  validateCoreV1EncounterState,
 } from '../rules/core-v1/index.js';
 import type {
   CoreV1CreateEncounterInput,
@@ -119,7 +120,7 @@ function mutableSnapshot(): Record<string, unknown> {
   return structuredClone(serializeCoreV1EncounterState(realEncounterState()));
 }
 
-function encounterWithStoredRuntimeStructures(): CoreV1EncounterState {
+function encounterWithStoredRuntimeStructures(manaCostModifierBps?: number): CoreV1EncounterState {
   const runtime: CoreV1EncounterRuntime = {
     rolls: {
       tieBreak: ({ actorRef }) => actorRef.charCodeAt(0),
@@ -179,6 +180,11 @@ function encounterWithStoredRuntimeStructures(): CoreV1EncounterState {
     blockable: true,
     dodgeable: true,
     canRetargetBeforeEffect: false,
+    ...(manaCostModifierBps === undefined ? {} : {
+      costModifiers: {
+        manaCostBps: [{ source: { type: 'ruleset', ref: 'snapshot-upkeep-discount' }, value: manaCostModifierBps }],
+      },
+    }),
   };
   const candidates = ready.participants.map((entry, stableOrder) => ({
     actorRef: entry.actorRef,
@@ -337,6 +343,21 @@ describe('EncounterStateSnapshotV1', () => {
       const plan = action.resourceReservationPlan as Record<string, unknown>;
       plan.affordable = 1;
     }],
+    ['execution reaction policy', (action: Record<string, unknown>) => {
+      (action.executionPlan as Record<string, unknown>).reactionPolicy = {
+        mode: 'sometimes', allowCounterAttack: false,
+      };
+    }],
+    ['execution runtime duration', (action: Record<string, unknown>) => {
+      (action.executionPlan as Record<string, unknown>).runtimeDurations = [{
+        effectIndex: 0, duration: { type: 'actions', value: 0 },
+      }];
+    }],
+    ['internal event cross-reference', (action: Record<string, unknown>) => {
+      const events = action.internalEvents as Array<Record<string, unknown>>;
+      events[0]!.actionRef = 'other-action';
+      (events[0]!.timelineEvent as Record<string, unknown>).actionRef = 'other-action';
+    }],
   ] as const)('rejects a snapshot with an invalid active action %s', (_label, mutate) => {
     const snapshot = mutableRuntimeSnapshot();
     mutate(snapshot.activeActions[0]!);
@@ -354,6 +375,32 @@ describe('EncounterStateSnapshotV1', () => {
     const invalidSnapshot = mutableRuntimeSnapshot();
     invalidSnapshot.activeActions[0]!.state = 'unknown';
     expect(() => parseCoreV1EncounterSnapshot(invalidSnapshot)).toThrow(/valid core-v1 state/i);
+  });
+
+  it('rejects a snapshot whose stored action plan has an impossible closed value', () => {
+    const snapshot = mutableRuntimeSnapshot() as unknown as {
+      actionPlans: Array<{ intents: Array<Record<string, unknown>> }>;
+    };
+    snapshot.actionPlans[0]!.intents[0]!.actionSource = 'unknown';
+
+    expect(() => parseCoreV1EncounterSnapshot(snapshot)).toThrow(/valid core-v1 state/i);
+  });
+
+  it('round-trips a compiled maintenance action with fully discounted zero upkeep', () => {
+    const state = encounterWithStoredRuntimeStructures(-10_000);
+    expect(state.activeActions[0]?.upkeepPlan).toEqual([{ resource: 'mana', amount: 0 }]);
+    expect(validateCoreV1EncounterState(state).ok).toBe(true);
+
+    const snapshot = serializeCoreV1EncounterState(state);
+    expect(snapshot.activeActions[0]?.upkeepPlan).toEqual([{ resource: 'mana', amount: 0 }]);
+    expect(parseCoreV1EncounterSnapshot(snapshot)).toEqual(state);
+  });
+
+  it('rejects a snapshot with negative upkeep', () => {
+    const snapshot = mutableRuntimeSnapshot();
+    snapshot.activeActions[0]!.upkeepPlan = [{ resource: 'mana', amount: -1 }];
+
+    expect(() => parseCoreV1EncounterSnapshot(snapshot)).toThrow(/valid core-v1 state/i);
   });
 
   it('round-trips active-effect ticks through the technical cap without expanding encounter ticks', () => {
