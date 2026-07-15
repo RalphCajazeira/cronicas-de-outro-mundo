@@ -116,4 +116,12 @@ Models:
 
 A migration `20260714120000_add_encounter_persistence` é incremental, aditiva e sem backfill. Checks cobrem versões, ticks, schema/tamanho do snapshot, hashes, bindings e ordinais; FKs usam delete restrito. Um índice único parcial SQL permite somente um lifecycle aberto por Campaign, pois o filtro `IN` não é representável no partial index declarativo do Prisma 7.8. As quatro tabelas têm RLS sem policies e revogações condicionais de `anon`/`authenticated`.
 
-Status: implementada localmente na Fase 1L-A; banco remoto não acessado
+Status: implementada, revisada e integrada na Fase 1L-A pelo PR #23; banco remoto não acessado
+
+## Fase 1L-B — correção da auditoria de versões
+
+A migration `20260715120000_fix_encounter_operation_versions` altera somente os dois checks de transição de `EncounterOperation`: CREATE exige 0→1; as demais operações exigem versão anterior >=1 e próxima versão estritamente maior, permitindo batches. Um preflight falha antes do DDL se encontrar linhas incompatíveis e exige migração manual; não há backfill, reescrita, tabela, coluna ou acesso remoto.
+
+O estado transacional corrente das autoridades fica no objeto fechado `resultSummary.adapterState` schema 1, sem duplicar snapshot: participantes persistidos ordenados, versões mecânica/inventário/efeitos e versões individuais de HP/Mana/SP. Leitura e escrita validam esse vetor e sua coerência com a última operação, Encounter e autoridades persistidas.
+
+Status: implementada e validada localmente na Fase 1L-B; migration remota não executada

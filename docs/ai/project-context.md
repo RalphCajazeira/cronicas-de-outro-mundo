@@ -28,7 +28,7 @@ Projeto de RPG narrativo reiniciado como nova versão, com o sistema anterior ar
 - O módulo `core-v1-effects-v1` mantém o cálculo puro e agora possui persistência autoritativa versionada por `EffectRulesVersion`. `resolveActorEffect` consulta efeitos ou executa conteúdo/consumível em transação única, com locks ordenados, tokens otimistas, rolls criptográficos gerados no backend, recursos versionados, efeitos ativos, inventário e auditoria idempotente.
 - Referências `apply_status`/`remove_status` são resolvidas na publicação e fixadas por `ContentEffectBinding` a uma `ContentVersion` exata; novas versões do status não alteram fontes já publicadas.
 - `Campaign.engineTick` é o relógio mecânico persistido. `Actor.effectsStateVersion` participa do snapshot e efeitos ativos aplicam modificadores na recomposição. `Actor.status` não é alterado automaticamente por dano, cura ou HP zero.
-- O núcleo puro `core-v1-encounter-v1` compõe participantes, relações, zonas, iniciativa, action slots, targeting, timeline, reações/cooldowns, casting/channel, movimento, combos, action plans e resolução independente de efeitos por alvo. Ele produz snapshots e relatórios determinísticos, mas não persiste encontros nem está exposto em HTTP/OpenAPI.
+- O núcleo puro `core-v1-encounter-v1` compõe participantes, relações, zonas, iniciativa, action slots, targeting, timeline, reações/cooldowns, casting/channel, movimento, combos, action plans e resolução independente de efeitos por alvo. A Fase 1L-B acrescenta o adaptador interno transacional/idempotente, snapshots validados, drift, rolls lazy e mutações atômicas; encontros ainda não estão expostos em HTTP/OpenAPI.
 - Auditoria HTTP estruturada com `x-request-id`, resumos seguros de requisição/resposta e caminhos de validação, sem headers ou payloads sensíveis.
 - Blueprint Render de staging nativo Node, Free em `virginia`, branch `develop`, sem Docker, sem pre-deploy e sem deploy automático.
 
@@ -40,7 +40,7 @@ Projeto de RPG narrativo reiniciado como nova versão, com o sistema anterior ar
 
 ## Fases futuras
 
-Frontend React, integração GPT ao vivo, operação explícita de upgrade de conteúdo do ator, adaptador autoritativo/persistência de encontros e rolls, contrato HTTP/OpenAPI de combate, confirmação persistida de encerramento, combate completo, comércio, lojas, facções, relações, memórias detalhadas, viagens, clima e snapshots narrativos.
+Frontend React, operação explícita de upgrade de conteúdo do ator, contrato HTTP/OpenAPI de encontros na Fase 1L-C, staging/GPT na 1L-D, consequências/recompensas e limpeza de efeitos de encontro na Fase 1M, comércio, lojas, facções, relações, memórias detalhadas, viagens, clima e snapshots narrativos.
 
 ## Segurança
 

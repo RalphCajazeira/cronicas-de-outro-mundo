@@ -24,6 +24,7 @@ import {
   zoneDistance,
 } from './core-v1.action-mechanics.js';
 import type {
+  ActionSlot,
   CombatZone,
   TimelineEvent,
   TimelineEventType,
@@ -63,6 +64,7 @@ import type {
   CoreV1CompiledEncounterAction,
   CoreV1CreateEncounterInput,
   CoreV1EncounterActionDefinition,
+  CoreV1EncounterActionIntent,
   CoreV1EncounterBatchResult,
   CoreV1EncounterCombatState,
   CoreV1EncounterCompletionCandidate,
@@ -72,6 +74,7 @@ import type {
   CoreV1EncounterParticipant,
   CoreV1EncounterParticipantInput,
   CoreV1EncounterReactionPolicy,
+  CoreV1EncounterReactionCapability,
   CoreV1EncounterRelation,
   CoreV1EncounterResult,
   CoreV1EncounterRuntime,
@@ -92,6 +95,8 @@ import { getCoreV1ContentKinds, validateCoreV1ContentProfile } from './core-v1.c
 import { createRawDamageComponent } from './core-v1.damage.js';
 import {
   isCoreV1ActorEffectContext,
+  advanceActorActionDurations,
+  expireEffectsAtTick,
   resolveCoreV1ConsumableUse,
   resolveCoreV1Cost,
   resolveCoreV1EffectSequence,
@@ -292,6 +297,13 @@ function encounterIntentIssues(value: unknown, path: string): ValidationIssue[] 
   }
   if (value.reactionPolicy !== undefined) result.push(...reactionPolicyIssues(value.reactionPolicy, `${path}.reactionPolicy`));
   return result;
+}
+
+export function validateCoreV1EncounterActionIntent(
+  value: unknown,
+): CoreV1EncounterResult<CoreV1EncounterActionIntent> {
+  const issues = encounterIntentIssues(value, 'intent');
+  return issues.length === 0 ? success(value as CoreV1EncounterActionIntent) : failure(issues);
 }
 
 function durationIssues(value: unknown, path: string): ValidationIssue[] {
@@ -1158,6 +1170,48 @@ function createInitialParticipant(
   };
 }
 
+/** Canonical RC1.1 slots supplied by the backend for every encounter participant. */
+export function createCoreV1EncounterActionSlots(currentTick: bigint): readonly ActionSlot[] {
+  return [
+    createActionSlot({
+      slotRef: 'primary',
+      slotType: 'primary',
+      nextActionAtTick: currentTick,
+      lastActionAtTick: null,
+      allowedActionTags: [
+        'armor', 'attack', 'clothing', 'consumable', 'item', 'movement', 'shield',
+        'skill', 'spell', 'talent', 'wait', 'weapon',
+      ],
+      potencyMultiplierBps: 10_000,
+      stateVersion: 1,
+    }),
+    createActionSlot({
+      slotRef: 'secondary',
+      slotType: 'secondary',
+      nextActionAtTick: currentTick,
+      lastActionAtTick: null,
+      allowedActionTags: ['item', 'minor', 'movement'],
+      potencyMultiplierBps: 10_000,
+      stateVersion: 1,
+    }),
+  ];
+}
+
+export function resolveCoreV1DeterministicReactionOutcome(
+  capability: Pick<CoreV1EncounterReactionCapability, 'kind' | 'blockValue'>,
+): CoreV1ReactionOutcome {
+  if (capability.kind === 'block') {
+    if (!Number.isSafeInteger(capability.blockValue) || (capability.blockValue ?? -1) < 0) {
+      throw new RangeError('Block capability requires a non-negative blockValue');
+    }
+    return { kind: 'block', success: true, blockValue: capability.blockValue as number, completeBlock: false };
+  }
+  if (capability.kind === 'active_dodge') return { kind: 'active_dodge', success: true };
+  if (capability.kind === 'interrupt') return { kind: 'interrupt', success: true };
+  if (capability.kind === 'counter_attack') return { kind: 'counter_attack', success: true };
+  throw new TypeError('Unsupported deterministic reaction kind');
+}
+
 function eventFor(
   participant: CoreV1EncounterParticipant,
   eventRef: string,
@@ -1996,6 +2050,19 @@ function applyActorProjection(
   };
 }
 
+function applyEffectLifecycleProjection(
+  participant: CoreV1EncounterParticipant,
+  actor: CoreV1ActorEffectContext,
+  changed: boolean,
+): CoreV1EncounterParticipant {
+  if (!changed) return participant;
+  return {
+    ...participant,
+    activeEffects: cloneValue(actor.activeEffects),
+    effectsStateVersion: safeIntegerAdd(participant.effectsStateVersion, 1, 'effects state version'),
+  };
+}
+
 interface AdjustedExecution {
   readonly profile: CoreV1MechanicalContentProfile;
   readonly effectRefs: readonly string[];
@@ -2073,14 +2140,20 @@ function rollsFor(
   targetRef: string,
   targetOrdinal: number,
 ): CoreV1InjectedRolls {
-  const injected = runtime.rolls.effectRolls({
+  if (action.dodgedTargetRefs.includes(targetRef)) return { forcedMiss: true };
+  return runtime.rolls.effectRolls({
     encounterRef: encounter.encounterRef,
     actionRef: action.actionRef,
     sourceActorRef: action.sourceActorRef,
     targetActorRef: targetRef,
     targetOrdinal,
   });
-  return action.dodgedTargetRefs.includes(targetRef) ? { ...injected, hitRollBps: 10_000 } : injected;
+}
+
+function executionNeedsDamageRolls(action: CoreV1CompiledEncounterAction): boolean {
+  const profile = action.executionPlan.profile;
+  return (profile?.damageComponents?.length ?? 0) > 0
+    || (profile?.effects ?? []).some((effect) => effect.type === 'damage' || effect.type === 'add_damage');
 }
 
 function applyResourceDeltasToParticipant(
@@ -2126,7 +2199,11 @@ function processEffectEvent(
   if (!isParticipantActionable(source) || !isParticipantActionable(target)) return failure([issue('event', 'NO_VALID_TARGET', 'Action source or target is no longer active')]);
   const adjusted = adjustedExecution(action);
   if (!adjusted.ok) return adjusted;
-  const rolls = rollsFor(runtime, encounter, action, target.actorRef, targetInfo.targetOrdinal);
+  const rolls = action.dodgedTargetRefs.includes(target.actorRef)
+    ? { forcedMiss: true as const }
+    : executionNeedsDamageRolls(action)
+      ? rollsFor(runtime, encounter, action, target.actorRef, targetInfo.targetOrdinal)
+      : undefined;
   const defense = action.executionPlan.defenses[target.actorRef] ?? { blockValue: 0, completeBlock: false };
   const sourceActor = participantActor(source);
   const sequenceInput: CoreV1EffectSequenceInput = {
@@ -2140,7 +2217,7 @@ function processEffectEvent(
     effectRefs: adjusted.value.effectRefs,
     statusDefinitions: adjusted.value.statusDefinitions,
     runtimeDurations: adjusted.value.runtimeDurations,
-    rolls,
+    ...(rolls === undefined ? {} : { rolls }),
     targeting: targetInfo,
     defense,
     ...(action.executionPlan.weaponDamageComponents.length === 0
@@ -2539,6 +2616,19 @@ export function processNextCoreV1EncounterEvent(
     currentTick: event.timelineEvent.tick,
     scheduledEvents: encounter.value.scheduledEvents.slice(1),
   };
+  for (const participant of next.participants) {
+    const hasDueEffect = participant.activeEffects.some((effect) => (
+      effect.durationState.type === 'ticks' && effect.durationState.expiresAtTick <= next.currentTick
+    ));
+    if (!hasDueEffect) continue;
+    const expired = expireEffectsAtTick(participantActor(participant), next.currentTick);
+    if (!expired.ok) return failure(expired.issues);
+    next = replaceParticipant(next, participant.actorRef, (current) => applyEffectLifecycleProjection(
+      current,
+      expired.value.actor,
+      expired.value.changes.length > 0,
+    ));
+  }
   const invalidReason = eventInvalidReason(next, event);
   if (invalidReason !== null) {
     const action = event.actionRef === undefined ? undefined
@@ -2698,7 +2788,15 @@ export function processNextCoreV1EncounterEvent(
       const actorRef = event.timelineEvent.actorRef;
       const participant = next.participants.find((candidate) => candidate.actorRef === actorRef);
       if (participant !== undefined && isParticipantActionable(participant)) {
-        next = replaceParticipant(next, actorRef, (current) => ({ ...current, combatState: 'ready' }));
+        const hasActionDuration = participant.activeEffects.some((effect) => effect.durationState.type === 'actions');
+        const advanced = hasActionDuration
+          ? advanceActorActionDurations(participantActor(participant), actorRef)
+          : success({ actor: participantActor(participant), changes: [] });
+        if (!advanced.ok) return failure(advanced.issues);
+        next = replaceParticipant(next, actorRef, (current) => ({
+          ...applyEffectLifecycleProjection(current, advanced.value.actor, advanced.value.changes.length > 0),
+          combatState: 'ready',
+        }));
         readyActors.push(actorRef);
       }
       if (event.actionRef !== undefined) {
@@ -2978,4 +3076,43 @@ export function applyCoreV1EncounterActionPlan(
     stopReason,
     continuationRequired,
   ));
+}
+
+export function confirmCoreV1EncounterCompletion(
+  encounterInput: CoreV1EncounterState,
+): CoreV1EncounterResult<CoreV1EncounterState> {
+  const encounter = validateCoreV1EncounterState(encounterInput);
+  if (!encounter.ok) return encounter;
+  if (encounter.value.completionCandidate === null
+    || encounter.value.completionCandidate === 'cancelled') {
+    return failure([issue(
+      'encounter.completionCandidate',
+      'COMPLETION_CANDIDATE_REQUIRED',
+      'Encounter completion requires a non-cancelled candidate',
+    )]);
+  }
+  if (encounter.value.status === 'completed' || encounter.value.status === 'cancelled') {
+    return failure([issue('encounter.status', 'ENCOUNTER_CLOSED', 'Encounter is already closed')]);
+  }
+  return success({
+    ...cloneValue(encounter.value),
+    status: 'completed',
+    stateVersion: safeIntegerAdd(encounter.value.stateVersion, 1, 'encounter state version'),
+  });
+}
+
+export function cancelCoreV1Encounter(
+  encounterInput: CoreV1EncounterState,
+): CoreV1EncounterResult<CoreV1EncounterState> {
+  const encounter = validateCoreV1EncounterState(encounterInput);
+  if (!encounter.ok) return encounter;
+  if (encounter.value.status === 'completed' || encounter.value.status === 'cancelled') {
+    return failure([issue('encounter.status', 'ENCOUNTER_CLOSED', 'Encounter is already closed')]);
+  }
+  return success({
+    ...cloneValue(encounter.value),
+    status: 'cancelled',
+    completionCandidate: 'cancelled',
+    stateVersion: safeIntegerAdd(encounter.value.stateVersion, 1, 'encounter state version'),
+  });
 }

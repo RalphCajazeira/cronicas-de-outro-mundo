@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { Buffer } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import pg from 'pg';
 import request from 'supertest';
@@ -31,9 +32,20 @@ import { publishContentVersion } from '../../src/modules/content/content-publica
 import { prismaGptRepository } from '../../src/modules/gpt/gpt.repository.js';
 import { canonicalize, jsonByteSize } from '../../src/modules/gpt/gpt.start-game.js';
 import { prismaReadinessCheck } from '../../src/modules/health/health.repository.js';
+import { encounterService } from '../../src/modules/encounters/encounter.service.js';
+import { lockActorAuthorities } from '../../src/modules/encounters/encounter.repository.js';
+import {
+  createCoreV1EncounterSnapshotHash,
+  parseCoreV1EncounterSnapshot,
+  serializeCoreV1EncounterState,
+} from '../../src/modules/encounters/encounter-state-snapshot.js';
 import { ensureCoreV1RulesetVersion } from '../../src/modules/rules/ruleset.registry.js';
 import { CORE_V1_CONFIG_HASH, CORE_V1_CONFIG_SNAPSHOT } from '../../src/modules/rules/core-v1/core-v1.manifest.js';
-import { getInitialAttributePreset } from '../../src/modules/rules/core-v1/index.js';
+import {
+  calculateSecondaryAttributes,
+  createCoreV1EmptyEquipmentLoadout,
+  getInitialAttributePreset,
+} from '../../src/modules/rules/core-v1/index.js';
 import { disconnectPrisma, prisma } from '../../src/shared/database/prisma.js';
 import { canonicalJson } from '../../src/shared/json/canonical-json.js';
 
@@ -977,37 +989,38 @@ describe('encounter persistence constraints', () => {
         encounterId: fixture.encounter.id,
         idempotencyRecordId: firstIdempotency.id,
         operation: EncounterOperationKind.CREATE,
-        previousStateVersion: 1,
-        nextStateVersion: 2,
+        previousStateVersion: 0,
+        nextStateVersion: 1,
         inputHash: 'c'.repeat(64),
         beforeStateHash: 'a'.repeat(64),
         afterStateHash: 'b'.repeat(64),
         resultSummary: { created: true },
       },
     });
-    expect(operation.nextStateVersion).toBe(2);
+    expect(operation.nextStateVersion).toBe(1);
 
     const invalidIdempotency = await prisma.idempotencyRecord.create({
       data: { key: 'encounter-operation-sequence-002', operation: 'encounter-continue', requestHash: 'd'.repeat(64) },
     });
-    await expect(prisma.encounterOperation.create({
+    const batch = await prisma.encounterOperation.create({
       data: {
         encounterId: fixture.encounter.id,
         idempotencyRecordId: invalidIdempotency.id,
         operation: EncounterOperationKind.CONTINUE,
-        previousStateVersion: 2,
+        previousStateVersion: 1,
         nextStateVersion: 4,
         inputHash: 'd'.repeat(64), beforeStateHash: 'b'.repeat(64), afterStateHash: 'e'.repeat(64),
         resultSummary: {},
       },
-    })).rejects.toThrow();
+    });
+    expect(batch.nextStateVersion).toBe(4);
     await expect(prisma.encounterOperation.create({
       data: {
         encounterId: fixture.encounter.id,
         idempotencyRecordId: firstIdempotency.id,
         operation: EncounterOperationKind.CONTINUE,
-        previousStateVersion: 2,
-        nextStateVersion: 3,
+        previousStateVersion: 4,
+        nextStateVersion: 5,
         inputHash: 'd'.repeat(64), beforeStateHash: 'b'.repeat(64), afterStateHash: 'e'.repeat(64),
         resultSummary: {},
       },
@@ -1022,11 +1035,43 @@ describe('encounter persistence constraints', () => {
         idempotencyRecordId: duplicateVersionIdempotency.id,
         operation: EncounterOperationKind.SUBMIT_INTENT,
         previousStateVersion: 1,
-        nextStateVersion: 2,
+        nextStateVersion: 4,
         inputHash: 'e'.repeat(64), beforeStateHash: 'a'.repeat(64), afterStateHash: 'f'.repeat(64),
         resultSummary: {},
       },
     })).rejects.toMatchObject({ code: 'P2002' });
+  });
+
+  it('fails the Phase 1L-B migration preflight before changing checks when incompatible rows exist', async () => {
+    const fixture = await createEncounterFixture('operation-preflight');
+    const idempotency = await prisma.idempotencyRecord.create({
+      data: { key: 'encounter-operation-preflight-001', operation: 'encounter-create', requestHash: '9'.repeat(64) },
+    });
+    const migration = readFileSync(new URL(
+      '../../prisma/migrations/20260715120000_fix_encounter_operation_versions/migration.sql',
+      import.meta.url,
+    ), 'utf8');
+    const preflight = migration.slice(0, migration.indexOf('ALTER TABLE "EncounterOperation"'));
+    const client = await openPostgreSqlClient('phase-1l-b-migration-preflight');
+    await client.query('BEGIN');
+    try {
+      await client.query(`
+        ALTER TABLE "EncounterOperation"
+          DROP CONSTRAINT "EncounterOperation_previousStateVersion_check",
+          DROP CONSTRAINT "EncounterOperation_stateVersionSequence_check"
+      `);
+      await client.query(`
+        INSERT INTO "EncounterOperation" (
+          "id", "encounterId", "idempotencyRecordId", "operation",
+          "previousStateVersion", "nextStateVersion", "inputHash",
+          "beforeStateHash", "afterStateHash", "resultSummary"
+        ) VALUES ($1, $2, $3, 'CREATE', 1, 2, $4, $5, $6, '{}'::jsonb)
+      `, [randomUUID(), fixture.encounter.id, idempotency.id, '9'.repeat(64), '8'.repeat(64), '7'.repeat(64)]);
+      await expect(client.query(preflight)).rejects.toThrow(/manual data migration is required/i);
+    } finally {
+      await client.query('ROLLBACK');
+      await client.end();
+    }
   });
 
   it('rejects duplicate roll refs, invalid ordinals and cross-Encounter operation links', async () => {
@@ -1039,8 +1084,8 @@ describe('encounter persistence constraints', () => {
         encounterId: fixture.encounter.id,
         idempotencyRecordId: idempotency.id,
         operation: EncounterOperationKind.CREATE,
-        previousStateVersion: 1,
-        nextStateVersion: 2,
+        previousStateVersion: 0,
+        nextStateVersion: 1,
         inputHash: '1'.repeat(64), beforeStateHash: '2'.repeat(64), afterStateHash: '3'.repeat(64),
         resultSummary: {},
       },
@@ -1130,7 +1175,7 @@ describe('encounter persistence constraints', () => {
         encounterId: fixture.encounter.id,
         idempotencyRecordId: idempotency.id,
         operation: EncounterOperationKind.CREATE,
-        previousStateVersion: 1, nextStateVersion: 2,
+        previousStateVersion: 0, nextStateVersion: 1,
         inputHash: '6'.repeat(64), beforeStateHash: '7'.repeat(64), afterStateHash: '8'.repeat(64),
         resultSummary: {},
       },
@@ -1211,6 +1256,604 @@ describe('idempotent seed', () => {
 });
 
 encounterPersistenceConstraintTests();
+
+describe('Phase 1L-B transactional encounter adapter', () => {
+  it('creates, loads, replays, advances, submits content, persists effects and cancels without consequences', async () => {
+    const actorBefore = await prisma.actor.findUniqueOrThrow({
+      where: { campaignId_code: {
+        campaignId: (await prisma.campaign.findUniqueOrThrow({
+          where: { worldId_code: {
+            worldId: (await prisma.world.findFirstOrThrow({ where: { code: seedScope.worldRef } })).id,
+            code: seedScope.campaignRef,
+          } },
+        })).id,
+        code: 'ralph',
+      } },
+      select: { xp: true, gold: true },
+    });
+    const createInput = {
+      ...seedScope,
+      idempotencyKey: 'phase-1l-b-create-0001',
+      encounterRef: 'phase-1l-b-service',
+      partySideRef: 'party',
+      participants: [{
+        bindingKind: 'persisted_actor' as const,
+        actorRef: 'ralph',
+        sideRef: 'party',
+        zone: 'near' as const,
+      }, {
+        bindingKind: 'persisted_actor' as const,
+        actorRef: 'lyra',
+        sideRef: 'hostile',
+        zone: 'near' as const,
+      }],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' as const },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' as const },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' as const },
+      ],
+    };
+    const created = await encounterService.create(createInput);
+    expect(created).toMatchObject({
+      operation: 'create', encounterRef: createInput.encounterRef,
+      stateVersion: 1, lifecycleStatus: 'processing_paused',
+    });
+    expect(canonicalJson(created)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}|stateHash|stateSnapshot/i);
+
+    const replay = await encounterService.create({
+      ...createInput,
+      participants: [...createInput.participants].reverse(),
+      relations: [...createInput.relations].reverse().map((relation) => (
+        relation.relation === 'hostile'
+          ? { ...relation, leftActorRef: relation.rightActorRef, rightActorRef: relation.leftActorRef }
+          : relation
+      )),
+    });
+    expect(replay).toEqual(created);
+    expect(await prisma.encounterOperation.count({
+      where: { encounter: { encounterRef: createInput.encounterRef } },
+    })).toBe(1);
+    await expect(encounterService.create({ ...createInput, partySideRef: 'other' }))
+      .rejects.toMatchObject({ code: 'ENCOUNTER_IDEMPOTENCY_KEY_REUSED' });
+
+    const prematureIntentKey = 'phase-1l-b-premature-intent';
+    await expect(encounterService.submitIntent({
+      ...seedScope,
+      encounterRef: createInput.encounterRef,
+      idempotencyKey: prematureIntentKey,
+      expectedStateVersion: created.stateVersion,
+      intent: {
+        intentRef: 'premature-mark-intent', sourceActorRef: 'ralph', slotRef: 'primary',
+        actionSource: 'content', targetSelector: 'explicit', requestedTargetRefs: ['ralph'],
+        contentRef: { scope: 'campaign', contentType: 'spell', code: 'seed-mark-spell', versionNumber: 1 },
+      },
+    })).rejects.toMatchObject({ code: 'ENCOUNTER_LIFECYCLE_CONFLICT' });
+    await expect(prisma.idempotencyRecord.count({ where: { key: `encounter:${prematureIntentKey}` } })).resolves.toBe(0);
+
+    const staleContinueKey = 'phase-1l-b-stale-continue';
+    await expect(encounterService.continue({
+      ...seedScope,
+      encounterRef: createInput.encounterRef,
+      idempotencyKey: staleContinueKey,
+      expectedStateVersion: created.stateVersion + 100,
+    })).rejects.toMatchObject({ code: 'ENCOUNTER_EXPECTED_VERSION_CONFLICT' });
+    await expect(prisma.idempotencyRecord.count({ where: { key: `encounter:${staleContinueKey}` } })).resolves.toBe(0);
+
+    const loaded = await encounterService.load({ ...seedScope, encounterRef: createInput.encounterRef });
+    expect(loaded).toMatchObject({ operation: 'load', stateVersion: 1 });
+    expect(await prisma.encounterOperation.count({
+      where: { encounter: { encounterRef: createInput.encounterRef } },
+    })).toBe(1);
+
+    const ready = await encounterService.continue({
+      ...seedScope,
+      encounterRef: createInput.encounterRef,
+      idempotencyKey: 'phase-1l-b-continue-0001',
+      expectedStateVersion: created.stateVersion,
+    });
+    expect(ready.lifecycleStatus).toBe('awaiting_intent');
+
+    const submitted = await encounterService.submitIntent({
+      ...seedScope,
+      encounterRef: createInput.encounterRef,
+      idempotencyKey: 'phase-1l-b-submit-0001',
+      expectedStateVersion: ready.stateVersion,
+      intent: {
+        intentRef: 'phase-1l-b-mark-intent',
+        sourceActorRef: 'ralph',
+        slotRef: 'primary',
+        actionSource: 'content',
+        targetSelector: 'explicit',
+        requestedTargetRefs: ['ralph'],
+        contentRef: {
+          scope: 'campaign', contentType: 'spell', code: 'seed-mark-spell', versionNumber: 1,
+        },
+      },
+    });
+    expect(submitted.lifecycleStatus).toBe('processing_paused');
+
+    const resolved = await encounterService.continue({
+      ...seedScope,
+      encounterRef: createInput.encounterRef,
+      idempotencyKey: 'phase-1l-b-continue-0002',
+      expectedStateVersion: submitted.stateVersion,
+    });
+    expect(resolved.stateVersion).toBeGreaterThan(submitted.stateVersion + 1);
+    const persistedEffect = await prisma.activeEffect.findFirstOrThrow({
+      where: {
+        targetActor: { code: 'ralph' },
+        sourceContentVersion: { contentDefinition: { code: 'seed-mark-spell' } },
+      },
+    });
+
+    const cancelled = await encounterService.cancel({
+      ...seedScope,
+      encounterRef: createInput.encounterRef,
+      idempotencyKey: 'phase-1l-b-cancel-0001',
+      expectedStateVersion: resolved.stateVersion,
+    });
+    expect(cancelled).toMatchObject({ lifecycleStatus: 'cancelled', completionCandidate: 'cancelled' });
+    await expect(prisma.activeEffect.findUnique({ where: { id: persistedEffect.id } })).resolves.not.toBeNull();
+    const actorAfter = await prisma.actor.findFirstOrThrow({
+      where: { code: 'ralph', campaign: { code: seedScope.campaignRef } },
+      select: { xp: true, gold: true },
+    });
+    expect(actorAfter).toEqual(actorBefore);
+  });
+
+  it('detects drift and serializes concurrent creates and same-version operations safely', async () => {
+    const base = {
+      ...seedScope,
+      partySideRef: 'party',
+      participants: [{
+        bindingKind: 'persisted_actor' as const, actorRef: 'ralph', sideRef: 'party', zone: 'near' as const,
+      }, {
+        bindingKind: 'persisted_actor' as const, actorRef: 'lyra', sideRef: 'hostile', zone: 'near' as const,
+      }],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' as const },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' as const },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' as const },
+      ],
+    };
+    const attempts = await Promise.allSettled([
+      encounterService.create({ ...base, encounterRef: 'phase-1l-b-race-a', idempotencyKey: 'phase-1l-b-race-create-a' }),
+      encounterService.create({ ...base, encounterRef: 'phase-1l-b-race-b', idempotencyKey: 'phase-1l-b-race-create-b' }),
+    ]);
+    expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+    expect(attempts.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
+    const rejectedCreate = attempts.find((attempt) => attempt.status === 'rejected');
+    if (rejectedCreate?.status !== 'rejected') throw new Error('Concurrent create loser is required');
+    expect(rejectedCreate.reason).toMatchObject({ code: 'ENCOUNTER_ALREADY_OPEN' });
+    const created = attempts.find((attempt) => attempt.status === 'fulfilled');
+    if (created?.status !== 'fulfilled') throw new Error('Concurrent create winner is required');
+    const encounterRef = created.value.encounterRef;
+    const encounter = await prisma.encounter.findFirstOrThrow({ where: { encounterRef } });
+    const actor = await prisma.actor.findFirstOrThrow({
+      where: { code: 'ralph', campaignId: encounter.campaignId },
+      include: { resources: { orderBy: { type: 'asc' } } },
+    });
+
+    for (const resource of actor.resources) {
+      await prisma.actorResource.update({ where: { id: resource.id }, data: { stateVersion: { increment: 1 } } });
+      await expect(encounterService.load({ ...seedScope, encounterRef }))
+        .rejects.toMatchObject({ code: 'ENCOUNTER_RESOURCE_DRIFT' });
+      await prisma.actorResource.update({ where: { id: resource.id }, data: { stateVersion: { decrement: 1 } } });
+    }
+    for (const [field, code] of [
+      ['mechanicsStateVersion', 'ENCOUNTER_MECHANICS_DRIFT'],
+      ['inventoryStateVersion', 'ENCOUNTER_INVENTORY_DRIFT'],
+      ['effectsStateVersion', 'ENCOUNTER_EFFECTS_DRIFT'],
+    ] as const) {
+      await prisma.actor.update({ where: { id: actor.id }, data: { [field]: { increment: 1 } } });
+      await expect(encounterService.load({ ...seedScope, encounterRef }))
+        .rejects.toMatchObject({ code });
+      await prisma.actor.update({ where: { id: actor.id }, data: { [field]: { decrement: 1 } } });
+    }
+    const campaign = await prisma.campaign.findUniqueOrThrow({ where: { id: encounter.campaignId } });
+    await prisma.campaign.update({ where: { id: campaign.id }, data: { engineTick: { increment: 1n } } });
+    await expect(encounterService.load({ ...seedScope, encounterRef }))
+      .rejects.toMatchObject({ code: 'ENCOUNTER_CAMPAIGN_TICK_DRIFT' });
+    await prisma.campaign.update({ where: { id: campaign.id }, data: { engineTick: campaign.engineTick } });
+
+    const originalHash = encounter.stateHash;
+    await prisma.encounter.update({ where: { id: encounter.id }, data: { stateHash: 'f'.repeat(64) } });
+    await expect(encounterService.load({ ...seedScope, encounterRef }))
+      .rejects.toMatchObject({ code: 'ENCOUNTER_SNAPSHOT_HASH_INVALID' });
+    await prisma.encounter.update({ where: { id: encounter.id }, data: { stateHash: originalHash } });
+
+    await prisma.encounter.update({ where: { id: encounter.id }, data: { currentTick: { increment: 1n } } });
+    await expect(encounterService.load({ ...seedScope, encounterRef }))
+      .rejects.toMatchObject({ code: 'ENCOUNTER_DENORMALIZED_DRIFT' });
+    await prisma.encounter.update({ where: { id: encounter.id }, data: { currentTick: encounter.currentTick } });
+
+    const sameVersion = await Promise.allSettled([
+      encounterService.continue({
+        ...seedScope, encounterRef, idempotencyKey: 'phase-1l-b-race-continue', expectedStateVersion: 1,
+      }),
+      encounterService.cancel({
+        ...seedScope, encounterRef, idempotencyKey: 'phase-1l-b-race-cancel', expectedStateVersion: 1,
+      }),
+    ]);
+    expect(sameVersion.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+    expect(sameVersion.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
+    const current = await encounterService.load({ ...seedScope, encounterRef });
+    if (current.lifecycleStatus !== 'cancelled') {
+      await encounterService.cancel({
+        ...seedScope,
+        encounterRef,
+        idempotencyKey: 'phase-1l-b-race-cleanup',
+        expectedStateVersion: current.stateVersion,
+      });
+    }
+
+    const actorIds = await prisma.actor.findMany({
+      where: { campaignId: encounter.campaignId, code: { in: ['ralph', 'lyra'] } },
+      select: { id: true },
+    });
+    await expect(Promise.all([
+      prisma.$transaction((transaction) => lockActorAuthorities(transaction, actorIds.map((actor) => actor.id))),
+      prisma.$transaction((transaction) => lockActorAuthorities(transaction, actorIds.map((actor) => actor.id).reverse())),
+    ])).resolves.toHaveLength(2);
+  });
+
+  it('confirms a valid completion candidate without rewards or encounter-effect cleanup', async () => {
+    const encounterScopedEffect = await prisma.activeEffect.findFirstOrThrow({
+      where: {
+        targetActor: { code: 'ralph', campaign: { code: seedScope.campaignRef } },
+        sourceContentVersion: { contentDefinition: { code: 'seed-mark-spell' } },
+      },
+    });
+    await prisma.$transaction(async (transaction) => {
+      await transaction.activeEffect.update({
+        where: { id: encounterScopedEffect.id },
+        data: { durationType: 'ENCOUNTER', expiresAtTick: null, remainingActions: null },
+      });
+      await transaction.actor.update({
+        where: { id: encounterScopedEffect.targetActorId },
+        data: { effectsStateVersion: { increment: 1 }, mechanicsStateVersion: { increment: 1 } },
+      });
+      await recomputeActorDerivedSnapshot(transaction, encounterScopedEffect.targetActorId);
+    });
+    const before = await prisma.actor.findFirstOrThrow({
+      where: { code: 'ralph', campaign: { code: seedScope.campaignRef } },
+      select: { xp: true, gold: true },
+    });
+    const created = await encounterService.create({
+      ...seedScope,
+      encounterRef: 'phase-1l-b-confirm',
+      idempotencyKey: 'phase-1l-b-confirm-create',
+      partySideRef: 'party',
+      participants: [{
+        bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'near',
+      }, {
+        bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'hostile', zone: 'near',
+      }],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+      ],
+    });
+    const record = await prisma.encounter.findFirstOrThrow({
+      where: { encounterRef: created.encounterRef },
+      include: { operations: { orderBy: { nextStateVersion: 'desc' }, take: 1 } },
+    });
+    const candidate = {
+      ...parseCoreV1EncounterSnapshot(record.stateSnapshot),
+      stateVersion: 2,
+      completionCandidate: 'party_victory_candidate' as const,
+    };
+    const snapshot = serializeCoreV1EncounterState(candidate);
+    const hash = createCoreV1EncounterSnapshotHash(snapshot);
+    const idempotency = await prisma.idempotencyRecord.create({
+      data: {
+        key: 'phase-1l-b-confirm-preparation', operation: 'encounter.continue', requestHash: 'a'.repeat(64),
+      },
+    });
+    await prisma.$transaction(async (transaction) => {
+      await transaction.encounter.update({
+        where: { id: record.id },
+        data: {
+          lifecycleStatus: EncounterLifecycleStatus.COMPLETION_PENDING,
+          stateVersion: 2,
+          completionCandidate: 'PARTY_VICTORY_CANDIDATE',
+          stateSnapshot: snapshot,
+          stateHash: hash,
+        },
+      });
+      await transaction.encounterOperation.create({
+        data: {
+          encounterId: record.id,
+          idempotencyRecordId: idempotency.id,
+          operation: EncounterOperationKind.CONTINUE,
+          previousStateVersion: 1,
+          nextStateVersion: 2,
+          inputHash: 'a'.repeat(64),
+          beforeStateHash: record.stateHash,
+          afterStateHash: hash,
+          resultSummary: record.operations[0]!.resultSummary as Prisma.InputJsonValue,
+        },
+      });
+    });
+    const completed = await encounterService.confirmCompletion({
+      ...seedScope,
+      encounterRef: created.encounterRef,
+      idempotencyKey: 'phase-1l-b-confirm-operation',
+      expectedStateVersion: 2,
+    });
+    expect(completed).toMatchObject({
+      lifecycleStatus: 'completed', completionCandidate: 'party_victory_candidate', stateVersion: 3,
+    });
+    const after = await prisma.actor.findFirstOrThrow({
+      where: { code: 'ralph', campaign: { code: seedScope.campaignRef } },
+      select: { xp: true, gold: true },
+    });
+    expect(after).toEqual(before);
+    await expect(prisma.activeEffect.findUnique({ where: { id: encounterScopedEffect.id } })).resolves.not.toBeNull();
+    const closed = await prisma.encounter.findUniqueOrThrow({ where: { id: record.id } });
+    expect(closed.lifecycleStatus).toBe(EncounterLifecycleStatus.COMPLETED);
+    expect(closed.closedAt).toBeInstanceOf(Date);
+  });
+
+  it('resolves an ephemeral active dodge deterministically without reaction or damage rolls', async () => {
+    const dagger = await prisma.inventoryEntry.findFirstOrThrow({
+      where: { actor: { code: 'ralph', campaign: { code: seedScope.campaignRef } }, entryRef: 'starter-dagger-1' },
+    });
+    const equipped = await prisma.actorEquipmentSlot.findFirst({ where: { inventoryEntryId: dagger.id } });
+    const equippedForTest = equipped === null;
+    if (equipped === null) {
+      await prisma.$transaction(async (transaction) => {
+        await transaction.actorEquipmentSlot.create({
+          data: { actorId: dagger.actorId, inventoryEntryId: dagger.id, slotRef: ActorEquipmentSlotRef.MAIN_HAND },
+        });
+        await transaction.actor.update({
+          where: { id: dagger.actorId },
+          data: { inventoryStateVersion: { increment: 1 }, mechanicsStateVersion: { increment: 1 } },
+        });
+        await recomputeActorDerivedSnapshot(transaction, dagger.actorId);
+      });
+    }
+    const attributes = getInitialAttributePreset('balanced');
+    const secondary = calculateSecondaryAttributes({
+      attributes, weaponFamilyRank: 0, magicSchoolRank: 0,
+      accuracyRank: 0, evasionRank: 0, encumbrancePenalty: 0,
+    });
+    const encounterRef = 'phase-1l-b-reaction';
+    const created = await encounterService.create({
+      ...seedScope,
+      encounterRef,
+      idempotencyKey: 'phase-1l-b-reaction-create',
+      partySideRef: 'party',
+      participants: [{
+        bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'engaged',
+      }, {
+        bindingKind: 'ephemeral',
+        ephemeralKind: 'ephemeral_creature',
+        participant: {
+          actorRef: 'training-phantom',
+          sideRef: 'hostile',
+          actorStateVersion: 1,
+          mechanicsStateVersion: 1,
+          inventoryStateVersion: 1,
+          effectsStateVersion: 1,
+          zone: 'engaged',
+          combatState: 'ready',
+          primaryAttributes: attributes,
+          resources: {
+            hp: { current: 100, maximum: 100 }, mana: { current: 0, maximum: 0 },
+            sp: { current: 20, maximum: 20 }, customResources: [],
+          },
+          secondaryAttributes: secondary,
+          activeEffects: [],
+          reactionCapabilities: [{
+            capabilityRef: 'phantom-dodge', kind: 'active_dodge', tier: 1,
+            cost: { type: 'special_dodge', sp: 3 },
+          }],
+          equipmentContext: {
+            inventory: { entries: [] },
+            loadout: createCoreV1EmptyEquipmentLoadout(),
+            requirements: {
+              level: 1, primaryAttributes: attributes, knownContentRefs: [],
+              equippedWeaponTags: [], equippedEquipmentTags: [], rulesetCode: 'core-v1',
+            },
+          },
+          initiative: { tieBreak: 50, surprised: false },
+        },
+      }],
+      relations: [
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+        { leftActorRef: 'ralph', rightActorRef: 'training-phantom', relation: 'hostile' },
+        { leftActorRef: 'training-phantom', rightActorRef: 'training-phantom', relation: 'self' },
+      ],
+    });
+    const ready = await encounterService.continue({
+      ...seedScope, encounterRef, idempotencyKey: 'phase-1l-b-reaction-ready', expectedStateVersion: created.stateVersion,
+    });
+    const submitted = await encounterService.submitIntent({
+      ...seedScope,
+      encounterRef,
+      idempotencyKey: 'phase-1l-b-reaction-submit',
+      expectedStateVersion: ready.stateVersion,
+      intent: {
+        intentRef: 'phantom-attack', sourceActorRef: 'ralph', slotRef: 'primary',
+        actionSource: 'basic_weapon_attack', targetSelector: 'explicit',
+        requestedTargetRefs: ['training-phantom'], weaponEntryRef: 'starter-dagger-1',
+        contentRef: { scope: 'campaign', contentType: 'weapon', code: 'starter-dagger', versionNumber: 1 },
+        reactionPolicy: { mode: 'require', preferredReaction: 'active_dodge', allowCounterAttack: false },
+      },
+    });
+    const reactionPending = await encounterService.continue({
+      ...seedScope,
+      encounterRef,
+      idempotencyKey: 'phase-1l-b-reaction-boundary',
+      expectedStateVersion: submitted.stateVersion,
+    });
+    expect(reactionPending.lifecycleStatus).toBe('awaiting_reaction');
+    const reaction = await encounterService.resolveReaction({
+      ...seedScope,
+      encounterRef,
+      idempotencyKey: 'phase-1l-b-reaction-resolve',
+      expectedStateVersion: reactionPending.stateVersion,
+      reactorActorRef: 'training-phantom',
+      reactionKind: 'active_dodge',
+    });
+    const final = await encounterService.continue({
+      ...seedScope,
+      encounterRef,
+      idempotencyKey: 'phase-1l-b-reaction-finish',
+      expectedStateVersion: reaction.stateVersion,
+    });
+    const persisted = await prisma.encounter.findFirstOrThrow({
+      where: { encounterRef }, include: { rolls: true },
+    });
+    const damageRollKinds = new Set<EncounterRollKind>([EncounterRollKind.HIT, EncounterRollKind.CRITICAL]);
+    expect(persisted.rolls.filter((roll) => damageRollKinds.has(roll.kind))).toEqual([]);
+    await encounterService.cancel({
+      ...seedScope,
+      encounterRef,
+      idempotencyKey: 'phase-1l-b-reaction-cancel',
+      expectedStateVersion: final.stateVersion,
+    });
+    if (equippedForTest) {
+      await prisma.$transaction(async (transaction) => {
+        await transaction.actorEquipmentSlot.deleteMany({ where: { inventoryEntryId: dagger.id } });
+        await transaction.actor.update({
+          where: { id: dagger.actorId },
+          data: { inventoryStateVersion: { increment: 1 }, mechanicsStateVersion: { increment: 1 } },
+        });
+        await recomputeActorDerivedSnapshot(transaction, dagger.actorId);
+      });
+    }
+  });
+
+  it('rolls back resource and inventory writes when operation audit persistence fails, then retries safely', async () => {
+    const actor = await prisma.actor.findFirstOrThrow({
+      where: { code: 'ralph', campaign: { code: seedScope.campaignRef } },
+      include: { campaign: { include: { world: true } } },
+    });
+    const potion = await prisma.$transaction((transaction) => publishContentVersion(transaction, {
+      worldId: actor.campaign.world.id,
+      campaignId: actor.campaignId,
+      contentType: ContentType.CONSUMABLE,
+      code: 'phase-1l-b-rollback-potion',
+      name: 'Poção de rollback 1L-B',
+      description: 'Consumível interno de teste transacional.',
+      profile: {
+        schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical', contentKind: 'consumable',
+        code: 'phase-1l-b-rollback-potion', name: 'Poção de rollback 1L-B',
+        tier: 1, rarity: 'common', activation: { type: 'active' }, cost: { type: 'none' },
+        actionProfile: 'potion', consumable: true,
+        effects: [{ type: 'restore_resource', resource: 'hp', amount: 10, targeting: { type: 'self', rangeBand: 'self' } }],
+      },
+      inventorySpec: { ...inventorySpecBase, unitWeight: 1, stacking: { mode: 'stackable', maxStack: 20 } },
+      presentation: {}, tags: ['phase-1l-b'], status: ContentStatus.ACTIVE, metadata: {},
+    }));
+    const version = potion.versions[0];
+    if (version?.inventoryRulesVersionId === null || version?.inventoryRulesVersionId === undefined) {
+      throw new Error('Encounter rollback potion requires inventory rules');
+    }
+    const hp = await prisma.actorResource.findUniqueOrThrow({
+      where: { actorId_type: { actorId: actor.id, type: 'HP' } },
+    });
+    const reducedHp = Math.max(0, hp.current - 10);
+    await prisma.$transaction(async (transaction) => {
+      await transaction.inventoryEntry.create({
+        data: {
+          actorId: actor.id, entryRef: 'phase-1l-b-rollback-potion-stack',
+          contentVersionId: version.id, inventoryRulesVersionId: version.inventoryRulesVersionId as string,
+          entryKind: InventoryEntryKind.STACK, quantity: 1,
+        },
+      });
+      await transaction.actorResource.update({
+        where: { id: hp.id }, data: { current: reducedHp, stateVersion: { increment: 1 } },
+      });
+      await transaction.actor.update({
+        where: { id: actor.id },
+        data: { inventoryStateVersion: { increment: 1 }, mechanicsStateVersion: { increment: 1 } },
+      });
+      await recomputeActorDerivedSnapshot(transaction, actor.id);
+    });
+    const encounterRef = 'phase-1l-b-rollback';
+    const created = await encounterService.create({
+      ...seedScope, encounterRef, idempotencyKey: 'phase-1l-b-rollback-create', partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'near' },
+        { bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'hostile', zone: 'near' },
+      ],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+      ],
+    });
+    const ready = await encounterService.continue({
+      ...seedScope, encounterRef, idempotencyKey: 'phase-1l-b-rollback-ready',
+      expectedStateVersion: created.stateVersion,
+    });
+    const submitted = await encounterService.submitIntent({
+      ...seedScope, encounterRef, idempotencyKey: 'phase-1l-b-rollback-submit',
+      expectedStateVersion: ready.stateVersion,
+      intent: {
+        intentRef: 'phase-1l-b-use-rollback-potion', sourceActorRef: 'ralph', slotRef: 'primary',
+        actionSource: 'consumable', targetSelector: 'self', requestedTargetRefs: [],
+        weaponEntryRef: 'phase-1l-b-rollback-potion-stack',
+        contentRef: {
+          scope: 'campaign', contentType: 'consumable', code: potion.code, versionNumber: version.versionNumber,
+        },
+      },
+    });
+    const retryKey = 'phase-1l-b-rollback-continue';
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION phase1lb_test_reject_operation() RETURNS TRIGGER LANGUAGE plpgsql AS $function$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM "IdempotencyRecord"
+          WHERE "id" = NEW."idempotencyRecordId" AND "key" = 'encounter:${retryKey}'
+        ) THEN
+          RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'phase1lb rollback injection';
+        END IF;
+        RETURN NEW;
+      END
+      $function$;
+      CREATE TRIGGER phase1lb_test_reject_operation
+        BEFORE INSERT ON "EncounterOperation"
+        FOR EACH ROW EXECUTE FUNCTION phase1lb_test_reject_operation();
+    `);
+    try {
+      await expect(encounterService.continue({
+        ...seedScope, encounterRef, idempotencyKey: retryKey, expectedStateVersion: submitted.stateVersion,
+      })).rejects.toMatchObject({ code: 'ENCOUNTER_CONSTRAINT_CONFLICT' });
+    } finally {
+      await prisma.$executeRawUnsafe(`
+        DROP TRIGGER IF EXISTS phase1lb_test_reject_operation ON "EncounterOperation";
+        DROP FUNCTION IF EXISTS phase1lb_test_reject_operation();
+      `);
+    }
+    await expect(prisma.actorResource.findUniqueOrThrow({ where: { id: hp.id } }))
+      .resolves.toMatchObject({ current: reducedHp });
+    await expect(prisma.inventoryEntry.findUnique({
+      where: { actorId_entryRef: { actorId: actor.id, entryRef: 'phase-1l-b-rollback-potion-stack' } },
+    })).resolves.not.toBeNull();
+    await expect(prisma.idempotencyRecord.count({ where: { key: `encounter:${retryKey}` } })).resolves.toBe(0);
+    await expect(encounterService.load({ ...seedScope, encounterRef })).resolves.toMatchObject({
+      stateVersion: submitted.stateVersion,
+    });
+
+    const retried = await encounterService.continue({
+      ...seedScope, encounterRef, idempotencyKey: retryKey, expectedStateVersion: submitted.stateVersion,
+    });
+    await expect(prisma.actorResource.findUniqueOrThrow({ where: { id: hp.id } }))
+      .resolves.toMatchObject({ current: hp.current });
+    await expect(prisma.inventoryEntry.findUnique({
+      where: { actorId_entryRef: { actorId: actor.id, entryRef: 'phase-1l-b-rollback-potion-stack' } },
+    })).resolves.toBeNull();
+    await encounterService.cancel({
+      ...seedScope, encounterRef, idempotencyKey: 'phase-1l-b-rollback-cancel',
+      expectedStateVersion: retried.stateVersion,
+    });
+  });
+});
 
 describe('ruleset persistence and database immutability', () => {
   it('binds the seeded World and Campaign to the official immutable version', async () => {

@@ -400,4 +400,22 @@ Impacto:
 - UUIDs, hashes, snapshots e rolls permanecem exclusivamente internos;
 - nenhuma migration ou banco remoto foi executado nesta decisão.
 
-Status: implementada localmente na Fase 1L-A; revisão técnica pendente
+Status: implementada, revisada e integrada na Fase 1L-A pelo PR #23
+
+## 2026-07-15 — Fase 1L-B de execução transacional de encontros
+
+Decisão:
+- reutilizar `IdempotencyRecord`, JSON canônico, loaders mecânicos e persistores de recursos/inventário/efeitos existentes em um service/repository interno, sem HTTP;
+- auditar CREATE como 0→1 e permitir `nextStateVersion > previousStateVersion` nos demais batches, com migration corretiva mínima e preflight sem backfill;
+- guardar em `EncounterOperation.resultSummary.adapterState` schema 1 somente o vetor ordenado das versões correntes de participantes persistidos;
+- usar locks por fases: chave idempotente, Campaign, Encounter, participantes, todos os Actors por UUID, recursos, inventário, slots e efeitos;
+- gerar rolls backend-only por provider lazy/injetável, com referências vinculadas à execução idempotente, e persistir somente acessos consumidos; representar active dodge por `forcedMiss` explícito;
+- adotar reação determinística pura sem probabilidades novas e rejeitar targeting espacial sem geometria autoritativa;
+- manter efêmeros no snapshot e recusar efeito persistente de origem efêmera; confirmação/cancelamento não aplicam consequências nem limpam efeitos de encontro.
+
+Impacto:
+- replay idempotente não reexecuta core nem RNG; drift ou corrupção falham sem escrita e sem auto-heal;
+- `continue` pode confirmar vários eventos em uma operação e avançar `Campaign.engineTick` atomicamente;
+- HTTP/OpenAPI seguem para 1L-C, staging/GPT para 1L-D e consequências/limpeza de efeitos para 1M.
+
+Status: implementada e validada localmente; revisão e integração pendentes
