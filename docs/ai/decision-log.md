@@ -440,3 +440,23 @@ Impacto:
 - staging, importação/teste da Action e smoke remoto pertencem exclusivamente à 1L-D.
 
 Status: implementada e validada localmente; integração do GPT e staging não executados
+
+## 2026-07-20 — Fase 1M-A de encerramento consequente e auditável
+
+Decisão:
+- manter as sete operações de `manageEncounter` e derivar todo outcome no backend, sem aceitar consequência/recompensa no request;
+- aplicar em uma única transação a finalização, `ACTIVE → DEFEATED` para participante persistido com HP zero, limpeza dos efeitos pertencentes ao encontro, recomposição, operação terminal, GameEvent, ledger e resposta idempotente;
+- preservar absolutamente `DEAD` e reativar somente `DEFEATED` quando uma restauração oficial eleva HP de 0 para valor positivo;
+- acrescentar origem nullable em `ActiveEffect`, exigida somente para novos efeitos `ENCOUNTER` do orquestrador, sem adotar ou apagar legado;
+- persistir exatamente um `EncounterConsequence` append-only por encontro, schema 1, reward policy nula e JSON fechado de até 1 MiB UTF-8;
+- usar a chave global interna `encounter-outcome:<encounterId>:v1` no GameEvent e expor somente outcome, mudanças de status, contagens e tipo do evento;
+- validar terminais novos historicamente pelo ledger/evento, permitindo mutações posteriores de Actor; manter terminais legados legíveis sem consequência retroativa;
+- adiar XP/level-up para 1M-B e ouro/drop/claim de loot para 1M-C.
+
+Impacto:
+- código anterior não consegue fechar novo Encounter parcialmente após a migration;
+- replay retorna a resposta persistida sem reaplicar status, limpeza, recomposição, operação, evento ou ledger;
+- OpenAPI permanece com exatamente 20 operationIds e uma única Action de encontros;
+- migration remota, deploy, staging/Preview e alteração do GPT ao vivo permanecem fora desta implementação.
+
+Status: implementada localmente; revisão final e gates locais obrigatórios antes de commit

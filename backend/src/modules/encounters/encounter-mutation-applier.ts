@@ -2,7 +2,10 @@ import {
   ActorResourceType,
   ContentType,
 } from '../../generated/prisma/client.js';
-import { recomputeActorDerivedSnapshot } from '../actors/actor-mechanics.service.js';
+import {
+  reactivateDefeatedActorAfterHpRestoration,
+  recomputeActorDerivedSnapshot,
+} from '../actors/actor-mechanics.service.js';
 import {
   persistActorActiveEffects,
   type ActiveEffectPersistenceOrigin,
@@ -73,6 +76,11 @@ async function persistResources(
       data: { current: afterValue, stateVersion: { increment: 1 } },
     });
     if (changed.count !== 1) throw new EncounterError('ENCOUNTER_RESOURCE_DRIFT');
+    if (key === 'hp') {
+      await reactivateDefeatedActorAfterHpRestoration(
+        transaction, authority.actor.id, beforeValue, afterValue,
+      );
+    }
   }
 }
 
@@ -136,14 +144,47 @@ async function effectOrigins(
   effects: readonly CoreV1ActiveEffectInstance[],
 ): Promise<ReadonlyMap<string, ActiveEffectPersistenceOrigin>> {
   const existing = await transaction.activeEffect.findMany({ where: { targetActorId } });
-  const origins = new Map<string, ActiveEffectPersistenceOrigin>(existing.map((row) => [row.effectRef, row]));
+  const targetRef = [...loaded.authorities].find(([, authority]) => authority.actor.id === targetActorId)?.[0];
+  const beforeEffects = new Map(
+    loaded.state.participants.find((participant) => participant.actorRef === targetRef)
+      ?.activeEffects.map((effect) => [effect.effectRef, effect]) ?? [],
+  );
+  const desiredByRef = new Map(effects.map((effect) => [effect.effectRef, effect]));
+  const existingByRef = new Map(existing.map((row) => [row.effectRef, row]));
+  const origins = new Map<string, ActiveEffectPersistenceOrigin>();
+  for (const row of existing) {
+    const protectedOwnership = row.durationType === 'ENCOUNTER' && row.originEncounterId !== loaded.record.id;
+    if (protectedOwnership) {
+      const beforeEffect = beforeEffects.get(row.effectRef);
+      const desiredEffect = desiredByRef.get(row.effectRef);
+      if (beforeEffect === undefined || desiredEffect === undefined
+        || canonicalEncounterMechanicalJson(beforeEffect) !== canonicalEncounterMechanicalJson(desiredEffect)) {
+        throw new EncounterError('ENCOUNTER_EFFECT_OWNERSHIP_CONFLICT');
+      }
+    }
+    origins.set(row.effectRef, {
+      sourceActorId: row.sourceActorId,
+      sourceContentVersionId: row.sourceContentVersionId,
+      effectContentVersionId: row.effectContentVersionId,
+      effectRulesVersionId: row.effectRulesVersionId,
+      originEncounterId: row.originEncounterId,
+    });
+  }
   const rules = await transaction.effectRulesVersion.findFirst({
     where: { rulesetVersionId: loaded.record.rulesetVersionId },
     select: { id: true },
   });
   if (rules === null) throw new EncounterError('ENCOUNTER_EFFECTS_DRIFT');
   for (const effect of effects) {
-    if (origins.has(effect.effectRef)) continue;
+    const existingOrigin = origins.get(effect.effectRef);
+    if (existingOrigin !== undefined) {
+      const existingRow = existingByRef.get(effect.effectRef);
+      if (existingRow === undefined
+        || (existingRow.durationType === 'ENCOUNTER') !== (effect.durationState.type === 'encounter')) {
+        throw new EncounterError('ENCOUNTER_EFFECT_OWNERSHIP_CONFLICT');
+      }
+      continue;
+    }
     const source = loaded.authorities.get(effect.sourceActorRef);
     if (source === undefined) throw new EncounterError('ENCOUNTER_EPHEMERAL_MUTATION_UNSUPPORTED');
     const sourceContentVersionId = await contentVersionId(transaction, loaded, effect.sourceContent);
@@ -155,12 +196,13 @@ async function effectOrigins(
       sourceContentVersionId,
       effectContentVersionId,
       effectRulesVersionId: rules.id,
+      originEncounterId: effect.durationState.type === 'encounter' ? loaded.record.id : null,
     });
   }
   return origins;
 }
 
-function reconcileParticipant(
+export function reconcileEncounterParticipant(
   participant: CoreV1EncounterState['participants'][number],
   authority: PersistedEncounterAuthority,
 ) {
@@ -197,6 +239,9 @@ function assertPostWriteAuthority(
   authorityAfter: PersistedEncounterAuthority,
   change: ActorMutationFlags,
 ): void {
+  const orderedEffects = (effects: readonly CoreV1ActiveEffectInstance[]) => (
+    [...effects].sort((left, right) => left.effectRef.localeCompare(right.effectRef))
+  );
   const mechanicsIncrement = change.inventory || change.effects ? 1 : 0;
   if (authorityAfter.actor.mechanicsStateVersion !== authorityBefore.actor.mechanicsStateVersion + mechanicsIncrement) {
     throw new EncounterError('ENCOUNTER_MECHANICS_DRIFT');
@@ -205,8 +250,8 @@ function assertPostWriteAuthority(
     throw new EncounterError('ENCOUNTER_INVENTORY_DRIFT');
   }
   if (authorityAfter.actor.effectsStateVersion !== authorityBefore.actor.effectsStateVersion + (change.effects ? 1 : 0)
-    || canonicalEncounterMechanicalJson(authorityAfter.effects.activeEffects)
-      !== canonicalEncounterMechanicalJson(after.activeEffects)) {
+    || canonicalEncounterMechanicalJson(orderedEffects(authorityAfter.effects.activeEffects))
+      !== canonicalEncounterMechanicalJson(orderedEffects(after.activeEffects))) {
     throw new EncounterError('ENCOUNTER_EFFECTS_DRIFT');
   }
   if (authorityAfter.sheet.resources.hp.current !== after.resources.hp.current
@@ -313,7 +358,7 @@ export async function applyEncounterMutations(
     ...afterInput,
     participants: afterInput.participants.map((participant) => {
       const authority = authorities.get(participant.actorRef);
-      return authority === undefined ? participant : reconcileParticipant(participant, authority);
+      return authority === undefined ? participant : reconcileEncounterParticipant(participant, authority);
     }),
   };
   return { state, authorities };

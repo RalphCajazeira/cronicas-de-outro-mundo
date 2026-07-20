@@ -125,3 +125,13 @@ A migration `20260715120000_fix_encounter_operation_versions` altera somente os 
 O estado transacional corrente das autoridades fica no objeto fechado `resultSummary.adapterState` schema 1, sem duplicar snapshot: participantes persistidos ordenados, versões mecânica/inventário/efeitos e versões individuais de HP/Mana/SP. Leitura e escrita validam esse vetor e sua coerência com a última operação, Encounter e autoridades persistidas.
 
 Status: implementada e validada localmente na Fase 1L-B; migration remota não executada
+
+## Fase 1M-A — origem de efeitos e ledger terminal
+
+A migration `20260720160000_add_encounter_consequences` é aditiva e não exige reset ou backfill. Ela acrescenta `ActiveEffect.originEncounterId UUID NULL`, FK restrita para `Encounter` e índice `(originEncounterId, targetActorId)`. Um trigger permite efeitos `ENCOUNTER` legados com origem nula, mas exige origem em novos inserts do scope, proíbe origem nos demais scopes e impede adoção ou troca de ownership.
+
+`EncounterConsequence` possui vínculos únicos e obrigatórios com Encounter, operação terminal e GameEvent; outcome fechado; schema de consequência 1; reward policy nula nesta fase; JSON interno e timestamp. As FKs são restritas, UPDATE/DELETE são bloqueados, RLS não possui policy pública e grants de `anon`/`authenticated` são revogados condicionalmente.
+
+Constraint triggers diferidos validam transições de Encounter aberto para `COMPLETED`/`CANCELLED` e inserts já terminais. Ao commit deve existir exatamente um ledger coerente, sua operação deve ser terminal e do mesmo encontro e seu evento deve pertencer à mesma Campaign. Um trigger adicional torna imutáveis as autoridades de qualquer terminal novo ou legado, bloqueando inclusive troca de lifecycle/candidato/snapshot/hash, mas permitindo updates irrelevantes como `updatedAt`. Linhas terminais anteriores permanecem válidas sem backfill; código antigo que tentar produzir novo terminal parcial recebe rollback integral. A distinção usa o evento real de INSERT/UPDATE e os valores `OLD`/`NEW`, nunca timestamp manipulável ou marca persistida após rollback.
+
+O limite autoritativo da aplicação para `resultSummary` é 1 MiB medido por `Buffer.byteLength(JSON.stringify(value), 'utf8')`. O pior objeto realmente aceito — 64 participantes, 64 effectRefs de 80 caracteres por ator, actorRefs de 160, estados/versões/recursos completos e evento — mede 421.102 bytes, deixando 627.474 bytes de margem. O check físico de 2 MiB no `jsonb::text` acomoda espaços e normalização textual acrescentados pelo PostgreSQL sem permitir que um payload válido na aplicação falhe no insert. Nenhum banco remoto foi alterado.

@@ -116,6 +116,12 @@ Antes de rodar E2E, verificar:
 - custo de tempo;
 - se o escopo da tarefa exige E2E.
 
+### Validação específica da Fase 1M-A
+
+Além dos gates gerais, validar em PostgreSQL local protegido: migration desde banco vazio e com legado, origem/ownership de efeitos, constraint diferida, append-only/RLS/revokes, finalização e cancelamento atômicos, replay, corrida, rollback, cura `DEFEATED → ACTIVE` e carga terminal após mutações posteriores. O contrato deve continuar com 20 operationIds; o DTO e audit não podem conter UUIDs, hashes, snapshots, rolls, effectRefs, recursos históricos, XP, ouro ou loot.
+
+Não usar `db push`, reset, banco remoto, staging ou Preview para essa validação.
+
 ## Antes de commit
 
 Nunca commit sem autorização explícita.

@@ -61,6 +61,27 @@ describe('encounter public DTO mapper', () => {
     expect(serialized).not.toMatch(/queue-secret|event-secret|profile-secret|scheduledEvents|eventRef|roll/);
   });
 
+  it('projects only the closed consequence allowlist and omits unsupported rewards and internal ledger data', () => {
+    const publicDto = toEncounterPublicDto(dto({
+      operation: 'confirm_completion', lifecycleStatus: 'completed',
+      completionCandidate: 'party_victory_candidate', nextRequiredAction: { type: 'none' },
+      consequencesSummary: {
+        schemaVersion: 1, outcome: 'party_victory',
+        actorChanges: [{ actorRef: 'hero', statusBefore: 'active', statusAfter: 'defeated' }],
+        removedEncounterEffects: [{ actorRef: 'hero', count: 2 }],
+        persistentEvent: { eventType: 'encounter-completed', actorRef: 'hero' },
+        effectRefs: ['fx_private'], gameEventId: 'private-id', xp: 99, gold: 88, loot: ['secret'],
+      } as NonNullable<EncounterDto['consequencesSummary']>,
+    }));
+    expect(publicDto.consequencesSummary).toEqual({
+      schemaVersion: 1, outcome: 'party_victory',
+      actorChanges: [{ actorRef: 'hero', statusBefore: 'active', statusAfter: 'defeated' }],
+      removedEncounterEffects: [{ actorRef: 'hero', count: 2 }],
+      persistentEvent: { eventType: 'encounter-completed', actorRef: 'hero' },
+    });
+    expect(JSON.stringify(publicDto)).not.toMatch(/fx_private|private-id|"xp"|"gold"|"loot"/);
+  });
+
   it('rejects unknown lifecycle/operation combinations instead of selecting a fallback result', () => {
     expect(() => encounterPublicResult(dto({ operation: 'continue', lifecycleStatus: 'unknown' }))).toThrow();
   });

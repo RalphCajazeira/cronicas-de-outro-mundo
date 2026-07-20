@@ -1,4 +1,5 @@
 import type { EncounterDto, EncounterNextRequiredActionDto, EncounterTransitionSummaryDto } from './encounter.types.js';
+import type { EncounterPublicConsequencesSummaryV1 } from './encounter-consequence.js';
 
 export type EncounterPublicResult =
   | 'encounter_created' | 'encounter_loaded' | 'intent_accepted' | 'reaction_required'
@@ -28,6 +29,7 @@ export interface EncounterPublicDto {
   }[];
   readonly nextRequiredAction: EncounterNextRequiredActionDto;
   readonly transitionSummary?: EncounterTransitionSummaryDto;
+  readonly consequencesSummary?: EncounterPublicConsequencesSummaryV1;
 }
 
 export function encounterPublicResult(dto: EncounterDto): EncounterPublicResult {
@@ -116,6 +118,15 @@ export function toEncounterPublicDto(dto: EncounterDto): EncounterPublicDto {
     nextRequiredAction: toPublicNextRequiredAction(dto.nextRequiredAction),
     ...(dto.transitionSummary === undefined ? {} : {
       transitionSummary: toPublicTransitionSummary(dto.transitionSummary),
+    }),
+    ...(dto.consequencesSummary === undefined ? {} : {
+      consequencesSummary: {
+        schemaVersion: 1 as const,
+        outcome: dto.consequencesSummary.outcome,
+        actorChanges: dto.consequencesSummary.actorChanges.map((change) => ({ ...change })),
+        removedEncounterEffects: dto.consequencesSummary.removedEncounterEffects.map((change) => ({ ...change })),
+        persistentEvent: { ...dto.consequencesSummary.persistentEvent },
+      },
     }),
   };
 }

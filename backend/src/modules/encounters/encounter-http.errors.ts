@@ -28,6 +28,8 @@ const definitions: Readonly<Record<EncounterErrorCode, PublicErrorDefinition>> =
   ENCOUNTER_RESOURCE_DRIFT: integrity(),
   ENCOUNTER_INVENTORY_DRIFT: integrity(),
   ENCOUNTER_EFFECTS_DRIFT: integrity(),
+  ENCOUNTER_EFFECT_OWNERSHIP_CONFLICT: integrity(),
+  ENCOUNTER_EFFECT_ORIGIN_REQUIRED: integrity(),
   ENCOUNTER_CAMPAIGN_TICK_DRIFT: integrity(),
   ENCOUNTER_IDEMPOTENCY_RESPONSE_PENDING: integrity(),
   ENCOUNTER_ROLL_INVALID: integrity(),

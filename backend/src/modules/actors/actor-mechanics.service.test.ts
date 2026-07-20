@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { ActorAttributeCode, ActorResourceType } from '../../generated/prisma/client.js';
+import { describe, expect, it, vi } from 'vitest';
+import { ActorAttributeCode, ActorResourceType, ActorStatus } from '../../generated/prisma/client.js';
 import {
   CORE_V1_CONFIG_HASH,
   CORE_V1_CONFIG_SNAPSHOT,
@@ -17,6 +17,7 @@ import {
 import {
   createActorMechanicsInputHash,
   projectActorMechanicalSheet,
+  reactivateDefeatedActorAfterHpRestoration,
 } from './actor-mechanics.service.js';
 
 const actorId = '10000000-0000-0000-0000-000000000001';
@@ -125,6 +126,34 @@ function mechanicalRecord() {
     activeEffectInputs: { activeEffects: [], modifiers: [], hashInput: [] },
   };
 }
+
+describe('authoritative defeated Actor recovery', () => {
+  it('reactivates only a DEFEATED Actor after HP crosses from zero to positive', async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    await expect(reactivateDefeatedActorAfterHpRestoration(
+      { actor: { updateMany } } as never, actorId, 0, 3,
+    )).resolves.toBe(true);
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: actorId, status: ActorStatus.DEFEATED },
+      data: { status: ActorStatus.ACTIVE },
+    });
+  });
+
+  it.each([[1, 2], [0, 0], [5, 0]])('does not query status for HP transition %i -> %i', async (before, after) => {
+    const updateMany = vi.fn();
+    await expect(reactivateDefeatedActorAfterHpRestoration(
+      { actor: { updateMany } } as never, actorId, before, after,
+    )).resolves.toBe(false);
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('preserves ACTIVE, DEAD, INACTIVE and ARCHIVED when the conditional update matches no DEFEATED row', async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 0 });
+    await expect(reactivateDefeatedActorAfterHpRestoration(
+      { actor: { updateMany } } as never, actorId, 0, 1,
+    )).resolves.toBe(false);
+  });
+});
 
 type MechanicalRecord = Parameters<typeof projectActorMechanicalSheet>[0];
 

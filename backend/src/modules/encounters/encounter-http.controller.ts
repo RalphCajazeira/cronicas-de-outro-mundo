@@ -25,6 +25,13 @@ export function createManageEncounterController(service: EncounterHttpService) {
         lifecycleStatus: result.lifecycleStatus,
         stateVersion: result.stateVersion,
         processedEventCount: result.transitionSummary?.processedEventCount ?? 0,
+        ...(result.consequencesSummary === undefined ? {} : {
+          outcome: result.consequencesSummary.outcome,
+          actorChangeCount: result.consequencesSummary.actorChanges.length,
+          removedEncounterEffectCount: result.consequencesSummary.removedEncounterEffects
+            .reduce((total, entry) => total + entry.count, 0),
+          eventType: result.consequencesSummary.persistentEvent.eventType,
+        }),
       });
       response.status(200).json(result);
     } catch (error) {

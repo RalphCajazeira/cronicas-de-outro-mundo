@@ -54,6 +54,23 @@ export function encounterPostgresCode(error: unknown): string | undefined {
   return undefined;
 }
 
+export function encounterPostgresMessage(error: unknown): string | undefined {
+  const candidates = [
+    property(property(property(error, 'meta'), 'driverAdapterError'), 'cause'),
+    property(property(error, 'cause'), 'cause'),
+    property(error, 'cause'),
+    property(property(error, 'meta'), 'driverAdapterError'),
+    error,
+  ];
+  for (const candidate of candidates) {
+    for (const key of ['originalMessage', 'message']) {
+      const value = property(candidate, key);
+      if (typeof value === 'string') return value;
+    }
+  }
+  return undefined;
+}
+
 export async function executeIdempotentEncounter(
   database: EncounterDatabase,
   key: string,

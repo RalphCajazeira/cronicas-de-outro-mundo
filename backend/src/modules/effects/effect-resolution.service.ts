@@ -7,9 +7,14 @@ import {
   EffectRollKind,
   Prisma,
 } from '../../generated/prisma/client.js';
+import { isDeepStrictEqual } from 'node:util';
 import { resolveScope } from '../../shared/database/game-scope.js';
 import { AppError, ConflictError, NotFoundError } from '../../shared/errors/app-error.js';
-import { loadActorMechanicalSheet, recomputeActorDerivedSnapshot } from '../actors/actor-mechanics.service.js';
+import {
+  loadActorMechanicalSheet,
+  reactivateDefeatedActorAfterHpRestoration,
+  recomputeActorDerivedSnapshot,
+} from '../actors/actor-mechanics.service.js';
 import type { ResolveActorEffectInput } from '../gpt/gpt.schemas.js';
 import { loadActorInventoryMechanicalInputs } from '../inventory/inventory-mechanical-inputs.js';
 import {
@@ -63,6 +68,27 @@ const executableVersionInclude = {
 type ExecutableVersion = Prisma.ContentVersionGetPayload<{ include: typeof executableVersionInclude }>;
 type ExecutableDefinition = Prisma.ContentDefinitionGetPayload<Record<string, never>>;
 type Executable = { definition: ExecutableDefinition; version: ExecutableVersion; inventoryEntry: { id: string } | null };
+
+async function assertEncounterEffectsUnchanged(
+  client: Transaction,
+  actorId: string,
+  before: readonly CoreV1ActiveEffectInstance[],
+  after: readonly CoreV1ActiveEffectInstance[],
+): Promise<void> {
+  const protectedRows = await client.activeEffect.findMany({
+    where: { targetActorId: actorId, durationType: 'ENCOUNTER' },
+    select: { effectRef: true },
+  });
+  const beforeByRef = new Map(before.map((effect) => [effect.effectRef, effect]));
+  const afterByRef = new Map(after.map((effect) => [effect.effectRef, effect]));
+  if (protectedRows.some((row) => !isDeepStrictEqual(
+    beforeByRef.get(row.effectRef), afterByRef.get(row.effectRef),
+  ))) {
+    throw new AppError(500, 'EFFECT_INTEGRITY_ERROR', 'Encounter effect ownership failed integrity validation', {
+      retryable: false,
+    });
+  }
+}
 
 function operationError(code: string, message: string): AppError {
   return new AppError(409, code, message);
@@ -299,7 +325,14 @@ async function persistInventoryConsumption(client: Transaction, actorId: string,
 
 function originsFor(
   effects: readonly CoreV1ActiveEffectInstance[],
-  existing: readonly { effectRef: string; sourceActorId: string; sourceContentVersionId: string; effectContentVersionId: string | null; effectRulesVersionId: string }[],
+  existing: readonly {
+    effectRef: string;
+    sourceActorId: string;
+    sourceContentVersionId: string;
+    effectContentVersionId: string | null;
+    effectRulesVersionId: string;
+    originEncounterId: string | null;
+  }[],
   sourceActorId: string,
   sourceContentVersionId: string,
   effectRulesVersionId: string,
@@ -315,6 +348,7 @@ function originsFor(
       sourceContentVersionId,
       effectRulesVersionId,
       effectContentVersionId: statusBinding === undefined ? null : bindingIds.get(effect.effectIndex) ?? null,
+      originEncounterId: null,
     });
   }
   return origins;
@@ -460,9 +494,35 @@ export async function resolveActorEffectTransaction(
   const finalSource = { ...sequence.sourceAfter, activeEffects: [...advanced.value.actor.activeEffects, ...newSourceEffects] };
   const finalTarget = actors.target.id === actors.source.id ? finalSource : sequence.targetAfter;
 
+  const attemptedRefs = new Set(refs);
+  if ([...finalSource.activeEffects, ...finalTarget.activeEffects].some((effect) => (
+    attemptedRefs.has(effect.effectRef) && effect.durationState.type === 'encounter'
+  ))) {
+    throw new AppError(500, 'EFFECT_INTEGRITY_ERROR', 'Encounter-scoped effects require the encounter orchestrator', {
+      retryable: false,
+    });
+  }
+  await assertEncounterEffectsUnchanged(client, actors.source.id, sourceContext.activeEffects, finalSource.activeEffects);
+  if (actors.target.id !== actors.source.id) {
+    await assertEncounterEffectsUnchanged(client, actors.target.id, coherentTarget.activeEffects, finalTarget.activeEffects);
+  }
+
   const sourceResources = await persistResources(client, actors.source.id, sourceContext, finalSource);
   const targetResources = actors.target.id === actors.source.id ? [] : await persistResources(client, actors.target.id, coherentTarget, finalTarget);
-  const origin = { sourceActorId: actors.source.id, sourceContentVersionId: executable.version.id, effectRulesVersionId: effectRulesVersion.id };
+  await reactivateDefeatedActorAfterHpRestoration(
+    client, actors.source.id, sourceContext.resources.hp.current, finalSource.resources.hp.current,
+  );
+  if (actors.target.id !== actors.source.id) {
+    await reactivateDefeatedActorAfterHpRestoration(
+      client, actors.target.id, coherentTarget.resources.hp.current, finalTarget.resources.hp.current,
+    );
+  }
+  const origin = {
+    sourceActorId: actors.source.id,
+    sourceContentVersionId: executable.version.id,
+    effectRulesVersionId: effectRulesVersion.id,
+    originEncounterId: null,
+  };
   const sourceEffectsChanged = await persistActorEffects(client, actors.source.id, finalSource.activeEffects, origin, statuses, bindingIds);
   const targetEffectsChanged = actors.target.id === actors.source.id
     ? sourceEffectsChanged

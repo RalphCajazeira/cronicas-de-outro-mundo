@@ -297,6 +297,19 @@ describe('official OpenAPI contract', () => {
     expect(contract.components.schemas.EncounterNextRequiredAction?.properties?.actors?.minItems).toBe(1);
     expect(contract.components.schemas.EncounterResult?.properties?.participants?.minItems).toBe(1);
     expect(contract.components.schemas.EncounterTransitionSummary?.properties?.events?.minItems).toBe(1);
+    expect(contract.components.schemas.EncounterConsequencesSummary).toMatchObject({
+      type: 'object', additionalProperties: false,
+      required: ['schemaVersion', 'outcome', 'actorChanges', 'removedEncounterEffects', 'persistentEvent'],
+    });
+    expect(contract.components.schemas.EncounterConsequencesSummary?.properties?.actorChanges?.maxItems).toBe(64);
+    expect(contract.components.schemas.EncounterConsequencesSummary?.properties?.removedEncounterEffects?.maxItems).toBe(64);
+    expect(contract.components.schemas.EncounterResult?.properties?.consequencesSummary)
+      .toEqual({ '$ref': '#/components/schemas/EncounterConsequencesSummary' });
+    expect(contract.components.schemas.EncounterActorStatusChange?.properties).not.toHaveProperty('id');
+    expect(contract.components.schemas.EncounterActorStatusChange?.properties).toMatchObject({
+      statusBefore: { const: 'active' }, statusAfter: { const: 'defeated' },
+    });
+    expect(contract.components.schemas.EncounterRemovedEffectsSummary?.properties).not.toHaveProperty('effectRefs');
     expect(contract.components.schemas.Code?.maxLength).toBe(100);
     expect(contract.components.schemas.EncounterRuntimeRef?.maxLength).toBe(160);
     expect(resolveSchema(contract.components.schemas.EncounterParticipantInput?.properties?.actorRef).maxLength).toBe(100);
@@ -316,6 +329,7 @@ describe('official OpenAPI contract', () => {
     expect(propertyNames).not.toEqual(expect.arrayContaining([
       'stateHash', 'beforeStateHash', 'afterStateHash', 'inputHash', 'adapterState', 'snapshot',
       'rolls', 'eventRef', 'actionRef', 'id',
+      'xp', 'levelChanges', 'gold', 'loot', 'rewardPolicyVersion', 'effectRefs',
     ]));
     expect(JSON.stringify(contract)).not.toMatch(/staging conclu[íi]do|deploy conclu[íi]do|action j[áa] publicada|importa[cç][aã]o no gpt validada/i);
   });
