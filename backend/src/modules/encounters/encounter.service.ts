@@ -41,6 +41,7 @@ import {
 import {
   absentEncounterStateHash,
   createEncounterOperation,
+  ENCOUNTER_TRANSACTION_OPTIONS,
   executeIdempotentEncounter,
   lockActorAuthorities,
   lockCampaign,
@@ -684,7 +685,10 @@ export function createEncounterService(
             loaded.record.lifecycleStatus,
             loaded.record.stopReason === null ? null : normalizeEnum(loaded.record.stopReason),
           );
-        }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+        }, {
+          ...ENCOUNTER_TRANSACTION_OPTIONS,
+          isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+        });
       } catch (error) {
         return translate(error);
       }
