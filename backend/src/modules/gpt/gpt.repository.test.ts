@@ -41,7 +41,7 @@ function targetOnlyError(target: string[]) {
 
 describe('GPT repository unique conflicts', () => {
   it('allows bounded idempotent transactions to persist the complete structured game start', () => {
-    expect(IDEMPOTENT_TRANSACTION_OPTIONS).toEqual({ maxWait: 5_000, timeout: 30_000 });
+    expect(IDEMPOTENT_TRANSACTION_OPTIONS).toEqual({ maxWait: 5_000, timeout: 60_000 });
   });
 
   it('recognizes only the structured IdempotencyRecord.key target as an idempotent retry', () => {
