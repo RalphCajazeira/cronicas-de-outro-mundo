@@ -86,6 +86,12 @@ describe('official OpenAPI contract', () => {
     expect(ids).toHaveLength(20);
   });
 
+  it('keeps operation descriptions within the GPT Actions editor limit', () => {
+    for (const { operation } of operations()) {
+      expect(operation.description?.length ?? 0, operation.operationId).toBeLessThanOrEqual(300);
+    }
+  });
+
   it('matches every registered Express route exactly', () => {
     const documented = operations().map(({ path, method }) => `${method.toUpperCase()} ${path.replaceAll(/{([^}]+)}/g, ':$1')}`).sort();
     expect(documented).toEqual([...ACTIVE_API_ROUTES].sort());

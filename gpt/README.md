@@ -42,13 +42,16 @@ Os arquivos em `legacy/supabase-gpt-v1/` são somente referência histórica e n
 3. configurar API key no header `x-rpg-key`, sem copiar o valor para arquivos;
 4. colar integralmente `instructions.md`;
 5. enviar somente os nove arquivos oficiais de Knowledge;
-6. testar health, readiness, descoberta de mundos/campanhas, carga de estado com refs explícitas e demais leituras antes de qualquer escrita;
+6. testar health, readiness, as 20 operações, descoberta de mundos/campanhas, carga de estado com refs explícitas e demais leituras antes de qualquer escrita;
 7. em staging vazio, validar `loadGame` ausente, conduzir a configuração Rápida/Guiada/Livre, revisar a proposta e usar uma única chamada `startGame` antes da primeira cena;
-8. provocar um `INVALID_INPUT` sem persistência e confirmar uma única correção guiada.
+8. validar `manageEncounter` em campanha descartável, seguindo sempre `nextRequiredAction`, incluindo replay idempotente e recuperação após conflito de versão;
+9. provocar um `INVALID_INPUT` sem persistência e confirmar que não há retry automático do mesmo payload.
 
 Na criação estruturada, Player e World usam modos explícitos `create|reuse`, Campaign é sempre nova e conteúdo global reutilizado deve ser consultado antes com `getContent`. A Action envia no pacote reutilizado somente mode, scope, code e contentType; o backend não atualiza a definição existente. A resposta de `startGame` ainda deve ser confirmada por `loadGame`.
 
-A criação de Actor envia somente os nove `primaryAttributes` mecânicos permitidos; HP/Mana/SP máximos e todos os derivados são calculados pelo backend. Estes arquivos estão apenas versionados no repositório nesta fase: a configuração do GPT ao vivo permanece pendente.
+A criação de Actor envia somente os nove `primaryAttributes` mecânicos permitidos; HP/Mana/SP máximos e todos os derivados são calculados pelo backend. O GPT de staging deve permanecer privado e separado de qualquer GPT anterior.
+
+Encontros aceitam somente atores persistidos pela Action. O GPT envia intenção, nunca resultados mecânicos, e não usa `resolveActorEffect` como atalho. A conclusão não concede XP, loot, ouro, progressão, morte ou recompensa; efeitos `scope=encounter` ainda exigem cautela porque não são limpos automaticamente nesta fase.
 
 `gpt/openapi.json` usa um domínio de exemplo no repositório; o backend publicado injeta a origem HTTPS real. O GPT nunca acessa Supabase, Prisma ou PostgreSQL diretamente.
 

@@ -10,14 +10,15 @@ O backend persiste inventário físico, peso, carga e equipamento por slots. `ma
 
 O núcleo puro `core-v1-effects-v1` continua calculando custos, dano, restauração, efeitos, duração e stacking. A fronteira `resolveActorEffect` torna o resultado oficial em uma transação: valida versões, gera rolls criptográficos no backend, persiste recursos, inventário, efeitos ativos, resolução, rolls e eventos allowlisted, e devolve o mesmo snapshot em replay idempotente.
 
-O backend também possui o núcleo puro `core-v1-encounter-v1`, capaz de compor iniciativa, action slots, zonas, selectors, multi-target/area/chain/cleave, timeline, reações, cooldowns, casting/channel, movimento, combos, planos e efeitos por alvo. Esse núcleo ainda não é uma Action pública e não persiste encontro, cooldown, zona ou eventos; somente um adaptador autoritativo futuro poderá tornar seus relatórios oficiais.
+O backend também publica o orquestrador persistente `manageEncounter` sobre o núcleo `core-v1-encounter-v1`. Ele cria e carrega encontros, recebe intenção, processa timeline, pede reação quando aplicável, continua lotes e confirma ou cancela conclusão. O cliente deve seguir literalmente `nextRequiredAction`, usar `expectedStateVersion` e nunca fornecer rolls ou resultados mecânicos. Pela Action, participantes precisam ser atores persistidos na Campaign; participantes efêmeros não são aceitos.
 
 ## O que permanece adiado
 
 Não existem de forma estruturada nesta fase:
 
-- persistência e contrato HTTP/OpenAPI de encontros, turnos, timeline, multi-target e rolls;
-- execução oficial pelo GPT de reaction/block, cooldown, channel/upkeep ou planos;
+- criação de participante efêmero pela Action de encontros;
+- concessão automática de XP, loot, ouro, progressão, morte, recompensa ou mudança de `Actor.status` ao concluir encontro;
+- limpeza automática de efeitos `scope=encounter` após conclusão ou cancelamento;
 - durabilidade, munição, loot automático ou comércio;
 - economia, comércio, lojas, estoque ou transações;
 - missões e relacionamentos especializados;
@@ -30,7 +31,7 @@ Não apresente esses sistemas como implementados e não invente persistência pa
 
 ## Como narrar dentro dos limites
 
-Combate pode incluir intenção, risco, vantagem narrativa, fuga, rendição, medo e consequência ficcional. Conteúdo self, single target e weapon attack pode ser resolvido pela Action existente quando o OpenAPI permitir; encontro/timeline/multi-target continuam sem Action pública e não podem ser tratados pelo GPT como resultado oficial. HP zero produz apenas candidato a incapacidade/`defeatedCandidate`: não declare estado defeated/dead sem uma operação própria. Loot só é posse confirmada após uma operação de inventário bem-sucedida.
+Combate pode incluir intenção, risco, vantagem narrativa, fuga, rendição, medo e consequência ficcional. Fora de encontro, conteúdo self, single target e weapon attack pode ser resolvido por `resolveActorEffect`; dentro de encontro, use somente `manageEncounter` e siga `nextRequiredAction`. O GPT descreve a intenção, mas hit, crítico, dano, mitigação, custo, roll e outcome pertencem ao backend. HP zero produz apenas candidato a incapacidade/`completionCandidate`: não declare estado defeated/dead sem uma operação própria. Loot só é posse confirmada após uma operação de inventário bem-sucedida.
 
 Itens, lojas, clima e viagens podem aparecer na história com coerência, descrição e continuidade. Uma `ContentDefinition` representa o conceito; somente `manageActorInventory` cria propriedade física. Isso não cria preço, comércio, distância ou viagem automática.
 

@@ -922,7 +922,7 @@
         "operationId": "manageEncounter",
         "tags": ["Encounters"],
         "summary": "Criar, carregar ou avançar um encontro autoritativo",
-        "description": "Action única com sete operações fechadas. load é somente leitura e proíbe idempotencyKey/expectedStateVersion. create e todas as mutações exigem idempotencyKey no corpo; repetir a mesma chave com o mesmo payload devolve exatamente o DTO confirmado. submit_intent, resolve_reaction, continue, confirm_completion e cancel exigem expectedStateVersion; em STATE_VERSION_CONFLICT execute load para obter a versão atual. Rolls, resultados mecânicos, snapshot e IDs internos nunca são aceitos.",
+        "description": "Action única com sete operações. load é somente leitura. Mutações exigem idempotencyKey; operações após create também exigem expectedStateVersion. Em conflito, execute load. Reuse a chave só para replay idêntico. Envie intenção, nunca rolls, resultados mecânicos, snapshot ou IDs internos.",
         "requestBody": {
           "required": true,
           "content": {
