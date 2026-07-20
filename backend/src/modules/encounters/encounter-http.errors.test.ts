@@ -28,6 +28,7 @@ describe('encounter HTTP error mapper', () => {
   it.each(cases)('maps %s to a sanitized public error', (internal, status, code, retryable) => {
     const mapped = mapEncounterHttpError(new EncounterError(internal, { cause: new Error('postgresql://secret Prisma SQL') }));
     expect(mapped).toMatchObject({ statusCode: status, code, retryable });
+    expect(mapped.auditCode).toBe(internal);
     expect(JSON.stringify(mapped)).not.toMatch(/postgres|secret|Prisma|SQL/);
   });
 

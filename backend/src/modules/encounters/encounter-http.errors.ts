@@ -44,15 +44,16 @@ function integrity(): PublicErrorDefinition {
   };
 }
 
-function publicAppError(definition: PublicErrorDefinition): AppError {
+function publicAppError(definition: PublicErrorDefinition, auditCode?: EncounterErrorCode): AppError {
   return new AppError(definition.status, definition.code, definition.message, {
     retryable: definition.retryable,
     ...(definition.recoveryAction === undefined ? {} : { recoveryAction: definition.recoveryAction }),
+    ...(auditCode === undefined ? {} : { auditCode }),
   });
 }
 
 export function mapEncounterHttpError(error: unknown): AppError {
-  if (error instanceof EncounterError) return publicAppError(definitions[error.code]);
+  if (error instanceof EncounterError) return publicAppError(definitions[error.code], error.code);
   if (error instanceof NotFoundError) {
     return new AppError(404, 'SCOPE_NOT_FOUND', 'Requested game scope was not found', { retryable: false });
   }
