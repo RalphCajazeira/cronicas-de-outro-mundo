@@ -33,6 +33,7 @@ import { prismaGptRepository } from '../../src/modules/gpt/gpt.repository.js';
 import { canonicalize, jsonByteSize } from '../../src/modules/gpt/gpt.start-game.js';
 import { prismaReadinessCheck } from '../../src/modules/health/health.repository.js';
 import { encounterService } from '../../src/modules/encounters/encounter.service.js';
+import { createEncounterHttpService } from '../../src/modules/encounters/encounter-http.service.js';
 import { lockActorAuthorities } from '../../src/modules/encounters/encounter.repository.js';
 import {
   createCoreV1EncounterSnapshotHash,
@@ -51,7 +52,13 @@ import { canonicalJson } from '../../src/shared/json/canonical-json.js';
 
 const config = parseConfig(process.env);
 const { Client } = pg;
-const dependencies = { actorRepository: prismaActorRepository, contentRepository: prismaContentRepository, gptRepository: prismaGptRepository, readiness: prismaReadinessCheck };
+const dependencies = {
+  actorRepository: prismaActorRepository,
+  contentRepository: prismaContentRepository,
+  gptRepository: prismaGptRepository,
+  readiness: prismaReadinessCheck,
+  encounterHttpService: createEncounterHttpService(encounterService),
+};
 const app = createApp(config, dependencies);
 const authenticated = (path: string) => request(app).get(path).set('x-rpg-key', config.RPG_API_KEY);
 const post = (path: string, body: object) => request(app).post(path).set('x-rpg-key', config.RPG_API_KEY).send({ ...seedScope, ...body });
@@ -1576,14 +1583,17 @@ describe('Phase 1L-B transactional encounter adapter', () => {
         },
       });
     });
-    const completed = await encounterService.confirmCompletion({
-      ...seedScope,
+    const completed = await post('/api/v1/encounters/manage', {
+      operation: 'confirm_completion',
       encounterRef: created.encounterRef,
       idempotencyKey: 'phase-1l-b-confirm-operation',
       expectedStateVersion: 2,
     });
-    expect(completed).toMatchObject({
-      lifecycleStatus: 'completed', completionCandidate: 'party_victory_candidate', stateVersion: 3,
+    expect(completed.status).toBe(200);
+    expect(completed.body).toMatchObject({
+      result: 'encounter_completed', lifecycleStatus: 'completed',
+      completionCandidate: 'party_victory_candidate', stateVersion: 3,
+      nextRequiredAction: { type: 'none' },
     });
     const after = await prisma.actor.findFirstOrThrow({
       where: { code: 'ralph', campaign: { code: seedScope.campaignRef } },
@@ -1852,6 +1862,216 @@ describe('Phase 1L-B transactional encounter adapter', () => {
       ...seedScope, encounterRef, idempotencyKey: 'phase-1l-b-rollback-cancel',
       expectedStateVersion: retried.stateVersion,
     });
+  });
+});
+
+describe('Phase 1L-C encounter HTTP integration', () => {
+  it('serves the active 20-operation OpenAPI with the runtime base URL', async () => {
+    const response = await request(app).get('/openapi.json');
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      servers: [{ url: config.PUBLIC_BASE_URL ?? `http://localhost:${config.PORT}` }],
+      paths: { '/api/v1/encounters/manage': { post: { operationId: 'manageEncounter' } } },
+    });
+    const document = bodyRecord(response);
+    const paths = bodyRecord({ body: document.paths });
+    const operationIds = Object.values(paths).flatMap((path) => Object.values(bodyRecord({ body: path })))
+      .flatMap((operationValue) => {
+        const operation = bodyRecord({ body: operationValue });
+        return typeof operation.operationId === 'string' ? [operation.operationId] : [];
+      });
+    expect(operationIds).toHaveLength(20);
+    expect(new Set(operationIds).size).toBe(20);
+  });
+
+  it('creates, replays, loads, rejects stale versions and cancels through the real transactional adapter', async () => {
+    const encounterRef = 'phase-1l-c-http';
+    const createBody = {
+      operation: 'create', encounterRef, idempotencyKey: 'phase-1l-c-create-001', partySideRef: 'party',
+      participants: [
+        { actorRef: 'ralph', sideRef: 'party', zone: 'near' },
+        { actorRef: 'lyra', sideRef: 'hostile', zone: 'medium' },
+      ],
+    };
+    const created = await post('/api/v1/encounters/manage', createBody);
+    expect(created.status).toBe(200);
+    expect(created.body).toMatchObject({
+      result: 'encounter_created', encounterRef, lifecycleStatus: 'processing_paused',
+      nextRequiredAction: { type: 'continue' },
+    });
+    const createdBody = bodyRecord(created);
+    const createdStateVersion = createdBody.stateVersion;
+    if (typeof createdStateVersion !== 'number') throw new Error('Encounter stateVersion must be numeric');
+    expect(JSON.stringify(created.body)).not.toMatch(/stateHash|snapshot|adapterState|rolls|eventRef|actionRef|"id"/);
+
+    const replay = await post('/api/v1/encounters/manage', createBody);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(created.body);
+    await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } })).resolves.toBe(1);
+    await expect(prisma.encounterRoll.count({ where: { encounterOperation: { encounter: { encounterRef } } } })).resolves.toBe(2);
+
+    const reused = await post('/api/v1/encounters/manage', {
+      ...createBody, partySideRef: 'hostile',
+    });
+    expect(reused.status).toBe(409);
+    expect(reused.body).toMatchObject({ error: { code: 'IDEMPOTENCY_KEY_REUSED', retryable: false, recoveryAction: 'use_new_idempotency_key' } });
+
+    const loaded = await post('/api/v1/encounters/manage', { operation: 'load', encounterRef });
+    expect(loaded.status).toBe(200);
+    expect(loaded.body).toMatchObject({ result: 'encounter_loaded', stateVersion: createdStateVersion });
+    expect((await post('/api/v1/encounters/manage', { operation: 'load', encounterRef, idempotencyKey: 'forbidden-load-key' })).status).toBe(400);
+
+    const advanceRequest = {
+      operation: 'continue', encounterRef, idempotencyKey: 'phase-1l-c-continue-001',
+      expectedStateVersion: createdStateVersion,
+    } as const;
+    const advanced = await post('/api/v1/encounters/manage', advanceRequest);
+    expect(advanced.status).toBe(200);
+    expect(advanced.body).toMatchObject({
+      result: 'new_intent_required', lifecycleStatus: 'awaiting_intent',
+      nextRequiredAction: { type: 'submit_intent' },
+    });
+    const advancedBody = bodyRecord(advanced);
+    const advancedStateVersion = advancedBody.stateVersion;
+    if (typeof advancedStateVersion !== 'number') throw new Error('Advanced encounter stateVersion must be numeric');
+    const countsAfterAdvance = {
+      operations: await prisma.encounterOperation.count({ where: { encounter: { encounterRef } } }),
+      rolls: await prisma.encounterRoll.count({ where: { encounterOperation: { encounter: { encounterRef } } } }),
+    };
+    expect(countsAfterAdvance.operations).toBe(2);
+
+    const advancedReplay = await post('/api/v1/encounters/manage', advanceRequest);
+    expect(advancedReplay.status).toBe(200);
+    expect(advancedReplay.body).toEqual(advanced.body);
+    await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } }))
+      .resolves.toBe(countsAfterAdvance.operations);
+    await expect(prisma.encounterRoll.count({ where: { encounterOperation: { encounter: { encounterRef } } } }))
+      .resolves.toBe(countsAfterAdvance.rolls);
+
+    const historicalReplay = await post('/api/v1/encounters/manage', createBody);
+    expect(historicalReplay.status).toBe(200);
+    expect(historicalReplay.body).toEqual(created.body);
+    await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } }))
+      .resolves.toBe(countsAfterAdvance.operations);
+    await expect(prisma.encounterRoll.count({ where: { encounterOperation: { encounter: { encounterRef } } } }))
+      .resolves.toBe(countsAfterAdvance.rolls);
+
+    const stale = await post('/api/v1/encounters/manage', {
+      operation: 'cancel', encounterRef, idempotencyKey: 'phase-1l-c-stale-001',
+      expectedStateVersion: createdStateVersion,
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body).toMatchObject({ error: { code: 'STATE_VERSION_CONFLICT', retryable: false, recoveryAction: 'load_encounter' } });
+    expect(bodyRecord({ body: bodyRecord(stale).error })).not.toHaveProperty('currentStateVersion');
+
+    const wrongScope = await post('/api/v1/encounters/manage', {
+      operation: 'load', campaignRef: 'missing-campaign', encounterRef,
+    });
+    expect(wrongScope.status).toBe(404);
+    expect(wrongScope.body).toMatchObject({ error: { code: 'SCOPE_NOT_FOUND', retryable: false } });
+
+    const seededCampaign = await prisma.campaign.findFirstOrThrow({
+      where: { code: seedScope.campaignRef, world: { code: seedScope.worldRef, player: { slug: seedScope.playerRef } } },
+    });
+    const alternateCampaign = await prisma.campaign.create({
+      data: {
+        worldId: seededCampaign.worldId,
+        rulesetVersionId: seededCampaign.rulesetVersionId,
+        code: 'phase-1l-c-isolated-campaign',
+        name: 'Phase 1L-C Isolated Campaign',
+        status: CampaignStatus.ACTIVE,
+      },
+    });
+    const alternateActor = await createMechanicalActor({
+      campaignId: alternateCampaign.id,
+      code: 'phase-1l-c-isolated-actor',
+      name: 'Phase 1L-C Isolated Actor',
+      actorType: ActorType.CHARACTER,
+    });
+    const starterEntry = await prisma.inventoryEntry.findFirstOrThrow({
+      where: { actor: { code: 'ralph', campaignId: seededCampaign.id }, entryRef: 'starter-dagger-1' },
+    });
+    const otherInventoryActor = await createMechanicalActor({
+      campaignId: seededCampaign.id,
+      code: 'phase-1l-c-inventory-owner',
+      name: 'Phase 1L-C Inventory Owner',
+      actorType: ActorType.CHARACTER,
+    });
+    const alternateEntry = await prisma.inventoryEntry.create({
+      data: {
+        actorId: otherInventoryActor.id,
+        entryRef: 'phase-1l-c-isolated-entry',
+        contentVersionId: starterEntry.contentVersionId,
+        inventoryRulesVersionId: starterEntry.inventoryRulesVersionId,
+        entryKind: starterEntry.entryKind,
+        quantity: 1,
+        instanceLifecycle: starterEntry.instanceLifecycle,
+      },
+    });
+    const isolated = await post('/api/v1/encounters/manage', {
+      operation: 'load', campaignRef: alternateCampaign.code, encounterRef,
+    });
+    expect(isolated.status).toBe(404);
+    expect(isolated.body).toMatchObject({ error: { code: 'ENCOUNTER_NOT_FOUND', retryable: false } });
+
+    const intent = (actorRef: string, inventoryEntryRef: string, idempotencyKey: string) => ({
+      operation: 'submit_intent', encounterRef, idempotencyKey, expectedStateVersion: advancedStateVersion,
+      intent: {
+        actorRef, slotRef: 'primary', actionSource: 'basic_weapon_attack', targetSelector: 'explicit',
+        targetRefs: ['lyra'], inventoryEntryRef,
+      },
+    });
+    const crossActor = await post('/api/v1/encounters/manage', intent(
+      alternateActor.code, alternateEntry.entryRef, 'phase-1l-c-cross-actor-001',
+    ));
+    const missingActor = await post('/api/v1/encounters/manage', intent(
+      'phase-1l-c-missing-actor', alternateEntry.entryRef, 'phase-1l-c-missing-actor-001',
+    ));
+    expect(crossActor.status).toBe(422);
+    expect(crossActor.body).toEqual(missingActor.body);
+
+    const crossInventory = await post('/api/v1/encounters/manage', intent(
+      'ralph', alternateEntry.entryRef, 'phase-1l-c-cross-inventory-001',
+    ));
+    const missingInventory = await post('/api/v1/encounters/manage', intent(
+      'ralph', 'phase-1l-c-missing-entry', 'phase-1l-c-missing-inventory-001',
+    ));
+    expect(crossInventory.status).toBe(422);
+    expect(crossInventory.body).toEqual(missingInventory.body);
+
+    const contentIntent = (code: string, idempotencyKey: string) => ({
+      operation: 'submit_intent', encounterRef, idempotencyKey, expectedStateVersion: advancedStateVersion,
+      intent: {
+        actorRef: 'ralph', slotRef: 'primary', actionSource: 'content', targetSelector: 'self',
+        contentRef: { scope: 'world', contentType: 'spell', code, versionNumber: 1 },
+      },
+    });
+    const crossContentScope = await post('/api/v1/encounters/manage', contentIntent(
+      'seed-mark-spell', 'phase-1l-c-cross-content-scope-001',
+    ));
+    const missingContent = await post('/api/v1/encounters/manage', contentIntent(
+      'phase-1l-c-missing-content', 'phase-1l-c-missing-content-001',
+    ));
+    expect(crossContentScope.status).toBe(422);
+    expect(crossContentScope.body).toEqual(missingContent.body);
+
+    const cancelled = await post('/api/v1/encounters/manage', {
+      operation: 'cancel', encounterRef, idempotencyKey: 'phase-1l-c-cancel-001',
+      expectedStateVersion: advancedStateVersion,
+    });
+    expect(cancelled.status).toBe(200);
+    expect(cancelled.body).toMatchObject({ result: 'encounter_cancelled', lifecycleStatus: 'cancelled', nextRequiredAction: { type: 'none' } });
+
+    const crossCampaignParticipant = await post('/api/v1/encounters/manage', {
+      operation: 'create', encounterRef: 'phase-1l-c-cross-participant',
+      idempotencyKey: 'phase-1l-c-cross-participant-001',
+      participants: [{ actorRef: alternateActor.code, sideRef: 'party', zone: 'near' }],
+    });
+    expect(crossCampaignParticipant.status).toBe(422);
+    expect(crossCampaignParticipant.body).toMatchObject({ error: { code: 'PARTICIPANT_INVALID', retryable: false } });
+    await prisma.actor.delete({ where: { id: otherInventoryActor.id } });
+    await prisma.actor.delete({ where: { id: alternateActor.id } });
+    await prisma.campaign.delete({ where: { id: alternateCampaign.id } });
   });
 });
 

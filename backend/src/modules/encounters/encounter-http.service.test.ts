@@ -1,0 +1,151 @@
+import { describe, expect, it, vi } from 'vitest';
+import { NotFoundError } from '../../shared/errors/app-error.js';
+import type { EncounterDto } from './encounter.types.js';
+import { manageEncounterSchema } from './encounter-http.schemas.js';
+import {
+  buildEncounterRelations,
+  createEncounterHttpService,
+  deriveEncounterIntentRef,
+  type EncounterApplicationService,
+} from './encounter-http.service.js';
+
+const scope = { playerRef: 'player', worldRef: 'world', campaignRef: 'campaign', encounterRef: 'encounter' };
+
+function internalDto(operation: EncounterDto['operation']): EncounterDto {
+  return {
+    operation, encounterRef: 'encounter', lifecycleStatus: 'awaiting_intent', stateVersion: 1,
+    currentTick: '0', stopReason: null, completionCandidate: null,
+    participants: [{ actorRef: 'hero', bindingKind: 'persisted_actor', sideRef: 'party', combatState: 'ready', zone: 'near', resources: { hp: { current: 10, maximum: 10 }, mana: { current: 5, maximum: 5 }, sp: { current: 4, maximum: 4 } } }],
+    nextRequiredAction: { type: 'submit_intent', actors: [{ actorRef: 'hero', readySlotRefs: ['primary'] }] },
+  };
+}
+
+function fakeInternal() {
+  return {
+    create: vi.fn<EncounterApplicationService['create']>().mockResolvedValue(internalDto('create')),
+    load: vi.fn<EncounterApplicationService['load']>().mockResolvedValue(internalDto('load')),
+    submitIntent: vi.fn<EncounterApplicationService['submitIntent']>().mockResolvedValue({ ...internalDto('submit_intent'), lifecycleStatus: 'processing_paused', nextRequiredAction: { type: 'continue' as const } }),
+    resolveReaction: vi.fn<EncounterApplicationService['resolveReaction']>().mockResolvedValue(internalDto('resolve_reaction')),
+    continue: vi.fn<EncounterApplicationService['continue']>().mockResolvedValue({
+      ...internalDto('continue'), lifecycleStatus: 'processing_paused', nextRequiredAction: { type: 'continue' as const },
+      transitionSummary: { processedEventCount: 1, events: [{ category: 'action_resolved' as const, actorRef: 'hero' }], changes: [] },
+    }),
+    confirmCompletion: vi.fn<EncounterApplicationService['confirmCompletion']>().mockResolvedValue({ ...internalDto('confirm_completion'), lifecycleStatus: 'completed', nextRequiredAction: { type: 'none' as const } }),
+    cancel: vi.fn<EncounterApplicationService['cancel']>().mockResolvedValue({ ...internalDto('cancel'), lifecycleStatus: 'cancelled', nextRequiredAction: { type: 'none' as const } }),
+  } satisfies EncounterApplicationService;
+}
+
+describe('encounter HTTP facade', () => {
+  it('builds a dense, canonical and deterministic complete relation matrix', () => {
+    const input = manageEncounterSchema.parse({
+      operation: 'create', ...scope, idempotencyKey: 'create-encounter-001', partySideRef: 'party',
+      participants: [
+        { actorRef: 'villain', sideRef: 'hostiles', zone: 'far' },
+        { actorRef: 'ally', sideRef: 'party', zone: 'near' },
+        { actorRef: 'hero', sideRef: 'party', zone: 'engaged' },
+      ],
+      relationOverrides: [{ leftActorRef: 'villain', rightActorRef: 'ally', relation: 'neutral' }],
+    });
+    if (input.operation !== 'create') throw new Error('fixture');
+    expect(buildEncounterRelations(input)).toEqual([
+      { leftActorRef: 'ally', rightActorRef: 'ally', relation: 'self' },
+      { leftActorRef: 'ally', rightActorRef: 'hero', relation: 'ally' },
+      { leftActorRef: 'ally', rightActorRef: 'villain', relation: 'neutral' },
+      { leftActorRef: 'hero', rightActorRef: 'hero', relation: 'self' },
+      { leftActorRef: 'hero', rightActorRef: 'villain', relation: 'hostile' },
+      { leftActorRef: 'villain', rightActorRef: 'villain', relation: 'self' },
+    ]);
+  });
+
+  it('orients punctuation-bearing refs canonically and covers every unordered pair at the public cap', () => {
+    const input = manageEncounterSchema.parse({
+      operation: 'create', ...scope, idempotencyKey: 'create-encounter-cap-001',
+      participants: Array.from({ length: 64 }, (_, index) => ({
+        actorRef: index === 0 ? 'actor-a' : index === 1 ? 'actor_a' : `actor-${String(index).padStart(2, '0')}`,
+        sideRef: index % 2 === 0 ? 'party' : 'hostile', zone: 'near' as const,
+      })),
+      relationOverrides: [{ leftActorRef: 'actor_a', rightActorRef: 'actor-a', relation: 'neutral' }],
+    });
+    if (input.operation !== 'create') throw new Error('fixture');
+    const relations = buildEncounterRelations(input);
+    expect(relations).toHaveLength(64 * 65 / 2);
+    expect(relations.find((entry) => entry.leftActorRef === 'actor-a' && entry.rightActorRef === 'actor_a'))
+      .toEqual({ leftActorRef: 'actor-a', rightActorRef: 'actor_a', relation: 'neutral' });
+    expect(new Set(relations.map((entry) => `${entry.leftActorRef}\u0000${entry.rightActorRef}`)).size)
+      .toBe(relations.length);
+  });
+
+  it('derives stable namespaced intent refs without revealing the idempotency key', () => {
+    const input = manageEncounterSchema.parse({
+      operation: 'submit_intent', ...scope, idempotencyKey: 'private-idempotency-key', expectedStateVersion: 1,
+      intent: { actorRef: 'hero', slotRef: 'primary', actionSource: 'basic_weapon_attack', targetSelector: 'explicit', targetRefs: ['enemy'], inventoryEntryRef: 'sword' },
+    });
+    if (input.operation !== 'submit_intent') throw new Error('fixture');
+    const first = deriveEncounterIntentRef(input);
+    expect(first).toBe(deriveEncounterIntentRef(input));
+    expect(first).toMatch(/^intent-[0-9a-f]{64}$/);
+    expect(first).not.toContain(input.idempotencyKey);
+    expect(deriveEncounterIntentRef({ ...input, idempotencyKey: 'another-private-key' })).not.toBe(first);
+    expect(deriveEncounterIntentRef({ ...input, encounterRef: 'other-encounter' })).not.toBe(first);
+    expect(deriveEncounterIntentRef({ ...input, campaignRef: 'other-campaign' })).not.toBe(first);
+    expect(deriveEncounterIntentRef({ ...input, intent: { ...input.intent, targetRefs: ['other-enemy'] } })).not.toBe(first);
+  });
+
+  it('translates public create participants and calls exactly one internal operation', async () => {
+    const internal = fakeInternal();
+    const service = createEncounterHttpService(internal);
+    const input = manageEncounterSchema.parse({
+      operation: 'create', ...scope, idempotencyKey: 'create-encounter-001',
+      participants: [{ actorRef: 'hero', sideRef: 'party', zone: 'near' }],
+    });
+    const result = await service.manage(input);
+    expect(result.result).toBe('encounter_created');
+    expect(internal.create).toHaveBeenCalledOnce();
+    expect(internal.create).toHaveBeenCalledWith(expect.objectContaining({
+      participants: [{ bindingKind: 'persisted_actor', actorRef: 'hero', sideRef: 'party', zone: 'near' }],
+      relations: [{ leftActorRef: 'hero', rightActorRef: 'hero', relation: 'self' }],
+    }));
+    expect(internal.load).not.toHaveBeenCalled();
+    expect(internal.submitIntent).not.toHaveBeenCalled();
+  });
+
+  it('translates safe intent fields and never forwards public mechanics', async () => {
+    const internal = fakeInternal();
+    const input = manageEncounterSchema.parse({
+      operation: 'submit_intent', ...scope, idempotencyKey: 'submit-intent-001', expectedStateVersion: 7,
+      intent: { actorRef: 'hero', slotRef: 'custom-slot', actionSource: 'basic_weapon_attack', targetSelector: 'explicit', targetRefs: ['enemy'], inventoryEntryRef: 'sword', versatileMode: 'two_handed' },
+    });
+    await createEncounterHttpService(internal).manage(input);
+    const forwarded = internal.submitIntent.mock.calls[0]?.[0];
+    expect(forwarded?.expectedStateVersion).toBe(7);
+    expect(forwarded?.intent).toMatchObject({ sourceActorRef: 'hero', slotRef: 'custom-slot', actionSource: 'basic_weapon_attack', targetSelector: 'explicit', requestedTargetRefs: ['enemy'], weaponEntryRef: 'sword', versatileMode: 'two_handed' });
+    expect(JSON.stringify(forwarded)).not.toMatch(/hit|critical|damage|roll|outcome/);
+  });
+
+  it.each(['load', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel'] as const)('dispatches %s only to its matching method', async (operation) => {
+    const internal = fakeInternal();
+    const values = {
+      load: { operation, ...scope },
+      resolve_reaction: { operation, ...scope, idempotencyKey: 'reaction-key-001', expectedStateVersion: 1, reactorRef: 'hero', reactionKind: 'block' },
+      continue: { operation, ...scope, idempotencyKey: 'continue-key-001', expectedStateVersion: 1 },
+      confirm_completion: { operation, ...scope, idempotencyKey: 'complete-key-001', expectedStateVersion: 1 },
+      cancel: { operation, ...scope, idempotencyKey: 'cancel-key-001', expectedStateVersion: 1 },
+    };
+    await createEncounterHttpService(internal).manage(manageEncounterSchema.parse(values[operation]));
+    const method = { load: 'load', resolve_reaction: 'resolveReaction', continue: 'continue', confirm_completion: 'confirmCompletion', cancel: 'cancel' }[operation] as keyof EncounterApplicationService;
+    expect(internal[method]).toHaveBeenCalledOnce();
+    expect(internal[method]).toHaveBeenCalledWith(expect.objectContaining(scope));
+    expect(Object.values(internal).filter((fn) => fn.mock.calls.length > 0)).toHaveLength(1);
+  });
+
+  it('collapses scope-resolution failures without revealing the missing hierarchy level', async () => {
+    const internal = fakeInternal();
+    internal.load.mockRejectedValue(new NotFoundError('Campaign'));
+    await expect(createEncounterHttpService(internal).manage(manageEncounterSchema.parse(validLoad())))
+      .rejects.toMatchObject({ statusCode: 404, code: 'SCOPE_NOT_FOUND', retryable: false });
+  });
+});
+
+function validLoad() {
+  return { operation: 'load' as const, ...scope };
+}

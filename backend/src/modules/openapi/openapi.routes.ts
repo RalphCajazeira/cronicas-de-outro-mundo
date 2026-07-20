@@ -26,6 +26,7 @@ export const ACTIVE_API_ROUTES = [
   'POST /api/v1/content/upsert',
   'POST /api/v1/events',
   'POST /api/v1/actors/effects/resolve',
+  'POST /api/v1/encounters/manage',
 ] as const;
 
 export function createOpenApiRouter(baseUrl: string) {

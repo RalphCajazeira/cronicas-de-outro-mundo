@@ -418,4 +418,25 @@ Impacto:
 - `continue` pode confirmar vários eventos em uma operação e avançar `Campaign.engineTick` atomicamente;
 - HTTP/OpenAPI seguem para 1L-C, staging/GPT para 1L-D e consequências/limpeza de efeitos para 1M.
 
-Status: implementada e validada localmente; revisão e integração pendentes
+Status: implementada, revisada e integrada pelo PR #24
+
+## 2026-07-17 — Uma Action fechada para encontros na Fase 1L-C
+
+Decisão:
+- publicar uma única GPT Action `manageEncounter`, em vez de sete `operationIds`, preservando o orçamento de Actions; o OpenAPI passa de 19 para exatamente 20 operações;
+- usar `z.discriminatedUnion('operation')` com sete objetos estritos independentes e rejeição de campos cruzados, sem request gigante permissivo;
+- manter `idempotencyKey` no corpo: obrigatória em `create` e mutações, proibida em `load`; exigir `expectedStateVersion` somente após a criação e nunca retornar a versão corrente em conflito;
+- aceitar no `create` apenas participantes persistidos e derivar no backend toda a matriz canônica de relações, com overrides limitados a pares distintos e conhecidos;
+- derivar `intentRef` por hash SHA-256 namespaced e canônico, sem aceitar referência, rolls ou outcomes mecânicos do GPT;
+- persistir no `EncounterDto` a próxima ação e o resumo sanitizado de transição para garantir replay público semanticamente idêntico sem core/RNG;
+- reutilizar autenticação `x-rpg-key`, resolução Player→World→Campaign, service da 1L-B, tratamento global de erros e request audit, sem criar infraestrutura paralela;
+- mapear drift, snapshot/roll inválido e resposta idempotente pendente como `ENCOUNTER_INTEGRITY_ERROR` 500 não-retryable; reservar 503 retryable para códigos transacionais explícitos;
+- manter o parser global em 100 KB e limitar o contrato a 64 participantes, 128 overrides, 16 alvos e batch público de 32 eventos;
+- não adicionar dependência, migration, deploy, alteração do GPT ao vivo, recompensa, progressão ou consequências.
+
+Impacto:
+- o GPT recebe um contrato compacto e uma `nextRequiredAction` fechada, sem fila interna ou infraestrutura;
+- acesso cruzado é impedido pela resolução hierárquica e pelas buscas já escopadas da 1L-B;
+- staging, importação/teste da Action e smoke remoto pertencem exclusivamente à 1L-D.
+
+Status: implementada e validada localmente; integração do GPT e staging não executados

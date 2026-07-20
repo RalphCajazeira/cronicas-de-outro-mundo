@@ -25,6 +25,7 @@ const response = {
       sp: { current: 4, maximum: 4 },
     },
   }],
+  nextRequiredAction: { type: 'submit_intent', actors: [{ actorRef: 'hero', readySlotRefs: ['primary'] }] },
 };
 
 describe('encounter repository primitives', () => {
@@ -74,5 +75,41 @@ describe('encounter repository primitives', () => {
     const inherited = Object.create({ operation: 'continue' }) as Record<string, unknown>;
     Object.assign(inherited, response);
     expect(() => parseEncounterDto(inherited)).toThrow();
+  });
+
+  it('rejects contradictory next actions and malformed persisted transition summaries', () => {
+    const transitionSummary = {
+      processedEventCount: 1,
+      events: [{ category: 'damage_applied', actorRef: 'hero', targetRef: 'hero' }],
+      changes: [{
+        actorRef: 'hero', categories: ['damage_applied', 'resource_changed'],
+        resources: { hp: { before: 10, after: 7, delta: -3 } },
+      }],
+    };
+    expect(parseEncounterDto({ ...response, transitionSummary })).toMatchObject({ transitionSummary });
+    expect(() => parseEncounterDto({ ...response, nextRequiredAction: { type: 'continue' } })).toThrow();
+    expect(() => parseEncounterDto({
+      ...response,
+      nextRequiredAction: { type: 'submit_intent', actors: [{ actorRef: 'hero', readySlotRefs: ['slot', 'slot'] }] },
+    })).toThrow();
+    expect(() => parseEncounterDto({
+      ...response,
+      transitionSummary: {
+        ...transitionSummary,
+        changes: [{ ...transitionSummary.changes[0], resources: { hp: { before: 10, after: -1, delta: -11 } } }],
+      },
+    })).toThrow();
+    expect(() => parseEncounterDto({
+      ...response,
+      transitionSummary: {
+        ...transitionSummary,
+        changes: [{ ...transitionSummary.changes[0], resources: { hp: { before: 10, after: 7, delta: -2 } } }],
+      },
+    })).toThrow();
+    expect(() => parseEncounterDto({
+      ...response,
+      transitionSummary: { ...transitionSummary, events: [{ category: 'damage_applied', actorRef: 'unknown' }] },
+    })).toThrow();
+    expect(() => parseEncounterDto({ ...response, operation: 'load', transitionSummary })).toThrow();
   });
 });

@@ -70,7 +70,7 @@ npm run test:all
 
 No backend, `npm run test:watch` observa apenas a suíte rápida e nunca prepara ou reseta banco. `npm test` e `test:unit` executam unitários e HTTP mockado. `test:integration` valida o destino, recria somente `game_gpt_test`, aplica `prisma migrate deploy`, executa o seed e roda a configuração de integração. `test:all` combina as duas camadas.
 
-O contrato ativo também possui testes de JSON/OpenAPI, `operationId`, limite de operações, correspondência com rotas Express, autenticação e idempotência. Integração cobre concorrência de chaves, rollback transacional, RLS e revogações condicionais.
+O contrato ativo também possui testes de JSON/OpenAPI, `operationId`, limite de operações, correspondência com rotas Express, autenticação e idempotência. Para `manageEncounter`, validar ainda as sete variantes Zod, rejeição de campos cruzados, exemplos OpenAPI, limites sob 100 KB, DTO/replay sem dados internos, mapeamento exaustivo de erros, auditoria sentinel e uma integração HTTP mínima contra o adaptador PostgreSQL real. Integração cobre concorrência de chaves, rollback transacional, RLS e revogações condicionais.
 
 ### Banco exclusivo e proteções
 

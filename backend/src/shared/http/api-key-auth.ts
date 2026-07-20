@@ -11,7 +11,7 @@ export function createApiKeyAuth(expectedKey: string): RequestHandler {
   return (request, response, next) => {
     const received = request.header('x-rpg-key');
     if (received === undefined || !keysMatch(received, expectedKey)) {
-      response.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Invalid API key' } });
+      response.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Invalid API key', retryable: false } });
       return;
     }
     next();
