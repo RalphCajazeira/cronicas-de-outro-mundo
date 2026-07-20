@@ -46,6 +46,19 @@ Os arquivos em `legacy/supabase-gpt-v1/` são somente referência histórica e n
 7. em staging vazio, validar `loadGame` ausente, conduzir a configuração Rápida/Guiada/Livre, revisar a proposta e usar uma única chamada `startGame` antes da primeira cena;
 8. validar `manageEncounter` em campanha descartável, seguindo sempre `nextRequiredAction`, incluindo replay idempotente e recuperação após conflito de versão;
 9. provocar um `INVALID_INPUT` sem persistência e confirmar que não há retry automático do mesmo payload.
+10. iniciar uma conversa somente com “Quero começar uma nova aventura” e confirmar que o GPT pergunta como o jogador deseja ser chamado, sem mencionar `playerRef` ou outro campo da Action.
+11. reencontrar jogos perguntando pelo nome usado para salvar e confirmar que Worlds e Campaigns são apresentados somente por nomes legíveis.
+
+## Quebra-gelos
+
+Configure estes quatro quebra-gelos, nesta ordem:
+
+1. “Quero começar uma nova aventura.”
+2. “Mostre meus mundos e campanhas.”
+3. “Carregue minha campanha e continue a história.”
+4. “Quero testar um encontro de combate.”
+
+Os quebra-gelos e as respostas iniciais nunca devem pedir refs, chaves, versões ou nomes de campos da API. O GPT traduz as escolhas do jogador para o contrato técnico internamente.
 
 Na criação estruturada, Player e World usam modos explícitos `create|reuse`, Campaign é sempre nova e conteúdo global reutilizado deve ser consultado antes com `getContent`. A Action envia no pacote reutilizado somente mode, scope, code e contentType; o backend não atualiza a definição existente. A resposta de `startGame` ainda deve ser confirmada por `loadGame`.
 
