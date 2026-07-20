@@ -40,7 +40,7 @@ export const errorHandler: ErrorRequestHandler = (error: unknown, _request, resp
     return;
   }
   if (error instanceof AppError) {
-    setAuditError(response, { type: 'application', code: error.code });
+    setAuditError(response, { type: 'application', code: error.auditCode ?? error.code });
     response.status(error.statusCode).json({ error: {
       code: error.code,
       message: error.message,
