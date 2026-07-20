@@ -4,6 +4,7 @@ import { parseEncounterDto } from './encounter.types.js';
 import {
   absentEncounterStateHash,
   calculateEncounterRequestHash,
+  ENCOUNTER_TRANSACTION_OPTIONS,
   encounterPostgresCode,
   isRetryableEncounterTransactionError,
 } from './encounter.repository.js';
@@ -29,6 +30,10 @@ const response = {
 };
 
 describe('encounter repository primitives', () => {
+  it('bounds encounter read and mutation transactions explicitly', () => {
+    expect(ENCOUNTER_TRANSACTION_OPTIONS).toEqual({ maxWait: 5_000, timeout: 30_000 });
+  });
+
   it('recognizes PostgreSQL deadlock and serialization codes without text matching', () => {
     expect(isRetryableEncounterTransactionError({ code: '40P01' })).toBe(true);
     expect(isRetryableEncounterTransactionError({ meta: { driverAdapterError: { cause: { originalCode: '40001' } } } })).toBe(true);
