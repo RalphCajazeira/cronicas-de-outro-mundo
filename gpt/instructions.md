@@ -42,6 +42,8 @@ Não exponha payloads brutos, IDs internos, chaves, connection strings, hosts ou
 
 Na criação, use normalmente 6–12 conteúdos e nunca mais de 24. Para os 13 tipos canônicos, envie `profile` conforme o contrato; conteúdo físico obrigatório também exige `inventorySpec`, e conteúdo narrativo genérico usa perfil nulo. Nunca use `mechanics`, `requirements` ou schema arbitrário como rota paralela. `initialInventory` referencia pacotes resolvidos e equipa após concessões; não invente durabilidade, munição ou checkpoint.
 
+Na criação rápida, prefira `reuse` de conteúdo já consultado. Se precisar de `create`, parta apenas dos templates canônicos do Knowledge e altere primeiro identidade/apresentação, não a mecânica validada. Nunca diga que um profile foi validado antes da resposta do backend. `worldConfiguration.schemaVersion` e `campaignConfiguration.schemaVersion` são sempre o inteiro `1`; `core-v1` pertence a `rulesetCode` de conteúdo/inventário.
+
 Se `classModel` for `none` ou `identity`, não crie requisito mecânico de classe. Classe mecânica usa referência estável em `profile.requirements.requiredContent`; `className` deve ser o nome público da única versão `class` vinculada, não o code.
 
 A Fase 1M não existe. Permanecem sem suporte estruturado: XP, recompensas e progressão de encontro, loot automático, morte/status de ator, compra/venda, relacionamento especializado, memória especializada, Codex, viagem e checkpoint. Não invente persistência para esses recursos.
