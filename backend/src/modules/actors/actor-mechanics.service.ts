@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  ActorStatus,
   ActorAttributeCode, ActorResourceType, Prisma,
 } from '../../generated/prisma/client.js';
 import { canonicalJson } from '../../shared/json/canonical-json.js';
@@ -478,4 +479,18 @@ export async function createActorMechanicalState(
   });
   await recomputeActorDerivedSnapshot(client, input.actorId);
   return loadActorMechanicalSheet(client, input.actorId);
+}
+
+export async function reactivateDefeatedActorAfterHpRestoration(
+  client: Pick<Prisma.TransactionClient, 'actor'>,
+  actorId: string,
+  hpBefore: number,
+  hpAfter: number,
+): Promise<boolean> {
+  if (hpBefore !== 0 || hpAfter <= 0) return false;
+  const updated = await client.actor.updateMany({
+    where: { id: actorId, status: ActorStatus.DEFEATED },
+    data: { status: ActorStatus.ACTIVE },
+  });
+  return updated.count === 1;
 }

@@ -27,6 +27,7 @@ export interface ActiveEffectPersistenceOrigin {
   sourceContentVersionId: string;
   effectContentVersionId: string | null;
   effectRulesVersionId: string;
+  originEncounterId: string | null;
 }
 
 const kindToDatabase = {
@@ -71,6 +72,7 @@ export async function persistActorActiveEffects(
       sourceContentVersionId: current.sourceContentVersionId,
       effectContentVersionId: current.effectContentVersionId,
       effectRulesVersionId: current.effectRulesVersionId,
+      originEncounterId: current.originEncounterId,
     });
     if (origin === undefined) throw new Error('Active effect origin failed integrity validation');
     const data = {
@@ -93,6 +95,7 @@ export async function persistActorActiveEffects(
       && current.sourceContentVersionId === data.sourceContentVersionId
       && current.effectContentVersionId === data.effectContentVersionId
       && current.effectRulesVersionId === data.effectRulesVersionId
+      && current.originEncounterId === data.originEncounterId
       && current.effectIndex === data.effectIndex
       && current.kind === data.kind
       && current.stacks === data.stacks

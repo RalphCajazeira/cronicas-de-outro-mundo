@@ -104,6 +104,31 @@ describe('manageEncounter HTTP route', () => {
     expect(serialized).not.toContain('99991');
   });
 
+  it('audits terminal consequences only as outcome, counts and event type', async () => {
+    const records: HttpAuditRecord[] = [];
+    const service: EncounterHttpService = { manage: () => Promise.resolve({
+      ...result, result: 'encounter_completed', lifecycleStatus: 'completed', stateVersion: 2,
+      completionCandidate: 'party_victory_candidate', nextRequiredAction: { type: 'none' },
+      consequencesSummary: {
+        schemaVersion: 1, outcome: 'party_victory',
+        actorChanges: [{ actorRef: 'private-actor-sentinel', statusBefore: 'active', statusAfter: 'defeated' }],
+        removedEncounterEffects: [{ actorRef: 'private-actor-sentinel', count: 3 }],
+        persistentEvent: { eventType: 'encounter-completed', actorRef: 'private-actor-sentinel' },
+      },
+    }) };
+    const response = await request(app(service, (record) => records.push(record)))
+      .post('/api/v1/encounters/manage').set('x-rpg-key', 'test-key')
+      .send({ operation: 'confirm_completion', ...scope, idempotencyKey: 'private-key-sentinel', expectedStateVersion: 1 });
+    expect(response.status).toBe(200);
+    expect(records[0]).toMatchObject({
+      encounter: {
+        operation: 'confirm_completion', outcome: 'party_victory', actorChangeCount: 1,
+        removedEncounterEffectCount: 3, eventType: 'encounter-completed',
+      },
+    });
+    expect(JSON.stringify(records)).not.toMatch(/private-actor-sentinel|private-key-sentinel/);
+  });
+
   it.each([
     ['auth', undefined, 401, 'UNAUTHORIZED'],
     ['zod', undefined, 400, 'INVALID_INPUT'],

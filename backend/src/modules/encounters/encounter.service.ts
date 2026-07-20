@@ -1,4 +1,5 @@
 import {
+  ActorStatus,
   EncounterEphemeralKind,
   EncounterLifecycleStatus,
   EncounterOperationKind,
@@ -33,6 +34,14 @@ import {
 } from '../rules/core-v1/index.js';
 import { loadAuthoritativeEncounterAction } from './encounter-action-loader.js';
 import { EncounterError } from './encounter.errors.js';
+import {
+  publicEncounterConsequencesSummary,
+  type EncounterConsequenceSummaryV1,
+} from './encounter-consequence.js';
+import {
+  applyEncounterTerminalConsequences,
+  persistEncounterTerminalConsequence,
+} from './encounter-terminal-finalizer.js';
 import { encounterNextRequiredAction, encounterTransitionSummary } from './encounter-response-projection.js';
 import {
   applyEncounterMutations,
@@ -49,6 +58,7 @@ import {
   lockEncounterAuthorities,
   isRetryableEncounterTransactionError,
   encounterPostgresCode,
+  encounterPostgresMessage,
   type EncounterDatabase,
   type EncounterTransaction,
 } from './encounter.repository.js';
@@ -199,6 +209,7 @@ function dto(
   lifecycleStatus: EncounterLifecycleStatus,
   stopReason: string | null,
   batch?: CoreV1EncounterBatchResult,
+  consequencesSummary?: EncounterConsequenceSummaryV1,
 ): EncounterDto {
   const binding = new Map(record.participants.map((participant) => [participant.actorRef, participant.bindingKind]));
   const nextRequiredAction = encounterNextRequiredAction(state, lifecycleStatus);
@@ -226,6 +237,9 @@ function dto(
     })),
     nextRequiredAction,
     ...(transitionSummary === undefined ? {} : { transitionSummary }),
+    ...(consequencesSummary === undefined ? {} : {
+      consequencesSummary: publicEncounterConsequencesSummary(consequencesSummary),
+    }),
   });
 }
 
@@ -273,9 +287,16 @@ async function persistTransition(
   batch?: CoreV1EncounterBatchResult,
 ): Promise<EncounterDto> {
   if (state.stateVersion <= loaded.state.stateVersion) throw new EncounterError('ENCOUNTER_CORE_REJECTED');
-  const snapshot = serializeCoreV1EncounterState(state);
+  const initialLifecycleStatus = deriveEncounterLifecycle(state, stopReason);
+  const terminal = initialLifecycleStatus === EncounterLifecycleStatus.COMPLETED
+    || initialLifecycleStatus === EncounterLifecycleStatus.CANCELLED
+    ? await applyEncounterTerminalConsequences(transaction, loaded, state, authorities)
+    : undefined;
+  const persistedState = terminal?.state ?? state;
+  const persistedAuthorities = terminal?.authorities ?? authorities;
+  const snapshot = serializeCoreV1EncounterState(persistedState);
   const stateHash = createCoreV1EncounterSnapshotHash(snapshot);
-  const lifecycleStatus = deriveEncounterLifecycle(state, stopReason);
+  const lifecycleStatus = deriveEncounterLifecycle(persistedState, stopReason);
   const updated = await transaction.encounter.updateMany({
     where: {
       id: loaded.record.id,
@@ -284,10 +305,10 @@ async function persistTransition(
     },
     data: {
       lifecycleStatus,
-      stateVersion: state.stateVersion,
-      currentTick: state.currentTick,
+      stateVersion: persistedState.stateVersion,
+      currentTick: persistedState.currentTick,
       stopReason: databaseStopReason(stopReason),
-      completionCandidate: databaseCompletionCandidate(state.completionCandidate),
+      completionCandidate: databaseCompletionCandidate(persistedState.completionCandidate),
       stateSnapshot: snapshot,
       stateHash,
       ...((lifecycleStatus === EncounterLifecycleStatus.COMPLETED
@@ -297,21 +318,33 @@ async function persistTransition(
     },
   });
   if (updated.count !== 1) throw new EncounterError('ENCOUNTER_EXPECTED_VERSION_CONFLICT');
-  const adapterState = adapterStateFromAuthorities(authorities);
+  const adapterState = adapterStateFromAuthorities(persistedAuthorities);
   const persistedOperation = await createEncounterOperation(transaction, {
     encounterId: loaded.record.id,
     idempotencyRecordId,
     operation: operationKind[operation],
     previousStateVersion: loaded.state.stateVersion,
-    nextStateVersion: state.stateVersion,
+    nextStateVersion: persistedState.stateVersion,
     inputHash: requestHash,
     beforeStateHash: loaded.record.stateHash,
     afterStateHash: stateHash,
     stopReason: databaseStopReason(stopReason),
-    resultSummary: { adapterState } as unknown as Prisma.InputJsonValue,
+    resultSummary: {
+      adapterState,
+      ...(terminal === undefined ? {} : { consequencesSummary: terminal.summary }),
+    } as unknown as Prisma.InputJsonValue,
   });
   await persistRolls(transaction, loaded.record.id, persistedOperation.id, recorder);
-  return dto(operation, loaded.record, state, lifecycleStatus, stopReason, batch);
+  if (terminal !== undefined) {
+    await persistEncounterTerminalConsequence(transaction, {
+      loaded,
+      encounterOperationId: persistedOperation.id,
+      summary: terminal.summary,
+      eventPayload: terminal.eventPayload,
+      protagonistActorId: terminal.protagonistActorId,
+    });
+  }
+  return dto(operation, loaded.record, persistedState, lifecycleStatus, stopReason, batch, terminal?.summary);
 }
 
 async function lockAndLoad(
@@ -398,6 +431,18 @@ function deterministicReactionResolver(input: ResolveEncounterReactionInput): Re
 function translate(error: unknown): never {
   if (error instanceof EncounterError) throw error;
   if (error instanceof NotFoundError) throw error;
+  const postgresMessage = encounterPostgresMessage(error) ?? '';
+  if (postgresMessage.includes('ENCOUNTER effects require an origin Encounter')
+    || postgresMessage.includes('Only ENCOUNTER effects may reference an origin Encounter')) {
+    throw new EncounterError('ENCOUNTER_EFFECT_ORIGIN_REQUIRED', { cause: error });
+  }
+  if (postgresMessage.includes('ActiveEffect Encounter ownership')) {
+    throw new EncounterError('ENCOUNTER_EFFECT_OWNERSHIP_CONFLICT', { cause: error });
+  }
+  if (postgresMessage.includes('Terminal Encounter requires an EncounterConsequence')
+    || postgresMessage.includes('Encounter consequence')) {
+    throw new EncounterError('ENCOUNTER_DENORMALIZED_DRIFT', { cause: error });
+  }
   if (isRetryableEncounterTransactionError(error)) {
     throw new EncounterError('ENCOUNTER_TRANSACTION_RETRYABLE', { retryable: true, cause: error });
   }
@@ -532,6 +577,9 @@ export function createEncounterService(
               }
               const authority = authorities.get(participant.actorRef);
               if (authority === undefined || authority.actor.campaignId !== scope.campaign.id) {
+                throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
+              }
+              if (authority.actor.status !== ActorStatus.ACTIVE || authority.sheet.resources.hp.current === 0) {
                 throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
               }
               const known = await transaction.actorContent.findMany({
@@ -684,6 +732,8 @@ export function createEncounterService(
             loaded.state,
             loaded.record.lifecycleStatus,
             loaded.record.stopReason === null ? null : normalizeEnum(loaded.record.stopReason),
+            undefined,
+            loaded.consequencesSummary,
           );
         }, {
           ...ENCOUNTER_TRANSACTION_OPTIONS,

@@ -18,7 +18,9 @@ O inventário físico é separado: entradas são instâncias ou stacks fixados e
 
 Efeitos ativos usam refs públicas e podem ser consultados por `resolveActorEffect(operation=get)`. `loadGame` traz somente contagem resumida. O uso de consumível reduz/remove a entrada física na mesma transação dos efeitos; conhecer um consumível continua sem conceder posse.
 
-Encontros persistentes vinculam apenas atores já existentes na Campaign quando usados pela Action. Suas respostas projetam HP/Mana/SP e indicam o próximo passo autoritativo em `nextRequiredAction`. Conclusão ou cancelamento não cria automaticamente XP, loot, ouro, progressão, morte ou recompensa, e efeitos `scope=encounter` ainda não são removidos automaticamente.
+Encontros novos vinculam somente atores `active` com HP positivo já existentes na Campaign. Suas respostas projetam HP/Mana/SP e indicam o próximo passo autoritativo em `nextRequiredAction`. Ao confirmar conclusão ou cancelamento, o backend deriva o outcome, marca participantes persistidos `active` com HP zero como `defeated`, remove apenas efeitos `scope=encounter` pertencentes àquele encontro e devolve `consequencesSummary`. Isso não concede XP, level-up, ouro, loot, morte ou recompensa material.
+
+`defeated` não significa `dead`. Cura oficial que eleva HP de zero para valor positivo reativa somente um ator `defeated`; narrativa, tempo ou encerramento não reativam ninguém. Outros estados são preservados.
 
 ## Uso responsável
 

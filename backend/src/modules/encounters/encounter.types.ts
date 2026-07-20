@@ -5,6 +5,10 @@ import type {
   CoreV1EncounterParticipantInput,
   CoreV1EncounterParticipantRelation,
 } from '../rules/core-v1/index.js';
+import {
+  parseEncounterPublicConsequencesSummary,
+  type EncounterPublicConsequencesSummaryV1,
+} from './encounter-consequence.js';
 
 export type EncounterOperationName =
   | 'create' | 'submit_intent' | 'resolve_reaction' | 'continue'
@@ -112,6 +116,7 @@ export interface EncounterDto {
   readonly participants: readonly EncounterParticipantDto[];
   readonly nextRequiredAction: EncounterNextRequiredActionDto;
   readonly transitionSummary?: EncounterTransitionSummaryDto;
+  readonly consequencesSummary?: EncounterPublicConsequencesSummaryV1;
 }
 
 const stableRefPattern = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
@@ -283,7 +288,7 @@ export function parseEncounterDto(value: unknown): EncounterDto {
   const root = closedOptionalRecord(value, [
     'operation', 'encounterRef', 'lifecycleStatus', 'stateVersion', 'currentTick',
     'stopReason', 'completionCandidate', 'participants', 'nextRequiredAction',
-  ], ['transitionSummary'], '$');
+  ], ['transitionSummary', 'consequencesSummary'], '$');
   if (!['create', 'submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel', 'load']
     .includes(root.operation as string)
     || !isPublicRef(root.encounterRef) || !lifecycleStatuses.has(root.lifecycleStatus as string)
@@ -331,6 +336,20 @@ export function parseEncounterDto(value: unknown): EncounterDto {
       throw new TypeError('Encounter transition summary does not match operation');
     }
     parseTransitionSummary(root.transitionSummary, participantRefs);
+  }
+  if (root.consequencesSummary !== undefined) {
+    if (!['completed', 'cancelled'].includes(root.lifecycleStatus as string)) {
+      throw new TypeError('Encounter consequences require a terminal lifecycle');
+    }
+    const consequences = parseEncounterPublicConsequencesSummary(root.consequencesSummary, participantRefs);
+    const expectedOutcome = root.lifecycleStatus === 'cancelled' ? 'cancelled' : {
+      party_victory_candidate: 'party_victory',
+      hostile_victory_candidate: 'party_defeat',
+      stalemate_candidate: 'stalemate',
+    }[root.completionCandidate as string];
+    if (consequences.outcome !== expectedOutcome) {
+      throw new TypeError('Encounter consequences do not match completion state');
+    }
   }
   return structuredClone(value) as EncounterDto;
 }

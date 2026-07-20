@@ -34,6 +34,7 @@ import { canonicalize, jsonByteSize } from '../../src/modules/gpt/gpt.start-game
 import { prismaReadinessCheck } from '../../src/modules/health/health.repository.js';
 import { encounterService } from '../../src/modules/encounters/encounter.service.js';
 import { createEncounterHttpService } from '../../src/modules/encounters/encounter-http.service.js';
+import { getOfficialContract } from '../../src/modules/openapi/openapi.routes.js';
 import { lockActorAuthorities } from '../../src/modules/encounters/encounter.repository.js';
 import {
   createCoreV1EncounterSnapshotHash,
@@ -44,6 +45,7 @@ import { ensureCoreV1RulesetVersion } from '../../src/modules/rules/ruleset.regi
 import { CORE_V1_CONFIG_HASH, CORE_V1_CONFIG_SNAPSHOT } from '../../src/modules/rules/core-v1/core-v1.manifest.js';
 import {
   calculateSecondaryAttributes,
+  cancelCoreV1Encounter,
   createCoreV1EmptyEquipmentLoadout,
   getInitialAttributePreset,
 } from '../../src/modules/rules/core-v1/index.js';
@@ -60,8 +62,10 @@ const dependencies = {
   encounterHttpService: createEncounterHttpService(encounterService),
 };
 const app = createApp(config, dependencies);
-const authenticated = (path: string) => request(app).get(path).set('x-rpg-key', config.RPG_API_KEY);
-const post = (path: string, body: object) => request(app).post(path).set('x-rpg-key', config.RPG_API_KEY).send({ ...seedScope, ...body });
+const server = app.listen(0);
+const api = request(server);
+const authenticated = (path: string) => api.get(path).set('x-rpg-key', config.RPG_API_KEY);
+const post = (path: string, body: object) => api.post(path).set('x-rpg-key', config.RPG_API_KEY).send({ ...seedScope, ...body });
 function bodyRecord(response: { body: unknown }): Record<string, unknown> {
   return response.body !== null && typeof response.body === 'object' ? response.body as Record<string, unknown> : {};
 }
@@ -413,6 +417,10 @@ async function createEncounterFixture(
 }
 
 afterAll(async () => {
+  await new Promise<void>((resolve, reject) => server.close((error) => {
+    if (error === undefined) resolve();
+    else reject(error);
+  }));
   await disconnectPrisma();
 });
 
@@ -662,13 +670,13 @@ describe('encounter persistence constraints', () => {
     })).rejects.toMatchObject({ code: 'P2002' });
 
     await expect(prisma.encounter.create({
-      data: { ...common, encounterRef: 'completed-one', lifecycleStatus: EncounterLifecycleStatus.COMPLETED },
+      data: { ...common, encounterRef: 'failed-one', lifecycleStatus: EncounterLifecycleStatus.FAILED },
     })).resolves.toBeTruthy();
     await expect(prisma.encounter.create({
       data: { ...common, encounterRef: 'failed-two', lifecycleStatus: EncounterLifecycleStatus.FAILED },
     })).resolves.toBeTruthy();
     await expect(prisma.encounter.create({
-      data: { ...common, encounterRef: 'completed-one', lifecycleStatus: EncounterLifecycleStatus.CANCELLED },
+      data: { ...common, encounterRef: 'failed-one', lifecycleStatus: EncounterLifecycleStatus.CANCELLED },
     })).rejects.toMatchObject({ code: 'P2002' });
   });
 
@@ -1124,7 +1132,7 @@ describe('encounter persistence constraints', () => {
   });
 
   it('enforces Encounter versions, ticks, snapshot schema and lowercase SHA-256 hashes', async () => {
-    const fixture = await createEncounterFixture('encounter-checks', EncounterLifecycleStatus.COMPLETED);
+    const fixture = await createEncounterFixture('encounter-checks', EncounterLifecycleStatus.FAILED);
     const base = {
       campaignId: fixture.campaign.id,
       rulesetVersionId: fixture.rulesetVersion.id,
@@ -1142,7 +1150,7 @@ describe('encounter persistence constraints', () => {
   });
 
   it('accepts canonical JSON within 1 MiB despite JSONB rendering, but rejects physical JSONB text above 2 MiB', async () => {
-    const fixture = await createEncounterFixture('snapshot-size', EncounterLifecycleStatus.COMPLETED);
+    const fixture = await createEncounterFixture('snapshot-size', EncounterLifecycleStatus.FAILED);
     const payload = { payload: 'x'.repeat(1_048_576 - Buffer.byteLength(canonicalJson({ payload: '' }), 'utf8')) };
     const canonical = canonicalJson(payload);
     const jsonbBytes = await prisma.$queryRaw<Array<{ bytes: number }>>`
@@ -1504,24 +1512,33 @@ describe('Phase 1L-B transactional encounter adapter', () => {
     ])).resolves.toHaveLength(2);
   });
 
-  it('confirms a valid completion candidate without rewards or encounter-effect cleanup', async () => {
+  it('confirms a valid completion with an auditable consequence while preserving a legacy unowned effect', async () => {
     const encounterScopedEffect = await prisma.activeEffect.findFirstOrThrow({
       where: {
         targetActor: { code: 'ralph', campaign: { code: seedScope.campaignRef } },
         sourceContentVersion: { contentDefinition: { code: 'seed-mark-spell' } },
       },
     });
-    await prisma.$transaction(async (transaction) => {
-      await transaction.activeEffect.update({
-        where: { id: encounterScopedEffect.id },
-        data: { durationType: 'ENCOUNTER', expiresAtTick: null, remainingActions: null },
+    const legacyEncounterEffectId: string = encounterScopedEffect.id;
+    await prisma.$executeRawUnsafe('ALTER TABLE "ActiveEffect" DISABLE TRIGGER "ActiveEffect_validate_encounter_origin"');
+    try {
+      await prisma.$transaction(async (transaction) => {
+        await transaction.activeEffect.update({
+          where: { id: encounterScopedEffect.id },
+          data: { durationType: 'ENCOUNTER', expiresAtTick: null, remainingActions: null },
+        });
+        await transaction.actor.update({
+          where: { id: encounterScopedEffect.targetActorId },
+          data: { effectsStateVersion: { increment: 1 }, mechanicsStateVersion: { increment: 1 } },
+        });
+        await recomputeActorDerivedSnapshot(transaction, encounterScopedEffect.targetActorId);
       });
-      await transaction.actor.update({
-        where: { id: encounterScopedEffect.targetActorId },
-        data: { effectsStateVersion: { increment: 1 }, mechanicsStateVersion: { increment: 1 } },
-      });
-      await recomputeActorDerivedSnapshot(transaction, encounterScopedEffect.targetActorId);
-    });
+    } finally {
+      await prisma.$executeRawUnsafe('ALTER TABLE "ActiveEffect" ENABLE TRIGGER "ActiveEffect_validate_encounter_origin"');
+    }
+    await expect(prisma.activeEffect.update({
+      where: { id: legacyEncounterEffectId }, data: { durationType: 'PERMANENT' },
+    })).rejects.toThrow(/ownership identity is immutable/);
     const before = await prisma.actor.findFirstOrThrow({
       where: { code: 'ralph', campaign: { code: seedScope.campaignRef } },
       select: { xp: true, gold: true },
@@ -1550,6 +1567,13 @@ describe('Phase 1L-B transactional encounter adapter', () => {
       ...parseCoreV1EncounterSnapshot(record.stateSnapshot),
       stateVersion: 2,
       completionCandidate: 'party_victory_candidate' as const,
+      participants: parseCoreV1EncounterSnapshot(record.stateSnapshot).participants.map((participant) => (
+        participant.actorRef === 'lyra' ? {
+          ...participant,
+          combatState: 'incapacitated_candidate' as const,
+          resources: { ...participant.resources, hp: { ...participant.resources.hp, current: 0 } },
+        } : participant
+      )),
     };
     const snapshot = serializeCoreV1EncounterState(candidate);
     const hash = createCoreV1EncounterSnapshotHash(snapshot);
@@ -1558,7 +1582,32 @@ describe('Phase 1L-B transactional encounter adapter', () => {
         key: 'phase-1l-b-confirm-preparation', operation: 'encounter.continue', requestHash: 'a'.repeat(64),
       },
     });
+    const lyra = await prisma.actor.findFirstOrThrow({
+      where: { code: 'lyra', campaign: { code: seedScope.campaignRef } },
+      include: { resources: true },
+    });
+    const lyraHp = lyra.resources.find((resource) => resource.type === 'HP');
+    if (lyraHp === undefined) throw new Error('Lyra HP resource is required');
+    const previousSummary = record.operations[0]!.resultSummary as Record<string, unknown>;
+    const previousAdapter = previousSummary.adapterState as {
+      schemaVersion: number;
+      participants: Array<{
+        actorRef: string;
+        resourceStateVersions: { hp: number; mana: number; sp: number };
+      }>;
+    };
+    const preparedSummary = {
+      adapterState: {
+        ...previousAdapter,
+        participants: previousAdapter.participants.map((participant) => participant.actorRef === 'lyra'
+          ? { ...participant, resourceStateVersions: { ...participant.resourceStateVersions, hp: participant.resourceStateVersions.hp + 1 } }
+          : participant),
+      },
+    };
     await prisma.$transaction(async (transaction) => {
+      await transaction.actorResource.update({
+        where: { id: lyraHp.id }, data: { current: 0, stateVersion: { increment: 1 } },
+      });
       await transaction.encounter.update({
         where: { id: record.id },
         data: {
@@ -1579,7 +1628,7 @@ describe('Phase 1L-B transactional encounter adapter', () => {
           inputHash: 'a'.repeat(64),
           beforeStateHash: record.stateHash,
           afterStateHash: hash,
-          resultSummary: record.operations[0]!.resultSummary as Prisma.InputJsonValue,
+          resultSummary: preparedSummary,
         },
       });
     });
@@ -1594,16 +1643,490 @@ describe('Phase 1L-B transactional encounter adapter', () => {
       result: 'encounter_completed', lifecycleStatus: 'completed',
       completionCandidate: 'party_victory_candidate', stateVersion: 3,
       nextRequiredAction: { type: 'none' },
+      consequencesSummary: {
+        schemaVersion: 1, outcome: 'party_victory',
+        actorChanges: [{ actorRef: 'lyra', statusBefore: 'active', statusAfter: 'defeated' }],
+        removedEncounterEffects: [],
+        persistentEvent: { eventType: 'encounter-completed', actorRef: 'ralph' },
+      },
     });
     const after = await prisma.actor.findFirstOrThrow({
       where: { code: 'ralph', campaign: { code: seedScope.campaignRef } },
       select: { xp: true, gold: true },
     });
     expect(after).toEqual(before);
-    await expect(prisma.activeEffect.findUnique({ where: { id: encounterScopedEffect.id } })).resolves.not.toBeNull();
+    await expect(prisma.actor.findUniqueOrThrow({ where: { id: lyra.id }, select: { status: true } }))
+      .resolves.toEqual({ status: 'DEFEATED' });
+    await expect(prisma.activeEffect.findUnique({ where: { id: legacyEncounterEffectId } })).resolves.not.toBeNull();
     const closed = await prisma.encounter.findUniqueOrThrow({ where: { id: record.id } });
     expect(closed.lifecycleStatus).toBe(EncounterLifecycleStatus.COMPLETED);
     expect(closed.closedAt).toBeInstanceOf(Date);
+    await expect(prisma.encounterConsequence.count({ where: { encounterId: record.id } })).resolves.toBe(1);
+    await expect(prisma.gameEvent.count({
+      where: { idempotencyKey: `encounter-outcome:${record.id}:v1` },
+    })).resolves.toBe(1);
+    await prisma.$transaction(async (transaction) => {
+      await transaction.actor.update({ where: { id: lyra.id }, data: { status: 'ACTIVE' } });
+      await transaction.actorResource.update({
+        where: { id: lyraHp.id },
+        data: { current: lyraHp.current, stateVersion: { increment: 1 } },
+      });
+    });
+    const historicalLoad = await encounterService.load({ ...seedScope, encounterRef: created.encounterRef });
+    expect(historicalLoad.consequencesSummary).toEqual(bodyRecord(completed).consequencesSummary);
+    const terminalOperation = await prisma.encounterOperation.findFirstOrThrow({
+      where: { encounterId: record.id }, orderBy: { nextStateVersion: 'desc' },
+    });
+    const terminalResult = terminalOperation.resultSummary as {
+      adapterState: { schemaVersion: number; participants: Array<Record<string, unknown>> };
+      consequencesSummary: unknown;
+    };
+    await prisma.$executeRawUnsafe('ALTER TABLE "EncounterOperation" DISABLE TRIGGER "EncounterOperation_reject_update"');
+    try {
+      await prisma.encounterOperation.update({
+        where: { id: terminalOperation.id },
+        data: {
+          resultSummary: {
+            ...terminalResult,
+            adapterState: {
+              ...terminalResult.adapterState,
+              participants: terminalResult.adapterState.participants.map((participant, index) => (
+                index === 0 ? { ...participant, actorRef: 'aaa-tampered-terminal-actor' } : participant
+              )),
+            },
+          } as Prisma.InputJsonValue,
+        },
+      });
+    } finally {
+      await prisma.$executeRawUnsafe('ALTER TABLE "EncounterOperation" ENABLE TRIGGER "EncounterOperation_reject_update"');
+    }
+    await expect(encounterService.load({ ...seedScope, encounterRef: created.encounterRef }))
+      .rejects.toMatchObject({ code: 'ENCOUNTER_PARTICIPANT_INVALID' });
+  });
+
+  it('owns and removes only this Encounter effects on cancel, then replays without duplication', async () => {
+    const actor = await prisma.actor.findFirstOrThrow({
+      where: { code: 'ralph', campaign: { code: seedScope.campaignRef } },
+      include: { campaign: true },
+    });
+    const status = await publishTestContent({
+      worldId: actor.campaign.worldId,
+      campaignId: actor.campaignId,
+      contentType: ContentType.STATUS_EFFECT,
+      code: 'phase-1m-a-encounter-mark',
+      name: 'Marca do encontro 1M-A',
+      description: 'Efeito de integração limitado ao encontro.',
+      profile: {
+        schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical', contentKind: 'status_effect',
+        code: 'phase-1m-a-encounter-mark', name: 'Marca do encontro 1M-A',
+        description: 'Efeito de integração limitado ao encontro.', tier: 1, rarity: 'common',
+        activation: { type: 'passive' }, cost: { type: 'none' }, duration: { type: 'encounter' },
+        stacking: { type: 'refresh' },
+        passiveModifiers: [{ target: 'magicalDefense', amount: -1, sourceRule: 'status_effect' }],
+      },
+    });
+    const spell = await publishTestContent({
+      worldId: actor.campaign.worldId,
+      campaignId: actor.campaignId,
+      contentType: ContentType.SPELL,
+      code: 'phase-1m-a-encounter-spell',
+      name: 'Selo do encontro 1M-A',
+      description: 'Aplica efeito pertencente ao encontro.',
+      profile: {
+        schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical', contentKind: 'spell',
+        code: 'phase-1m-a-encounter-spell', name: 'Selo do encontro 1M-A',
+        description: 'Aplica efeito pertencente ao encontro.', tier: 1, rarity: 'common',
+        activation: { type: 'active' }, cost: { type: 'mana', amount: 3 }, actionProfile: 'quick',
+        targeting: { type: 'single_target', rangeBand: 'near', maxTargets: 1 },
+        effects: [{
+          type: 'apply_status', statusRef: status.code, duration: { type: 'encounter' },
+          stacking: { type: 'refresh' },
+        }],
+      },
+    });
+    const spellVersion = spell.versions[0];
+    if (spellVersion === undefined) throw new Error('Encounter spell version is required');
+    await prisma.actorContent.upsert({
+      where: { actorId_contentDefinitionId: { actorId: actor.id, contentDefinitionId: spell.id } },
+      update: { contentVersionId: spellVersion.id, state: ActorContentState.KNOWN },
+      create: {
+        actorId: actor.id, contentDefinitionId: spell.id, contentVersionId: spellVersion.id,
+        state: ActorContentState.KNOWN,
+      },
+    });
+    const encounterRef = 'phase-1m-a-owned-effect';
+    const created = await encounterService.create({
+      ...seedScope,
+      encounterRef,
+      idempotencyKey: 'phase-1m-a-owned-effect-create',
+      partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'near' },
+        { bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'hostile', zone: 'near' },
+      ],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+      ],
+    });
+    const ready = await encounterService.continue({
+      ...seedScope, encounterRef, idempotencyKey: 'phase-1m-a-owned-effect-ready',
+      expectedStateVersion: created.stateVersion,
+    });
+    const submitted = await encounterService.submitIntent({
+      ...seedScope, encounterRef, idempotencyKey: 'phase-1m-a-owned-effect-submit',
+      expectedStateVersion: ready.stateVersion,
+      intent: {
+        intentRef: 'phase-1m-a-owned-effect-intent', sourceActorRef: 'ralph', slotRef: 'primary',
+        actionSource: 'content', targetSelector: 'explicit', requestedTargetRefs: ['ralph'],
+        contentRef: {
+          scope: 'campaign', contentType: 'spell', code: spell.code, versionNumber: spellVersion.versionNumber,
+        },
+      },
+    });
+    const resolved = await encounterService.continue({
+      ...seedScope, encounterRef, idempotencyKey: 'phase-1m-a-owned-effect-resolve',
+      expectedStateVersion: submitted.stateVersion,
+    });
+    const encounter = await prisma.encounter.findFirstOrThrow({ where: { encounterRef } });
+    const ownedEffect = await prisma.activeEffect.findFirstOrThrow({
+      where: {
+        targetActorId: actor.id,
+        effectContentVersion: { contentDefinition: { code: status.code } },
+      },
+    });
+    expect(ownedEffect).toMatchObject({ durationType: 'ENCOUNTER', originEncounterId: encounter.id });
+    const actorBeforeCancel = await prisma.actor.findUniqueOrThrow({ where: { id: actor.id } });
+    const cancelInput = {
+      ...seedScope, encounterRef, idempotencyKey: 'phase-1m-a-owned-effect-cancel',
+      expectedStateVersion: resolved.stateVersion,
+    };
+    const cancelled = await encounterService.cancel(cancelInput);
+    expect(cancelled.consequencesSummary).toEqual({
+      schemaVersion: 1, outcome: 'cancelled', actorChanges: [],
+      removedEncounterEffects: [{ actorRef: 'ralph', count: 1 }],
+      persistentEvent: { eventType: 'encounter-cancelled', actorRef: 'ralph' },
+    });
+    await expect(prisma.activeEffect.findUnique({ where: { id: ownedEffect.id } })).resolves.toBeNull();
+    const actorAfterCancel = await prisma.actor.findUniqueOrThrow({ where: { id: actor.id } });
+    expect(actorAfterCancel.effectsStateVersion).toBe(actorBeforeCancel.effectsStateVersion + 1);
+    expect(actorAfterCancel.mechanicsStateVersion).toBe(actorBeforeCancel.mechanicsStateVersion + 1);
+    const replay = await encounterService.cancel(cancelInput);
+    expect(replay).toEqual(cancelled);
+    await expect(prisma.encounterConsequence.count({ where: { encounterId: encounter.id } })).resolves.toBe(1);
+    await expect(prisma.gameEvent.count({ where: { idempotencyKey: `encounter-outcome:${encounter.id}:v1` } })).resolves.toBe(1);
+    await expect(prisma.encounterOperation.count({ where: { encounterId: encounter.id, operation: 'CANCEL' } })).resolves.toBe(1);
+
+    const resourceRows = await prisma.actorResource.findMany({ where: { actorId: actor.id } });
+    const resourceVersion = (type: 'HP' | 'MANA' | 'SP') => resourceRows.find((row) => row.type === type)?.stateVersion;
+    const manaBeforeOutsideAttempt = resourceRows.find((row) => row.type === 'MANA');
+    const outsideAttempt = await post('/api/v1/actors/effects/resolve', {
+      operation: 'execute_content', sourceActorRef: actor.code, targetActorRef: actor.code,
+      contentRef: { contentType: 'spell', code: spell.code, versionNumber: spellVersion.versionNumber },
+      expectedSourceState: {
+        mechanicsStateVersion: actorAfterCancel.mechanicsStateVersion,
+        inventoryStateVersion: actorAfterCancel.inventoryStateVersion,
+        effectsStateVersion: actorAfterCancel.effectsStateVersion,
+        resourceStateVersions: {
+          hp: resourceVersion('HP'), mana: resourceVersion('MANA'), sp: resourceVersion('SP'),
+        },
+      },
+      idempotencyKey: 'phase-1m-a-outside-encounter-effect',
+    });
+    expect(outsideAttempt.status).toBe(500);
+    expect(outsideAttempt.body).toMatchObject({ error: { code: 'EFFECT_INTEGRITY_ERROR', retryable: false } });
+    await expect(prisma.effectResolution.count({ where: { idempotencyKey: 'phase-1m-a-outside-encounter-effect' } }))
+      .resolves.toBe(0);
+    if (manaBeforeOutsideAttempt === undefined) throw new Error('Mana resource is required');
+    await expect(prisma.actorResource.findUniqueOrThrow({ where: { id: manaBeforeOutsideAttempt.id } }))
+      .resolves.toMatchObject({ current: manaBeforeOutsideAttempt.current, stateVersion: manaBeforeOutsideAttempt.stateVersion });
+
+    const protectedLegacyEffect = await prisma.activeEffect.findFirstOrThrow({
+      where: { targetActorId: actor.id, durationType: 'ENCOUNTER', originEncounterId: null },
+      select: { id: true },
+    });
+    const safeRead = await post('/api/v1/actors/effects/resolve', {
+      operation: 'get', sourceActorRef: actor.code,
+    });
+    expect(safeRead.status).toBe(200);
+    expect(safeRead.body).toMatchObject({ operation: 'get', actorRef: actor.code });
+
+    const remover = await publishTestContent({
+      worldId: actor.campaign.worldId, campaignId: actor.campaignId, contentType: ContentType.SPELL,
+      code: 'phase-1m-a-remove-encounter-effect', name: 'Remoção indevida de encontro',
+      description: 'Tenta remover fora do orquestrador um efeito protegido.',
+      profile: {
+        schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical', contentKind: 'spell',
+        code: 'phase-1m-a-remove-encounter-effect', name: 'Remoção indevida de encontro',
+        description: 'Tenta remover fora do orquestrador um efeito protegido.', tier: 1, rarity: 'common',
+        activation: { type: 'active' }, cost: { type: 'mana', amount: 3 }, actionProfile: 'quick',
+        targeting: { type: 'self', rangeBand: 'self' },
+        effects: [{ type: 'remove_status', statusRef: 'seed-arcane-mark' }],
+      },
+    });
+    const removerVersion = remover.versions[0];
+    if (removerVersion === undefined) throw new Error('Encounter effect remover version is required');
+    await prisma.actorContent.create({
+      data: {
+        actorId: actor.id, contentDefinitionId: remover.id, contentVersionId: removerVersion.id,
+        state: ActorContentState.KNOWN,
+      },
+    });
+    const removeAttempt = await post('/api/v1/actors/effects/resolve', {
+      operation: 'execute_content', sourceActorRef: actor.code, targetActorRef: actor.code,
+      contentRef: { contentType: 'spell', code: remover.code, versionNumber: removerVersion.versionNumber },
+      expectedSourceState: {
+        mechanicsStateVersion: actorAfterCancel.mechanicsStateVersion,
+        inventoryStateVersion: actorAfterCancel.inventoryStateVersion,
+        effectsStateVersion: actorAfterCancel.effectsStateVersion,
+        resourceStateVersions: {
+          hp: resourceVersion('HP'), mana: resourceVersion('MANA'), sp: resourceVersion('SP'),
+        },
+      },
+      idempotencyKey: 'phase-1m-a-outside-remove-effect',
+    });
+    expect(removeAttempt.status).toBe(500);
+    expect(removeAttempt.body).toMatchObject({ error: { code: 'EFFECT_INTEGRITY_ERROR', retryable: false } });
+    await expect(prisma.activeEffect.findUnique({ where: { id: protectedLegacyEffect.id } })).resolves.not.toBeNull();
+    await expect(prisma.effectResolution.count({ where: { idempotencyKey: 'phase-1m-a-outside-remove-effect' } }))
+      .resolves.toBe(0);
+  });
+
+  it('blocks partial legacy closure, rejects ineligible entrants and serializes competing terminal writes', async () => {
+    const encounterRef = 'phase-1m-a-terminal-integrity';
+    const created = await encounterService.create({
+      ...seedScope, encounterRef, idempotencyKey: 'phase-1m-a-terminal-integrity-create', partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'near' },
+        { bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'hostile', zone: 'near' },
+      ],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+      ],
+    });
+    const encounter = await prisma.encounter.findFirstOrThrow({ where: { encounterRef } });
+    await expect(prisma.$transaction((transaction) => transaction.encounter.update({
+      where: { id: encounter.id },
+      data: { lifecycleStatus: EncounterLifecycleStatus.CANCELLED, closedAt: new Date() },
+    }))).rejects.toThrow(/EncounterConsequence/);
+    await expect(prisma.encounter.findUniqueOrThrow({ where: { id: encounter.id } }))
+      .resolves.toMatchObject({ lifecycleStatus: encounter.lifecycleStatus, closedAt: null });
+
+    await expect(prisma.$transaction(async (transaction) => {
+      const idempotency = await transaction.idempotencyRecord.create({
+        data: {
+          key: 'phase-1m-a-old-code-operation-only', operation: 'encounter.cancel', requestHash: 'f'.repeat(64),
+        },
+      });
+      const terminalHash = 'e'.repeat(64);
+      await transaction.encounter.update({
+        where: { id: encounter.id },
+        data: {
+          lifecycleStatus: EncounterLifecycleStatus.CANCELLED,
+          completionCandidate: 'CANCELLED', stateVersion: encounter.stateVersion + 1,
+          stateHash: terminalHash, closedAt: new Date(),
+        },
+      });
+      await transaction.encounterOperation.create({
+        data: {
+          encounterId: encounter.id, idempotencyRecordId: idempotency.id,
+          operation: EncounterOperationKind.CANCEL,
+          previousStateVersion: encounter.stateVersion, nextStateVersion: encounter.stateVersion + 1,
+          inputHash: 'f'.repeat(64), beforeStateHash: encounter.stateHash, afterStateHash: terminalHash,
+          resultSummary: { adapterState: { schemaVersion: 1, participants: [] } },
+        },
+      });
+    })).rejects.toThrow(/EncounterConsequence/);
+    await expect(prisma.idempotencyRecord.count({ where: { key: 'phase-1m-a-old-code-operation-only' } }))
+      .resolves.toBe(0);
+
+    await expect(prisma.encounter.create({
+      data: {
+        campaignId: encounter.campaignId,
+        rulesetVersionId: encounter.rulesetVersionId,
+        encounterRef: 'phase-1m-a-insert-already-terminal',
+        lifecycleStatus: EncounterLifecycleStatus.CANCELLED,
+        stateVersion: 1, currentTick: encounter.currentTick,
+        completionCandidate: 'CANCELLED', snapshotSchemaVersion: 1,
+        stateSnapshot: encounter.stateSnapshot as Prisma.InputJsonValue,
+        stateHash: encounter.stateHash, closedAt: new Date(),
+      },
+    })).rejects.toThrow(/EncounterConsequence/);
+
+    await expect(prisma.encounterConsequence.create({
+      data: {
+        encounterId: encounter.id,
+        encounterOperationId: (await prisma.encounterOperation.findFirstOrThrow({
+          where: { encounterId: encounter.id }, orderBy: { nextStateVersion: 'desc' }, select: { id: true },
+        })).id,
+        gameEventId: randomUUID(), consequenceSchemaVersion: 1, rewardPolicyVersion: null,
+        outcome: 'CANCELLED',
+        resultSummary: {
+          schemaVersion: 1, outcome: 'cancelled', actors: [], removedEncounterEffects: [],
+          event: { eventType: 'encounter-cancelled', actorRef: null },
+        },
+      },
+    })).rejects.toMatchObject({ code: 'P2003' });
+
+    const terminalAttempts = await Promise.allSettled([
+      encounterService.cancel({
+        ...seedScope, encounterRef, idempotencyKey: 'phase-1m-a-terminal-race-a',
+        expectedStateVersion: created.stateVersion,
+      }),
+      encounterService.cancel({
+        ...seedScope, encounterRef, idempotencyKey: 'phase-1m-a-terminal-race-b',
+        expectedStateVersion: created.stateVersion,
+      }),
+    ]);
+    expect(terminalAttempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+    expect(terminalAttempts.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
+    await expect(prisma.encounterConsequence.count({ where: { encounterId: encounter.id } })).resolves.toBe(1);
+    await expect(prisma.gameEvent.count({ where: { idempotencyKey: `encounter-outcome:${encounter.id}:v1` } })).resolves.toBe(1);
+    const consequence = await prisma.encounterConsequence.findUniqueOrThrow({ where: { encounterId: encounter.id } });
+    await expect(prisma.encounterConsequence.update({
+      where: { id: consequence.id }, data: { rewardPolicyVersion: 'forbidden' },
+    })).rejects.toThrow(/append-only/);
+    await expect(prisma.encounterConsequence.delete({ where: { id: consequence.id } })).rejects.toThrow(/append-only/);
+    await expect(prisma.gameEvent.delete({ where: { id: consequence.gameEventId } }))
+      .rejects.toThrow(/RESTRICT/);
+    await expect(prisma.encounterOperation.delete({ where: { id: consequence.encounterOperationId } }))
+      .rejects.toThrow(/append-only/);
+    const persistedTerminal = await prisma.encounter.findUniqueOrThrow({ where: { id: encounter.id } });
+    const swappedLifecycle = persistedTerminal.lifecycleStatus === EncounterLifecycleStatus.CANCELLED
+      ? EncounterLifecycleStatus.COMPLETED : EncounterLifecycleStatus.CANCELLED;
+    await expect(prisma.encounter.update({
+      where: { id: encounter.id },
+      data: {
+        lifecycleStatus: swappedLifecycle,
+        completionCandidate: swappedLifecycle === EncounterLifecycleStatus.CANCELLED
+          ? 'CANCELLED' : 'PARTY_VICTORY_CANDIDATE',
+      },
+    })).rejects.toThrow(/Terminal Encounter authority is immutable/);
+
+    const lyra = await prisma.actor.findFirstOrThrow({
+      where: { code: 'lyra', campaign: { code: seedScope.campaignRef } }, include: { resources: true },
+    });
+    await prisma.actor.update({ where: { id: lyra.id }, data: { status: 'DEFEATED' } });
+    await expect(encounterService.create({
+      ...seedScope, encounterRef: 'phase-1m-a-defeated-entry', idempotencyKey: 'phase-1m-a-defeated-entry-create',
+      partySideRef: 'party', participants: [{ bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'party', zone: 'near' }],
+      relations: [{ leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' }],
+    })).rejects.toMatchObject({ code: 'ENCOUNTER_PARTICIPANT_INVALID' });
+    await prisma.actor.update({ where: { id: lyra.id }, data: { status: 'ACTIVE' } });
+    const hp = lyra.resources.find((resource) => resource.type === 'HP');
+    if (hp === undefined) throw new Error('Lyra HP resource is required');
+    await prisma.$transaction(async (transaction) => {
+      await transaction.actorResource.update({ where: { id: hp.id }, data: { current: 0, stateVersion: { increment: 1 } } });
+      await recomputeActorDerivedSnapshot(transaction, lyra.id);
+    });
+    await expect(encounterService.create({
+      ...seedScope, encounterRef: 'phase-1m-a-zero-hp-entry', idempotencyKey: 'phase-1m-a-zero-hp-entry-create',
+      partySideRef: 'party', participants: [{ bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'party', zone: 'near' }],
+      relations: [{ leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' }],
+    })).rejects.toMatchObject({ code: 'ENCOUNTER_PARTICIPANT_INVALID' });
+    await prisma.$transaction(async (transaction) => {
+      await transaction.actorResource.update({ where: { id: hp.id }, data: { current: hp.current, stateVersion: { increment: 1 } } });
+      await recomputeActorDerivedSnapshot(transaction, lyra.id);
+    });
+  });
+
+  it('uses distinct global event keys for the same encounterRef in two Campaigns', async () => {
+    const first = await createEncounterFixture('same-public-ref-a', EncounterLifecycleStatus.FAILED);
+    const second = await createEncounterFixture('same-public-ref-b', EncounterLifecycleStatus.FAILED);
+    const encounterRef = 'shared-encounter-ref';
+    const createIn = (fixture: typeof first, suffix: string) => encounterService.create({
+      playerRef: fixture.player.slug, worldRef: fixture.world.code, campaignRef: fixture.campaign.code,
+      encounterRef, idempotencyKey: `phase-1m-a-shared-create-${suffix}`, partySideRef: 'party',
+      participants: [{ bindingKind: 'persisted_actor' as const, actorRef: fixture.actor.code, sideRef: 'party', zone: 'near' as const }],
+      relations: [{ leftActorRef: fixture.actor.code, rightActorRef: fixture.actor.code, relation: 'self' as const }],
+    });
+    const firstCreated = await createIn(first, 'a');
+    const secondCreated = await createIn(second, 'b');
+    await encounterService.cancel({
+      playerRef: first.player.slug, worldRef: first.world.code, campaignRef: first.campaign.code,
+      encounterRef, idempotencyKey: 'phase-1m-a-shared-cancel-a', expectedStateVersion: firstCreated.stateVersion,
+    });
+    await encounterService.cancel({
+      playerRef: second.player.slug, worldRef: second.world.code, campaignRef: second.campaign.code,
+      encounterRef, idempotencyKey: 'phase-1m-a-shared-cancel-b', expectedStateVersion: secondCreated.stateVersion,
+    });
+    const encounters = await prisma.encounter.findMany({
+      where: { encounterRef, campaignId: { in: [first.campaign.id, second.campaign.id] } },
+      include: { consequence: { include: { gameEvent: true } } }, orderBy: { campaignId: 'asc' },
+    });
+    expect(encounters).toHaveLength(2);
+    const keys = encounters.map((entry) => entry.consequence?.gameEvent.idempotencyKey);
+    expect(new Set(keys).size).toBe(2);
+    expect(keys).toEqual(encounters.map((entry) => `encounter-outcome:${entry.id}:v1`));
+  });
+
+  it('serializes confirmation versus cancellation from the same completion candidate', async () => {
+    const encounterRef = 'phase-1m-a-confirm-cancel-race';
+    await encounterService.create({
+      ...seedScope, encounterRef, idempotencyKey: 'phase-1m-a-confirm-cancel-create', partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'near' },
+        { bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'hostile', zone: 'near' },
+      ],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+      ],
+    });
+    const encounter = await prisma.encounter.findFirstOrThrow({
+      where: { encounterRef }, include: { operations: { orderBy: { nextStateVersion: 'desc' }, take: 1 } },
+    });
+    const candidate = {
+      ...parseCoreV1EncounterSnapshot(encounter.stateSnapshot),
+      stateVersion: encounter.stateVersion + 1,
+      completionCandidate: 'stalemate_candidate' as const,
+    };
+    const snapshot = serializeCoreV1EncounterState(candidate);
+    const stateHash = createCoreV1EncounterSnapshotHash(snapshot);
+    const idempotency = await prisma.idempotencyRecord.create({
+      data: { key: 'phase-1m-a-confirm-cancel-preparation', operation: 'encounter.continue', requestHash: 'd'.repeat(64) },
+    });
+    await prisma.$transaction(async (transaction) => {
+      await transaction.encounter.update({
+        where: { id: encounter.id },
+        data: {
+          lifecycleStatus: EncounterLifecycleStatus.COMPLETION_PENDING,
+          stateVersion: candidate.stateVersion,
+          completionCandidate: 'STALEMATE_CANDIDATE', stateSnapshot: snapshot, stateHash,
+        },
+      });
+      await transaction.encounterOperation.create({
+        data: {
+          encounterId: encounter.id, idempotencyRecordId: idempotency.id,
+          operation: EncounterOperationKind.CONTINUE,
+          previousStateVersion: encounter.stateVersion, nextStateVersion: candidate.stateVersion,
+          inputHash: 'd'.repeat(64), beforeStateHash: encounter.stateHash, afterStateHash: stateHash,
+          stopReason: encounter.stopReason,
+          resultSummary: encounter.operations[0]!.resultSummary as Prisma.InputJsonValue,
+        },
+      });
+    });
+    const attempts = await Promise.allSettled([
+      encounterService.confirmCompletion({
+        ...seedScope, encounterRef, idempotencyKey: 'phase-1m-a-confirm-race',
+        expectedStateVersion: candidate.stateVersion,
+      }),
+      encounterService.cancel({
+        ...seedScope, encounterRef, idempotencyKey: 'phase-1m-a-cancel-race',
+        expectedStateVersion: candidate.stateVersion,
+      }),
+    ]);
+    expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+    expect(attempts.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
+    await expect(prisma.encounterConsequence.count({ where: { encounterId: encounter.id } })).resolves.toBe(1);
+    await expect(prisma.gameEvent.count({ where: { idempotencyKey: `encounter-outcome:${encounter.id}:v1` } })).resolves.toBe(1);
+    await expect(prisma.encounterOperation.count({
+      where: { encounterId: encounter.id, operation: { in: [EncounterOperationKind.CONFIRM_COMPLETION, EncounterOperationKind.CANCEL] } },
+    })).resolves.toBe(1);
   });
 
   it('resolves an ephemeral active dodge deterministically without reaction or damage rolls', async () => {
@@ -1866,14 +2389,15 @@ describe('Phase 1L-B transactional encounter adapter', () => {
 });
 
 describe('Phase 1L-C encounter HTTP integration', () => {
-  it('serves the active 20-operation OpenAPI with the runtime base URL', async () => {
-    const response = await request(app).get('/openapi.json');
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({
+  it('serves the active 20-operation OpenAPI with the runtime base URL', () => {
+    const document: Record<string, unknown> = {
+      ...getOfficialContract(),
+      servers: [{ url: config.PUBLIC_BASE_URL ?? `http://localhost:${config.PORT}` }],
+    };
+    expect(document).toMatchObject({
       servers: [{ url: config.PUBLIC_BASE_URL ?? `http://localhost:${config.PORT}` }],
       paths: { '/api/v1/encounters/manage': { post: { operationId: 'manageEncounter' } } },
     });
-    const document = bodyRecord(response);
     const paths = bodyRecord({ body: document.paths });
     const operationIds = Object.values(paths).flatMap((path) => Object.values(bodyRecord({ body: path })))
       .flatMap((operationValue) => {
@@ -2060,7 +2584,18 @@ describe('Phase 1L-C encounter HTTP integration', () => {
       expectedStateVersion: advancedStateVersion,
     });
     expect(cancelled.status).toBe(200);
-    expect(cancelled.body).toMatchObject({ result: 'encounter_cancelled', lifecycleStatus: 'cancelled', nextRequiredAction: { type: 'none' } });
+    expect(cancelled.body).toMatchObject({
+      result: 'encounter_cancelled', lifecycleStatus: 'cancelled', nextRequiredAction: { type: 'none' },
+      consequencesSummary: {
+        schemaVersion: 1, outcome: 'cancelled', actorChanges: [], removedEncounterEffects: [],
+        persistentEvent: { eventType: 'encounter-cancelled', actorRef: 'ralph' },
+      },
+    });
+    const cancelledReplay = await post('/api/v1/encounters/manage', {
+      operation: 'cancel', encounterRef, idempotencyKey: 'phase-1l-c-cancel-001',
+      expectedStateVersion: advancedStateVersion,
+    });
+    expect(cancelledReplay.body).toEqual(cancelled.body);
 
     const crossCampaignParticipant = await post('/api/v1/encounters/manage', {
       operation: 'create', encounterRef: 'phase-1l-c-cross-participant',
@@ -2072,6 +2607,121 @@ describe('Phase 1L-C encounter HTTP integration', () => {
     await prisma.actor.delete({ where: { id: otherInventoryActor.id } });
     await prisma.actor.delete({ where: { id: alternateActor.id } });
     await prisma.campaign.delete({ where: { id: alternateCampaign.id } });
+  });
+
+  it('loads a coherent legacy terminal Encounter without inventing a consequence summary', async () => {
+    const encounterRef = 'phase-1m-a-legacy-terminal-http';
+    await encounterService.create({
+      ...seedScope, encounterRef, idempotencyKey: 'phase-1m-a-legacy-terminal-create', partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'near' },
+        { bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'hostile', zone: 'near' },
+      ],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+      ],
+    });
+    const encounter = await prisma.encounter.findFirstOrThrow({
+      where: { encounterRef }, include: { operations: { orderBy: { nextStateVersion: 'desc' }, take: 1 } },
+    });
+    const cancelled = cancelCoreV1Encounter(parseCoreV1EncounterSnapshot(encounter.stateSnapshot));
+    if (!cancelled.ok) throw new Error('Legacy terminal fixture cancellation failed');
+    const snapshot = serializeCoreV1EncounterState(cancelled.value);
+    const stateHash = createCoreV1EncounterSnapshotHash(snapshot);
+    const idempotency = await prisma.idempotencyRecord.create({
+      data: { key: 'phase-1m-a-legacy-terminal-operation', operation: 'encounter.cancel', requestHash: 'c'.repeat(64) },
+    });
+    await prisma.$executeRawUnsafe('ALTER TABLE "Encounter" DISABLE TRIGGER "Encounter_terminal_requires_consequence"');
+    try {
+      await prisma.$transaction(async (transaction) => {
+        await transaction.encounter.update({
+          where: { id: encounter.id },
+          data: {
+            lifecycleStatus: EncounterLifecycleStatus.CANCELLED,
+            stateVersion: cancelled.value.stateVersion,
+            completionCandidate: 'CANCELLED', stateSnapshot: snapshot, stateHash, closedAt: new Date(),
+          },
+        });
+        await transaction.encounterOperation.create({
+          data: {
+            encounterId: encounter.id, idempotencyRecordId: idempotency.id,
+            operation: EncounterOperationKind.CANCEL,
+            previousStateVersion: encounter.stateVersion, nextStateVersion: cancelled.value.stateVersion,
+            inputHash: 'c'.repeat(64), beforeStateHash: encounter.stateHash, afterStateHash: stateHash,
+            resultSummary: encounter.operations[0]!.resultSummary as Prisma.InputJsonValue,
+          },
+        });
+      });
+    } finally {
+      await prisma.$executeRawUnsafe('ALTER TABLE "Encounter" ENABLE TRIGGER "Encounter_terminal_requires_consequence"');
+    }
+    const loaded = await post('/api/v1/encounters/manage', { operation: 'load', encounterRef });
+    expect(loaded.status).toBe(200);
+    expect(loaded.body).toMatchObject({
+      result: 'encounter_cancelled', lifecycleStatus: 'cancelled', nextRequiredAction: { type: 'none' },
+    });
+    expect(bodyRecord(loaded)).not.toHaveProperty('consequencesSummary');
+    await expect(prisma.encounterConsequence.count({ where: { encounterId: encounter.id } })).resolves.toBe(0);
+    await expect(prisma.encounter.update({
+      where: { id: encounter.id }, data: { updatedAt: new Date() },
+    })).resolves.toMatchObject({ lifecycleStatus: EncounterLifecycleStatus.CANCELLED });
+    await expect(prisma.encounter.update({
+      where: { id: encounter.id },
+      data: { lifecycleStatus: EncounterLifecycleStatus.COMPLETED, completionCandidate: 'PARTY_VICTORY_CANDIDATE' },
+    })).rejects.toThrow(/Terminal Encounter authority is immutable/);
+  });
+
+  it('rolls back the entire terminal write when consequence persistence fails, then retries safely', async () => {
+    const encounterRef = 'phase-1m-a-terminal-rollback';
+    const created = await encounterService.create({
+      ...seedScope, encounterRef, idempotencyKey: 'phase-1m-a-terminal-rollback-create', partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'near' },
+        { bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'hostile', zone: 'near' },
+      ],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+      ],
+    });
+    const encounter = await prisma.encounter.findFirstOrThrow({ where: { encounterRef } });
+    const terminalKey = 'phase-1m-a-terminal-rollback-cancel';
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION phase1ma_test_reject_consequence() RETURNS trigger LANGUAGE plpgsql AS $function$
+      BEGIN
+        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'Encounter consequence terminal rollback injection';
+      END
+      $function$;
+      CREATE TRIGGER phase1ma_test_reject_consequence
+        BEFORE INSERT ON "EncounterConsequence"
+        FOR EACH ROW EXECUTE FUNCTION phase1ma_test_reject_consequence();
+    `);
+    try {
+      await expect(encounterService.cancel({
+        ...seedScope, encounterRef, idempotencyKey: terminalKey, expectedStateVersion: created.stateVersion,
+      })).rejects.toMatchObject({ code: 'ENCOUNTER_DENORMALIZED_DRIFT' });
+    } finally {
+      await prisma.$executeRawUnsafe(`
+        DROP TRIGGER IF EXISTS phase1ma_test_reject_consequence ON "EncounterConsequence";
+        DROP FUNCTION IF EXISTS phase1ma_test_reject_consequence();
+      `);
+    }
+    await expect(prisma.encounter.findUniqueOrThrow({ where: { id: encounter.id } }))
+      .resolves.toMatchObject({ lifecycleStatus: encounter.lifecycleStatus, stateVersion: encounter.stateVersion, closedAt: null });
+    await expect(prisma.encounterConsequence.count({ where: { encounterId: encounter.id } })).resolves.toBe(0);
+    await expect(prisma.gameEvent.count({ where: { idempotencyKey: `encounter-outcome:${encounter.id}:v1` } })).resolves.toBe(0);
+    await expect(prisma.encounterOperation.count({
+      where: { encounterId: encounter.id, operation: EncounterOperationKind.CANCEL },
+    })).resolves.toBe(0);
+    await expect(prisma.idempotencyRecord.count({ where: { key: `encounter:${terminalKey}` } })).resolves.toBe(0);
+    const retried = await encounterService.cancel({
+      ...seedScope, encounterRef, idempotencyKey: terminalKey, expectedStateVersion: created.stateVersion,
+    });
+    expect(retried.consequencesSummary?.outcome).toBe('cancelled');
+    await expect(prisma.encounterConsequence.count({ where: { encounterId: encounter.id } })).resolves.toBe(1);
   });
 });
 
@@ -2237,21 +2887,21 @@ describe('content publication and database immutability', () => {
 
 describe('complete API with real repositories', () => {
   it('serves health in memory without authentication', async () => {
-    const response = await request(app).get('/health');
+    const response = await api.get('/health');
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ status: 'ok' });
   });
 
   it('reports database readiness without leaking connection details', async () => {
-    const response = await request(app).get('/health/ready');
+    const response = await api.get('/health/ready');
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ status: 'ready' });
     expect(JSON.stringify(response.body)).not.toMatch(/postgres|Prisma|game_gpt_test/i);
   });
 
   it('enforces authentication without exposing the configured key', async () => {
-    const absent = await request(app).get('/api/v1/characters/ralph');
-    const wrong = await request(app).get('/api/v1/characters/ralph').set('x-rpg-key', 'wrong-key');
+    const absent = await api.get('/api/v1/characters/ralph');
+    const wrong = await api.get('/api/v1/characters/ralph').set('x-rpg-key', 'wrong-key');
     expect(absent.status).toBe(401);
     expect(wrong.status).toBe(401);
     expect(JSON.stringify([absent.body, wrong.body])).not.toContain(config.RPG_API_KEY);
@@ -2394,10 +3044,10 @@ describe('complete API with real repositories', () => {
 });
 
 describe('GPT v1 persistence with real transactions', () => {
-  const patch = (path: string, body: object) => request(app).patch(path).set('x-rpg-key', config.RPG_API_KEY).send({ ...seedScope, ...body });
+  const patch = (path: string, body: object) => api.patch(path).set('x-rpg-key', config.RPG_API_KEY).send({ ...seedScope, ...body });
 
   it('does not infer the only persisted save when scope refs are absent', async () => {
-    const response = await request(app).post('/api/v1/game/load').set('x-rpg-key', config.RPG_API_KEY).send({});
+    const response = await api.post('/api/v1/game/load').set('x-rpg-key', config.RPG_API_KEY).send({});
     expect(response.status).toBe(400);
     const body = response.body as { error: { code: string; issues: Array<{ path: string }> } };
     expect(body.error.code).toBe('INVALID_INPUT');
@@ -3302,7 +3952,7 @@ describe('GPT v1 persistence with real transactions', () => {
     ]);
 
     const [missingLoadScope, missingActorScope] = await Promise.all([
-      request(app).post('/api/v1/game/load').set('x-rpg-key', config.RPG_API_KEY).send({}),
+      api.post('/api/v1/game/load').set('x-rpg-key', config.RPG_API_KEY).send({}),
       authenticated('/api/v1/actors/shared-hero'),
     ]);
     expect(missingLoadScope.status).toBe(400);
@@ -3638,13 +4288,44 @@ describe('authoritative effect persistence', () => {
     });
     expect(grant.status).toBe(200);
     const hp = await prisma.actorResource.findUniqueOrThrow({ where: { actorId_type: { actorId: source.id, type: 'HP' } } });
-    const reducedHp = Math.max(0, hp.current - 10);
-    await prisma.actorResource.update({ where: { id: hp.id }, data: { current: reducedHp, stateVersion: { increment: 1 } } });
+    const reducedHp = 0;
+    await prisma.$transaction(async (transaction) => {
+      await transaction.actorResource.update({ where: { id: hp.id }, data: { current: reducedHp, stateVersion: { increment: 1 } } });
+      await transaction.actor.update({ where: { id: source.id }, data: { status: 'DEFEATED' } });
+    });
     const body = {
       operation: 'use_consumable', sourceActorRef: source.code, targetActorRef: source.code,
       inventoryEntryRef: 'integration-potion-stack', expectedSourceState: await expectedState(source.id),
       idempotencyKey: 'integration-use-potion-001',
     };
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION phase1ma_test_reject_heal_resolution() RETURNS trigger LANGUAGE plpgsql AS $function$
+      BEGIN
+        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'phase1ma heal rollback injection';
+      END
+      $function$;
+      CREATE TRIGGER phase1ma_test_reject_heal_resolution
+        BEFORE INSERT ON "EffectResolution"
+        FOR EACH ROW EXECUTE FUNCTION phase1ma_test_reject_heal_resolution();
+    `);
+    try {
+      const rolledBack = await post('/api/v1/actors/effects/resolve', {
+        ...body, idempotencyKey: 'integration-use-potion-rollback-001',
+      });
+      expect(rolledBack.status).toBe(500);
+    } finally {
+      await prisma.$executeRawUnsafe(`
+        DROP TRIGGER IF EXISTS phase1ma_test_reject_heal_resolution ON "EffectResolution";
+        DROP FUNCTION IF EXISTS phase1ma_test_reject_heal_resolution();
+      `);
+    }
+    await expect(prisma.actorResource.findUniqueOrThrow({ where: { id: hp.id } }))
+      .resolves.toMatchObject({ current: 0 });
+    await expect(prisma.actor.findUniqueOrThrow({ where: { id: source.id } }))
+      .resolves.toMatchObject({ status: 'DEFEATED' });
+    await expect(prisma.inventoryEntry.findUnique({
+      where: { actorId_entryRef: { actorId: source.id, entryRef: 'integration-potion-stack' } },
+    })).resolves.not.toBeNull();
     const first = await post('/api/v1/actors/effects/resolve', body);
     expect(first.status).toBe(200);
     expect(first.body).toMatchObject({
@@ -3652,7 +4333,8 @@ describe('authoritative effect persistence', () => {
       inventoryChanges: [{ entryRef: 'integration-potion-stack', change: 'consumed' }], rolls: [],
     });
     await expect(prisma.inventoryEntry.findUnique({ where: { actorId_entryRef: { actorId: source.id, entryRef: 'integration-potion-stack' } } })).resolves.toBeNull();
-    await expect(prisma.actorResource.findUniqueOrThrow({ where: { id: hp.id } })).resolves.toMatchObject({ current: hp.current });
+    await expect(prisma.actorResource.findUniqueOrThrow({ where: { id: hp.id } })).resolves.toMatchObject({ current: 10 });
+    await expect(prisma.actor.findUniqueOrThrow({ where: { id: source.id } })).resolves.toMatchObject({ status: 'ACTIVE' });
     const replay = await post('/api/v1/actors/effects/resolve', body);
     expect(replay.status).toBe(200);
     expect(replay.body).toEqual(first.body);

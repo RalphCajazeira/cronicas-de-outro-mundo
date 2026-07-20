@@ -261,3 +261,15 @@ O DTO persistido para replay contém a próxima ação fechada e, quando houve p
 O OpenAPI ativo passa de 19 para 20 `operationIds`, mantém `RpgApiKey`, objetos fechados, enums e limites explícitos e documenta `x-request-id`. Requests mantêm refs de até 100 caracteres; refs runtime sanitizadas já persistidas no DTO podem ter até 160 para preservar a leitura de efêmeros internos. O limite global Express permanece `100kb`; com refs de request de 100 caracteres, 64 participantes, 128 overrides e todos os campos no máximo, o pior `create` serializado mede 51.295 bytes e preserva margem de 51.105 bytes até o teto de 102.400. Não há dependência, migration, alteração de schema, deploy, acesso remoto ou atualização do GPT ao vivo nesta fase.
 
 Status: implementada e validada localmente na Fase 1L-C; staging e GPT permanecem pendentes para 1L-D
+
+### Fase 1M-A — encerramento consequente e auditável
+
+`confirm_completion` e `cancel` permanecem operações sem payload técnico adicional dentro da única Action `manageEncounter`. O backend deriva `party_victory`, `party_defeat`, `stalemate` ou `cancelled` e confirma Encounter, status, limpeza, recomposição, operação, evento, ledger e resposta idempotente na mesma transação.
+
+`EncounterConsequence` é o ledger terminal único e append-only. Seu JSON schema 1 é fechado, validado em leitura/escrita, canonicamente ordenado, limitado a 1 MiB UTF-8 e contém status, versões, recursos e refs internas dos efeitos removidos. A projeção pública reduz isso a mudanças de status, contagens e evento; não expõe UUID, hash, snapshot, roll, effectRef ou versão interna.
+
+`ActiveEffect.originEncounterId` é nullable para preservar efeitos legados. Novos efeitos `ENCOUNTER` exigem origem do orquestrador, efeitos de outros scopes proíbem origem e ownership não pode ser adotado ou trocado. A finalização remove somente efeitos do encontro e participantes persistidos, recompõe cada ator afetado uma vez e preserva efeitos legados ou pertencentes a outro encontro.
+
+Encontros abertos continuam validados contra as autoridades atuais. Encontros terminais novos validam snapshot, cadeia, operação, consequência e GameEvent sem exigir que Actor/inventário/efeitos permaneçam congelados depois do encerramento. Terminais históricos sem ledger continuam legíveis e não recebem consequência retroativa.
+
+Status: implementação local não integrada da Fase 1M-A; staging e GPT ainda usam o contrato anterior, e migration remota, deploy e alteração do GPT ao vivo não foram executados

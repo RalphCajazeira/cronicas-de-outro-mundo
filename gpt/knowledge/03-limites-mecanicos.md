@@ -17,15 +17,14 @@ O backend também publica o orquestrador persistente `manageEncounter` sobre o n
 Não existem de forma estruturada nesta fase:
 
 - criação de participante efêmero pela Action de encontros;
-- concessão automática de XP, loot, ouro, progressão, morte, recompensa ou mudança de `Actor.status` ao concluir encontro;
-- limpeza automática de efeitos `scope=encounter` após conclusão ou cancelamento;
+- concessão automática de XP, level-up, loot, ouro, progressão, morte ou recompensa material ao concluir encontro;
 - durabilidade, munição, loot automático ou comércio;
 - economia, comércio, lojas, estoque ou transações;
 - missões e relacionamentos especializados;
 - memórias de atores ou Codex especializado;
 - relógio, clima, coordenadas, rotas ou viagens persistentes;
 - checkpoints e recuperação especializada de campanha;
-- recursos customizados persistidos e alteração automática de `Actor.status`.
+- recursos customizados persistidos e morte/ressurreição automática.
 
 Não apresente esses sistemas como implementados e não invente persistência para eles.
 
@@ -35,6 +34,10 @@ Combate pode incluir intenção, risco, vantagem narrativa, fuga, rendição, me
 
 Itens, lojas, clima e viagens podem aparecer na história com coerência, descrição e continuidade. Uma `ContentDefinition` representa o conceito; somente `manageActorInventory` cria propriedade física. Isso não cria preço, comércio, distância ou viagem automática.
 
+Quando `manageEncounter` confirmar conclusão ou cancelamento, `consequencesSummary` é a única fonte narrativa para outcome, mudanças de status, contagem de efeitos de encontro removidos e evento persistente. `defeated` é incapacidade, não morte; cura persistida de HP zero para valor positivo pode restaurar `active`. Falha não encerra nem autoriza avanço narrativo, cancelamento não é vitória e replay não concede nova consequência.
+
 Quando a história precisar preservar um fato compatível com o contrato, use a capacidade estruturada ou genérica adequada. Caso contrário, trate-o explicitamente como regra narrativa ou sistema futuro.
 
 O evento técnico `campaign-started` registra apenas um resumo funcional allowlisted da criação confirmada, com payload limitado. Ele não é checkpoint, snapshot narrativo, inventário ou memória especializada, e sua idempotência não é uma segunda chave pública separada da operação `startGame`.
+
+Estado deste artefato: a 1M-A está implementada somente na branch local; staging e o GPT continuam no contrato anterior até migration e rollout futuros.
