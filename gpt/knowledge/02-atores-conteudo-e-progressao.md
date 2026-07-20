@@ -4,7 +4,7 @@
 
 `Actor` representa personagem ou figura individual relevante. Possui `code` estável, identidade básica, descrição, metadados, estado e ficha mecânica autoritativa calculada pelo backend. Os tipos atuais são `character`, `npc`, `creature`, `companion` e `spirit`.
 
-A ficha pública contém nove `primaryAttributes`, recursos atuais/máximos de HP, Mana e SP com `stateVersion`, `secondaryAttributes`, versões de mecânica/inventário/efeitos e ruleset. O GPT propõe os atributos iniciais e, para NPC/criatura, nível 1–20; não propõe máximos nem derivados. Recursos começam cheios. A Action futura `resolveActorEffect` pode gastar/restaurar recursos e aplicar dano de forma autoritativa; cada escrita exige os tokens lidos imediatamente antes.
+A ficha pública contém nove `primaryAttributes`, recursos atuais/máximos de HP, Mana e SP com `stateVersion`, `secondaryAttributes`, versões de mecânica/inventário/efeitos e ruleset. O GPT propõe os atributos iniciais e, para NPC/criatura, nível 1–20; não propõe máximos nem derivados. Recursos começam cheios. `resolveActorEffect` pode gastar/restaurar recursos e aplicar dano de forma autoritativa; cada escrita exige os tokens lidos imediatamente antes. Dentro de um encontro, `manageEncounter` é o orquestrador obrigatório e recebe somente intenção.
 
 `ContentDefinition` representa a identidade estável de conteúdo reutilizável no mundo ou em uma campanha. Nome, descrição, perfil, apresentação, tags e metadados pertencem a uma `ContentVersion` imutável. Os 13 tipos canônicos são arma, armadura, escudo, roupa, magia, habilidade, talento, item, consumível, efeito de estado, raça, classe e modelo de criatura. Material, localização, facção, modelo de missão, receita e outros continuam narrativos genéricos, sem perfil mecânico.
 
@@ -17,6 +17,8 @@ O inventário físico é separado: entradas são instâncias ou stacks fixados e
 `GameEvent` registra um fato narrativo da campanha, opcionalmente ligado a um ator. Um evento não cria automaticamente um subsistema de missão, memória, relacionamento ou inventário.
 
 Efeitos ativos usam refs públicas e podem ser consultados por `resolveActorEffect(operation=get)`. `loadGame` traz somente contagem resumida. O uso de consumível reduz/remove a entrada física na mesma transação dos efeitos; conhecer um consumível continua sem conceder posse.
+
+Encontros persistentes vinculam apenas atores já existentes na Campaign quando usados pela Action. Suas respostas projetam HP/Mana/SP e indicam o próximo passo autoritativo em `nextRequiredAction`. Conclusão ou cancelamento não cria automaticamente XP, loot, ouro, progressão, morte ou recompensa, e efeitos `scope=encounter` ainda não são removidos automaticamente.
 
 ## Uso responsável
 
