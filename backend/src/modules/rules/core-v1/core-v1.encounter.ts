@@ -1531,11 +1531,13 @@ function assertDefinitionMatchesIntent(
   if (!isStableRef(intent.slotRef)) issues.push(issue('intent.slotRef', 'PUBLIC_REF', 'Slot ref is invalid'));
   if (definition.actionSource !== intent.actionSource) issues.push(issue('definition.actionSource', 'ACTION_SOURCE_MATCH', 'Resolved definition must match the intent action source'));
   if (definition.contentRef !== undefined) {
-    if (intent.contentRef === undefined
-      || !contentRefMatches(definition.contentRef, intent.contentRef)) {
+    if ((intent.actionSource === 'content' && intent.contentRef === undefined)
+      || (intent.contentRef !== undefined && !contentRefMatches(definition.contentRef, intent.contentRef))) {
       issues.push(issue('intent.contentRef', 'CONTENT_VERSION_MATCH', 'Intent and authoritative definition must use the same content version'));
     }
-  } else if (intent.contentRef !== undefined) issues.push(issue('intent.contentRef', 'UNEXPECTED_CONTENT_REF', 'This action source does not accept a content ref'));
+  } else if (intent.contentRef !== undefined) {
+    issues.push(issue('intent.contentRef', 'UNEXPECTED_CONTENT_REF', 'This action source does not accept a content ref'));
+  }
   if (!isArrayValue(intent.requestedTargetRefs)
     || new Set(intent.requestedTargetRefs).size !== intent.requestedTargetRefs.length) {
     issues.push(issue('intent.requestedTargetRefs', 'UNIQUE_ARRAY', 'Requested target refs must be a unique array'));

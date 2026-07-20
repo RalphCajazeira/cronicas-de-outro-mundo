@@ -1442,10 +1442,11 @@ describe('core-v1 action compile, timeline and effects composition', () => {
       actionTags: ['item'], allowedRelations: ['self'], physicalSpeed,
       interruptible: false, blockable: false, dodgeable: false,
     });
-    const potionIntent = intent({
+    const potionIntent: CoreV1EncounterActionIntent = {
+      intentRef: 'potion-intent', sourceActorRef: 'hero', slotRef: 'primary',
       actionSource: 'consumable', targetSelector: 'self', requestedTargetRefs: [],
-      contentRef: contentVersion, weaponEntryRef: 'potion-stack',
-    });
+      weaponEntryRef: 'potion-stack',
+    };
     const applied = expectOk(applyCoreV1EncounterIntent({
       encounter: state, intent: potionIntent, definition: potionDefinition,
       targetingContext: { candidates: candidates(state) }, runtime: noDamageRuntime,
@@ -1457,6 +1458,65 @@ describe('core-v1 action compile, timeline and effects composition', () => {
     expect(finalHero?.resources.hp.current).toBe(90);
     expect(finalHero?.equipmentContext.inventory.entries).toEqual([]);
     expect(effectRollRequests).toBe(0);
+  });
+
+  it('resolves a basic weapon version only from the equipped inventory entry', () => {
+    const weaponProfile: CoreV1MechanicalContentProfile = {
+      schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical',
+      contentKind: 'weapon', code: 'test-bow', name: 'Test Bow',
+      tier: 1, rarity: 'common', activation: { type: 'active' }, cost: { type: 'none' },
+      actionProfile: 'normal',
+      targeting: { type: 'single_target', rangeBand: 'engaged', maxTargets: 1 },
+      damageComponents: [{
+        id: 'test-bow-hit', channel: 'physical', element: null,
+        baseDamage: 4, scaling: 'full', canCrit: true,
+      }],
+      handedness: 'two_handed', weaponTags: ['bow'],
+    };
+    const contentVersion = {
+      scope: 'world' as const, contentType: 'weapon' as const, code: 'test-bow', versionNumber: 1,
+    };
+    const loadout = {
+      slots: createCoreV1EmptyEquipmentLoadout().slots.map((slot) => (
+        slot.slotRef === 'main_hand' || slot.slotRef === 'off_hand'
+          ? { ...slot, entryRef: 'test-bow-1' }
+          : slot
+      )),
+    };
+    const hero = participant('hero', 'party', {
+      equipmentContext: {
+        inventory: { entries: [{
+          entryKind: 'instance', entryRef: 'test-bow-1', contentVersion,
+          inventorySpec: {
+            schemaVersion: 1, rulesetCode: 'core-v1', inventoryRulesCode: 'core-v1-inventory-v1',
+            unitWeight: 10, stacking: { mode: 'unique' },
+            equipmentSlots: ['main_hand', 'off_hand'], handedness: 'two_handed',
+          },
+          profile: weaponProfile, state: 'equipped',
+        }] },
+        loadout,
+        requirements: {
+          level: 1, primaryAttributes: balanced, knownContentRefs: [],
+          equippedWeaponTags: ['bow'], equippedEquipmentTags: [], rulesetCode: 'core-v1',
+        },
+      },
+    });
+    const state = readyEncounter([hero, participant('enemy', 'hostile')]);
+    const weaponIntent: CoreV1EncounterActionIntent = {
+      intentRef: 'weapon-intent', sourceActorRef: 'hero', slotRef: 'primary',
+      actionSource: 'basic_weapon_attack', targetSelector: 'explicit',
+      requestedTargetRefs: ['enemy'], weaponEntryRef: 'test-bow-1',
+    };
+    const weaponDefinition = definition(weaponProfile, {
+      actionSource: 'basic_weapon_attack', contentRef: contentVersion,
+    });
+
+    expect(compileCoreV1EncounterAction({
+      encounter: state,
+      intent: weaponIntent,
+      definition: weaponDefinition,
+      targetingContext: { candidates: candidates(state) },
+    }).ok).toBe(true);
   });
 
   it('preserves action cost on miss, injects critical independently and carries updated actors', () => {
