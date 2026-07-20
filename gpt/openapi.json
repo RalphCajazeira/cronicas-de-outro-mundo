@@ -916,6 +916,41 @@
           }
         }
       }
+    },
+    "/api/v1/encounters/manage": {
+      "post": {
+        "operationId": "manageEncounter",
+        "tags": ["Encounters"],
+        "summary": "Criar, carregar ou avançar um encontro autoritativo",
+        "description": "Action única com sete operações fechadas. load é somente leitura e proíbe idempotencyKey/expectedStateVersion. create e todas as mutações exigem idempotencyKey no corpo; repetir a mesma chave com o mesmo payload devolve exatamente o DTO confirmado. submit_intent, resolve_reaction, continue, confirm_completion e cancel exigem expectedStateVersion; em STATE_VERSION_CONFLICT execute load para obter a versão atual. Rolls, resultados mecânicos, snapshot e IDs internos nunca são aceitos.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ManageEncounterInput" },
+              "examples": {
+                "create": { "value": { "operation": "create", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-create-001", "partySideRef": "party", "participants": [{ "actorRef": "ralph", "sideRef": "party", "zone": "near" }, { "actorRef": "goblin-scout", "sideRef": "hostiles", "zone": "medium" }] } },
+                "load": { "value": { "operation": "load", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush" } },
+                "submit_intent": { "value": { "operation": "submit_intent", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-intent-001", "expectedStateVersion": 1, "intent": { "actorRef": "ralph", "slotRef": "primary", "actionSource": "basic_weapon_attack", "targetSelector": "explicit", "targetRefs": ["goblin-scout"], "inventoryEntryRef": "iron-sword", "versatileMode": "one_handed" } } },
+                "resolve_reaction": { "value": { "operation": "resolve_reaction", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-reaction-001", "expectedStateVersion": 2, "reactorRef": "ralph", "reactionKind": "block" } },
+                "continue": { "value": { "operation": "continue", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-continue-001", "expectedStateVersion": 3 } },
+                "confirm_completion": { "value": { "operation": "confirm_completion", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-complete-001", "expectedStateVersion": 4 } },
+                "cancel": { "value": { "operation": "cancel", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-cancel-001", "expectedStateVersion": 4 } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "DTO reduzido confirmado ou replay idempotente idêntico", "headers": { "x-request-id": { "$ref": "#/components/headers/RequestId" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EncounterResult" } } } },
+          "400": { "$ref": "#/components/responses/InvalidInput" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/UnprocessableEncounter" },
+          "500": { "$ref": "#/components/responses/InternalError" },
+          "503": { "$ref": "#/components/responses/TemporaryUnavailable" }
+        }
+      }
     }
   },
   "components": {
@@ -925,6 +960,12 @@
         "in": "header",
         "name": "x-rpg-key",
         "description": "Chave interna provisória armazenada somente como secret."
+      }
+    },
+    "headers": {
+      "RequestId": {
+        "description": "Identificador opaco da requisição para suporte e auditoria.",
+        "schema": { "type": "string", "format": "uuid" }
       }
     },
     "parameters": {
@@ -980,6 +1021,7 @@
     "responses": {
       "InvalidInput": {
         "description": "Entrada inválida",
+        "headers": { "x-request-id": { "$ref": "#/components/headers/RequestId" } },
         "content": {
           "application/json": {
             "schema": {
@@ -990,6 +1032,7 @@
       },
       "Unauthorized": {
         "description": "Chave ausente ou inválida, sem distinção observável",
+        "headers": { "x-request-id": { "$ref": "#/components/headers/RequestId" } },
         "content": {
           "application/json": {
             "schema": {
@@ -1000,6 +1043,7 @@
       },
       "NotFound": {
         "description": "Recurso não encontrado",
+        "headers": { "x-request-id": { "$ref": "#/components/headers/RequestId" } },
         "content": {
           "application/json": {
             "schema": {
@@ -1010,6 +1054,7 @@
       },
       "Conflict": {
         "description": "Conflito de estado ou reutilização incompatível de idempotencyKey",
+        "headers": { "x-request-id": { "$ref": "#/components/headers/RequestId" } },
         "content": {
           "application/json": {
             "schema": {
@@ -1018,8 +1063,19 @@
           }
         }
       },
+      "UnprocessableEncounter": {
+        "description": "Intenção, participante ou contexto espacial rejeitado pela autoridade do backend",
+        "headers": { "x-request-id": { "$ref": "#/components/headers/RequestId" } },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "TemporaryUnavailable": {
+        "description": "Transação temporariamente indisponível; repetir o mesmo payload e idempotencyKey",
+        "headers": { "x-request-id": { "$ref": "#/components/headers/RequestId" } },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
       "InternalError": {
         "description": "Erro interno seguro, sem detalhes de infraestrutura",
+        "headers": { "x-request-id": { "$ref": "#/components/headers/RequestId" } },
         "content": {
           "application/json": {
             "schema": {
@@ -1038,6 +1094,16 @@
         "not": {
           "format": "uuid"
         }
+      },
+      "EncounterRuntimeRef": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160,
+        "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$",
+        "not": {
+          "format": "uuid"
+        },
+        "description": "Ref sanitizada já persistida no runtime do encontro; o request continua limitado a Code (100 caracteres)."
       },
       "IdempotencyKey": {
         "type": "string",
@@ -1068,6 +1134,150 @@
           "campaignRef": {
             "$ref": "#/components/schemas/Code"
           }
+        }
+      },
+      "EncounterParticipantInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["actorRef", "sideRef", "zone"],
+        "properties": {
+          "actorRef": { "$ref": "#/components/schemas/Code" },
+          "sideRef": { "$ref": "#/components/schemas/Code" },
+          "zone": { "type": "string", "enum": ["engaged", "near", "medium", "far", "out_of_range"] },
+          "surprised": { "type": "boolean" }
+        }
+      },
+      "EncounterRelationOverride": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["leftActorRef", "rightActorRef", "relation"],
+        "properties": {
+          "leftActorRef": { "$ref": "#/components/schemas/Code" },
+          "rightActorRef": { "$ref": "#/components/schemas/Code" },
+          "relation": { "type": "string", "enum": ["ally", "hostile", "neutral"] }
+        },
+        "description": "Par distinto e único de participantes. self é sempre derivado pelo backend."
+      },
+      "EncounterContentReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["scope", "contentType", "code", "versionNumber"],
+        "properties": {
+          "scope": { "type": "string", "enum": ["world", "campaign"] },
+          "contentType": { "type": "string", "enum": ["skill", "spell", "weapon", "armor", "shield", "clothing", "item", "consumable", "talent", "status_effect"] },
+          "code": { "$ref": "#/components/schemas/Code" },
+          "versionNumber": { "type": "integer", "minimum": 1, "maximum": 2147483647 }
+        }
+      },
+      "EncounterIntentInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["actorRef", "slotRef", "actionSource", "targetSelector"],
+        "properties": {
+          "actorRef": { "$ref": "#/components/schemas/Code" },
+          "slotRef": { "$ref": "#/components/schemas/Code", "description": "Ref estável do slot retornado em nextRequiredAction; não é limitado a primary/secondary no contrato." },
+          "actionSource": { "type": "string", "enum": ["content", "consumable", "basic_weapon_attack"] },
+          "targetSelector": { "type": "string", "enum": ["self", "explicit", "nearest_hostile", "lowest_hp_hostile", "nearest_ally"] },
+          "targetRefs": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
+          "contentRef": { "$ref": "#/components/schemas/EncounterContentReference" },
+          "inventoryEntryRef": { "$ref": "#/components/schemas/Code" },
+          "versatileMode": { "type": "string", "enum": ["one_handed", "two_handed"] }
+        },
+        "allOf": [
+          { "if": { "properties": { "targetSelector": { "const": "explicit" } }, "required": ["targetSelector"] }, "then": { "required": ["targetRefs"] } },
+          { "if": { "properties": { "targetSelector": { "enum": ["self", "nearest_hostile", "lowest_hp_hostile", "nearest_ally"] } }, "required": ["targetSelector"] }, "then": { "not": { "required": ["targetRefs"] } } },
+          { "if": { "properties": { "actionSource": { "const": "content" } }, "required": ["actionSource"] }, "then": { "required": ["contentRef"], "allOf": [{ "not": { "required": ["inventoryEntryRef"] } }, { "not": { "required": ["versatileMode"] } }] } },
+          { "if": { "properties": { "actionSource": { "const": "consumable" } }, "required": ["actionSource"] }, "then": { "required": ["inventoryEntryRef"], "allOf": [{ "not": { "required": ["contentRef"] } }, { "not": { "required": ["versatileMode"] } }] } },
+          { "if": { "properties": { "actionSource": { "const": "basic_weapon_attack" } }, "required": ["actionSource"] }, "then": { "required": ["inventoryEntryRef"], "not": { "required": ["contentRef"] } } }
+        ],
+        "description": "Somente intenção. intentRef é derivada; rolls, hit, crítico, dano, custos e outcomes são proibidos."
+      },
+      "ManageEncounterInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation", "playerRef", "worldRef", "campaignRef", "encounterRef"],
+        "properties": {
+          "operation": { "type": "string", "enum": ["create", "load", "submit_intent", "resolve_reaction", "continue", "confirm_completion", "cancel"] },
+          "playerRef": { "$ref": "#/components/schemas/Code" },
+          "worldRef": { "$ref": "#/components/schemas/Code" },
+          "campaignRef": { "$ref": "#/components/schemas/Code" },
+          "encounterRef": { "$ref": "#/components/schemas/Code" },
+          "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" },
+          "expectedStateVersion": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+          "partySideRef": { "$ref": "#/components/schemas/Code" },
+          "participants": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/components/schemas/EncounterParticipantInput" } },
+          "relationOverrides": { "type": "array", "maxItems": 128, "items": { "$ref": "#/components/schemas/EncounterRelationOverride" } },
+          "intent": { "$ref": "#/components/schemas/EncounterIntentInput" },
+          "reactorRef": { "$ref": "#/components/schemas/Code" },
+          "reactionKind": { "type": "string", "enum": ["block", "active_dodge", "interrupt", "counter_attack"] }
+        },
+        "allOf": [
+          { "if": { "properties": { "operation": { "const": "create" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "participants"], "allOf": [{ "not": { "required": ["expectedStateVersion"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } },
+          { "if": { "properties": { "operation": { "const": "load" } }, "required": ["operation"] }, "then": { "allOf": [{ "not": { "required": ["idempotencyKey"] } }, { "not": { "required": ["expectedStateVersion"] } }, { "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } },
+          { "if": { "properties": { "operation": { "const": "submit_intent" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion", "intent"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } },
+          { "if": { "properties": { "operation": { "const": "resolve_reaction" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion", "reactorRef", "reactionKind"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }] } },
+          { "if": { "properties": { "operation": { "enum": ["continue", "confirm_completion", "cancel"] } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } }
+        ],
+        "description": "Objeto multiplexado fechado. Cada operação possui campos obrigatórios e proibidos próprios. create aceita somente participantes persistidos. O pior payload válido (64 participantes, 128 overrides e refs no máximo) mede 51.295 bytes e permanece abaixo dos 102.400 bytes globais."
+      },
+      "EncounterResourcePool": {
+        "type": "object", "additionalProperties": false, "required": ["current", "maximum"],
+        "properties": { "current": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }, "maximum": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 } }
+      },
+      "EncounterParticipant": {
+        "type": "object", "additionalProperties": false,
+        "required": ["actorRef", "bindingKind", "sideRef", "combatState", "zone", "resources"],
+        "properties": {
+          "actorRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" },
+          "bindingKind": { "type": "string", "enum": ["persisted_actor", "ephemeral"] },
+          "sideRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" },
+          "combatState": { "type": "string", "enum": ["ready", "preparing", "casting", "moving", "recovering", "incapacitated_candidate", "removed"] },
+          "zone": { "type": "string", "enum": ["engaged", "near", "medium", "far", "out_of_range"] },
+          "resources": { "type": "object", "additionalProperties": false, "required": ["hp", "mana", "sp"], "properties": { "hp": { "$ref": "#/components/schemas/EncounterResourcePool" }, "mana": { "$ref": "#/components/schemas/EncounterResourcePool" }, "sp": { "$ref": "#/components/schemas/EncounterResourcePool" } } }
+        }
+      },
+      "EncounterNextRequiredAction": {
+        "type": "object", "additionalProperties": false, "required": ["type"],
+        "properties": {
+          "type": { "type": "string", "enum": ["submit_intent", "resolve_reaction", "continue", "confirm_completion", "none"] },
+          "actors": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "object", "additionalProperties": false, "required": ["actorRef", "readySlotRefs"], "properties": { "actorRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" }, "readySlotRefs": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/components/schemas/EncounterRuntimeRef" } } } } },
+          "reactorRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" },
+          "reactionKind": { "type": "string", "enum": ["block", "active_dodge", "interrupt", "counter_attack"] },
+          "completionCandidate": { "type": "string", "enum": ["party_victory_candidate", "hostile_victory_candidate", "stalemate_candidate", "cancelled"] }
+        },
+        "allOf": [
+          { "if": { "properties": { "type": { "const": "submit_intent" } }, "required": ["type"] }, "then": { "required": ["actors"], "allOf": [{ "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }, { "not": { "required": ["completionCandidate"] } }] } },
+          { "if": { "properties": { "type": { "const": "resolve_reaction" } }, "required": ["type"] }, "then": { "required": ["reactorRef", "reactionKind"], "allOf": [{ "not": { "required": ["actors"] } }, { "not": { "required": ["completionCandidate"] } }] } },
+          { "if": { "properties": { "type": { "const": "confirm_completion" } }, "required": ["type"] }, "then": { "required": ["completionCandidate"], "allOf": [{ "not": { "required": ["actors"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } },
+          { "if": { "properties": { "type": { "enum": ["continue", "none"] } }, "required": ["type"] }, "then": { "allOf": [{ "not": { "required": ["actors"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }, { "not": { "required": ["completionCandidate"] } }] } }
+        ]
+      },
+      "EncounterTransitionSummary": {
+        "type": "object", "additionalProperties": false, "required": ["processedEventCount", "events", "changes"],
+        "properties": {
+          "processedEventCount": { "type": "integer", "minimum": 1, "maximum": 32 },
+          "events": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "type": "object", "additionalProperties": false, "required": ["category"], "properties": { "category": { "type": "string", "enum": ["action_started", "action_resolved", "damage_applied", "resource_changed", "effect_applied", "effect_removed", "movement_resolved", "reaction_resolved", "participant_state_changed"] }, "actorRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" }, "targetRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" } } } },
+          "changes": { "type": "array", "maxItems": 64, "items": { "type": "object", "additionalProperties": false, "required": ["actorRef", "categories"], "properties": { "actorRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" }, "categories": { "type": "array", "minItems": 1, "maxItems": 9, "uniqueItems": true, "items": { "type": "string", "enum": ["action_started", "action_resolved", "damage_applied", "resource_changed", "effect_applied", "effect_removed", "movement_resolved", "reaction_resolved", "participant_state_changed"] } }, "resources": { "type": "object", "minProperties": 1, "additionalProperties": false, "properties": { "hp": { "$ref": "#/components/schemas/EncounterResourceDelta" }, "mana": { "$ref": "#/components/schemas/EncounterResourceDelta" }, "sp": { "$ref": "#/components/schemas/EncounterResourceDelta" } } }, "zone": { "$ref": "#/components/schemas/EncounterZoneChange" }, "combatState": { "$ref": "#/components/schemas/EncounterCombatStateChange" }, "activeEffects": { "type": "object", "additionalProperties": false, "required": ["applied", "removed"], "properties": { "applied": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }, "removed": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 } } } } } }
+        },
+        "description": "Resumo allowlisted; nunca contém fila, eventRef, actionRef, rolls, hashes ou definições mecânicas."
+      },
+      "EncounterResourceDelta": { "type": "object", "additionalProperties": false, "required": ["before", "after", "delta"], "properties": { "before": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }, "after": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }, "delta": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 } } },
+      "EncounterZoneChange": { "type": "object", "additionalProperties": false, "required": ["before", "after"], "properties": { "before": { "type": "string", "enum": ["engaged", "near", "medium", "far", "out_of_range"] }, "after": { "type": "string", "enum": ["engaged", "near", "medium", "far", "out_of_range"] } } },
+      "EncounterCombatStateChange": { "type": "object", "additionalProperties": false, "required": ["before", "after"], "properties": { "before": { "type": "string", "enum": ["ready", "preparing", "casting", "moving", "recovering", "incapacitated_candidate", "removed"] }, "after": { "type": "string", "enum": ["ready", "preparing", "casting", "moving", "recovering", "incapacitated_candidate", "removed"] } } },
+      "EncounterResult": {
+        "type": "object", "additionalProperties": false,
+        "required": ["result", "encounterRef", "lifecycleStatus", "stateVersion", "currentTick", "stopReason", "completionCandidate", "participants", "nextRequiredAction"],
+        "properties": {
+          "result": { "type": "string", "enum": ["encounter_created", "encounter_loaded", "intent_accepted", "reaction_required", "reaction_resolved", "processing_paused", "new_intent_required", "completion_confirmation_required", "encounter_completed", "encounter_cancelled", "encounter_failed"] },
+          "encounterRef": { "$ref": "#/components/schemas/Code" },
+          "lifecycleStatus": { "type": "string", "enum": ["awaiting_intent", "awaiting_reaction", "processing_paused", "completion_pending", "completed", "failed", "cancelled"] },
+          "stateVersion": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+          "currentTick": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "description": "Decimal canônico seguro, sem conversão para JSON number." },
+          "stopReason": { "type": ["string", "null"], "enum": ["plan_completed", "actor_incapacitated", "hostile_became_ready", "target_set_changed", "resource_below_required", "zone_changed", "new_threat_detected", "state_version_changed", "processing_limit", "no_valid_target", "reaction_required", "new_intent_required", "encounter_completed", "encounter_failed", null] },
+          "completionCandidate": { "type": ["string", "null"], "enum": ["party_victory_candidate", "hostile_victory_candidate", "stalemate_candidate", "cancelled", null] },
+          "participants": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/components/schemas/EncounterParticipant" } },
+          "nextRequiredAction": { "$ref": "#/components/schemas/EncounterNextRequiredAction" },
+          "transitionSummary": { "$ref": "#/components/schemas/EncounterTransitionSummary" }
         }
       },
       "Appearance": {
@@ -1728,10 +1938,11 @@
               },
               "retryable": {
                 "type": "boolean",
-                "description": "Somente INVALID_INPUT pode orientar uma nova tentativa corrigida."
+                "description": "Verdadeiro somente para falha temporária que aceita o mesmo payload e idempotencyKey."
               },
-              "retryInstruction": {
-                "type": "string"
+              "recoveryAction": {
+                "type": "string",
+                "enum": ["correct_request", "load_encounter", "use_new_idempotency_key", "choose_new_intent", "retry_same_request", "stop_encounter_flow"]
               },
               "issues": {
                 "type": "array",

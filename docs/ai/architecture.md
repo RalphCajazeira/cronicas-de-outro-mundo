@@ -125,7 +125,7 @@ Para escritas GPT, o resumo preserva os dados operacionais necessários ao diagn
 
 No Render, investigar primeiro pelo texto `http_request_completed`, depois restringir por `path`, `statusCode`, `requestId` ou fingerprint. A retenção do plano Free é operacionalmente limitada; os logs são diagnóstico temporário, não fonte de verdade nem armazenamento narrativo.
 
-Respostas `400 INVALID_INPUT` incluem `retryable`, uma instrução curta e uma lista `issues` com `path`, `code` e mensagem de correção sem ecoar o valor rejeitado. O GPT corrige somente os campos indicados e tenta uma vez; autenticação, ausência, conflito e erro interno não autorizam retry automático. Esse retorno melhora a recuperação de payloads incompletos sem transformar falhas em loops ou escritas duplicadas.
+Respostas `400 INVALID_INPUT` incluem `retryable: false`, `recoveryAction: correct_request` e uma lista `issues` com `path`, `code` e mensagem de correção sem ecoar o valor rejeitado. O cliente pode formular uma nova requisição corrigida, mas não deve tratar o mesmo payload como retry automático. Autenticação, ausência, conflito não temporário e erro interno também não autorizam retry automático.
 
 `startGame` cria ou reutiliza explicitamente Player e World sem atualizá-los, sempre cria uma Campaign nova e persiste em uma única transação idempotente as configurações `worldConfig`/`campaignConfig` de versão 1, protagonista completo, até 24 definições/vínculos iniciais e o evento técnico `campaign-started`. Configuração, aparência, personalidade, origem e limites são validados no backend; o perfil efetivo de dificuldade é calculado, nunca aceito do cliente. Não há migration, checkpoint, inventário por instância ou slots físicos. `NOT_FOUND` em `loadGame` inicia a configuração e reset continua administrativo, nunca uma Action destrutiva.
 
@@ -248,4 +248,16 @@ Cada operação mutante usa uma transação e `IdempotencyRecord`: claim, Campai
 
 Recursos usam update condicional por versão; inventário e efeitos incrementam suas versões e `mechanicsStateVersion` uma vez por Actor alterado, recompõem o derivado e são recarregados antes do snapshot. Efêmeros permanecem locais; origem efêmera para efeito persistente é recusada. Confirmação/cancelamento apenas fecham o encontro: recompensas, progressão, consequências finais e limpeza de efeitos `scope=encounter` permanecem na Fase 1M. HTTP/OpenAPI permanecem na 1L-C; staging e GPT na 1L-D.
 
-Status: implementada e validada localmente na Fase 1L-B; revisão e integração pendentes
+Status: implementada, revisada e integrada na Fase 1L-B pelo PR #24
+
+### Fase 1L-C — facade HTTP/OpenAPI de encontros
+
+`POST /api/v1/encounters/manage` é a única fronteira HTTP de encontros e publica somente o `operationId` `manageEncounter`. O discriminador fechado aceita `create`, `load`, `submit_intent`, `resolve_reaction`, `continue`, `confirm_completion` e `cancel`; cada variante é um `strictObject` independente. `load` proíbe idempotência e versão esperada, `create` exige somente idempotência, e as demais mutações exigem `idempotencyKey` e `expectedStateVersion`.
+
+A facade resolve o contrato público para uma única chamada do service transacional da 1L-B. Ela cria a matriz completa e canônica de relações, deriva `intentRef` por hash namespaced do input canônico e traduz apenas refs públicas. Participantes efêmeros continuam legíveis em encontros existentes, mas não podem ser criados pelo contrato HTTP. Nenhum roll, resultado mecânico, snapshot, UUID, hash ou objeto Prisma atravessa a fronteira.
+
+O DTO persistido para replay contém a próxima ação fechada e, quando houve processamento, um resumo allowlisted de até 32 eventos e mudanças confirmadas. Assim, o mesmo payload/chave retorna exatamente a mesma resposta pública sem reexecutar core, RNG, locks ou persistência. Erros de escopo, lifecycle, versão, idempotência, rejeição de ação, integridade e transação temporária são mapeados de forma sanitizada; drift e replay inválido são falhas de integridade não corrigíveis pelo GPT.
+
+O OpenAPI ativo passa de 19 para 20 `operationIds`, mantém `RpgApiKey`, objetos fechados, enums e limites explícitos e documenta `x-request-id`. Requests mantêm refs de até 100 caracteres; refs runtime sanitizadas já persistidas no DTO podem ter até 160 para preservar a leitura de efêmeros internos. O limite global Express permanece `100kb`; com refs de request de 100 caracteres, 64 participantes, 128 overrides e todos os campos no máximo, o pior `create` serializado mede 51.295 bytes e preserva margem de 51.105 bytes até o teto de 102.400. Não há dependência, migration, alteração de schema, deploy, acesso remoto ou atualização do GPT ao vivo nesta fase.
+
+Status: implementada e validada localmente na Fase 1L-C; staging e GPT permanecem pendentes para 1L-D

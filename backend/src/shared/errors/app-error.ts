@@ -1,6 +1,16 @@
 export class AppError extends Error {
-  constructor(public readonly statusCode: number, public readonly code: string, message: string) {
+  readonly retryable: boolean | undefined;
+  readonly recoveryAction: string | undefined;
+
+  constructor(
+    public readonly statusCode: number,
+    public readonly code: string,
+    message: string,
+    options?: { readonly retryable?: boolean; readonly recoveryAction?: string },
+  ) {
     super(message);
+    this.retryable = options?.retryable;
+    this.recoveryAction = options?.recoveryAction;
   }
 }
 

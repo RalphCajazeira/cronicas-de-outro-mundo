@@ -6,8 +6,8 @@ import type { AppConfig } from './config/env.js';
 import type { ActorRepository } from './modules/actors/actors.types.js';
 import type { ContentRepository } from './modules/content/content.types.js';
 import type { GptRepository } from './modules/gpt/gpt.types.js';
+import type { EncounterHttpService } from './modules/encounters/encounter-http.service.js';
 import type { ReadinessCheck } from './modules/health/health.routes.js';
-import { getOfficialContract } from './modules/openapi/openapi.routes.js';
 import type { AuditLogWriter, HttpAuditRecord } from './shared/http/request-audit.js';
 import { actorMechanicalSheetFixture } from '../tests/support/actor-mechanics-fixture.js';
 import { getInitialAttributePreset } from './modules/rules/core-v1/index.js';
@@ -66,6 +66,9 @@ const emptyGptRepository: GptRepository = {
   patchActor: () => Promise.resolve({}), upsertContent: () => Promise.resolve({}), manageActorContent: () => Promise.resolve({}),
   manageActorInventory: () => Promise.resolve({}), createEvent: () => Promise.resolve({}), resolveActorEffect: () => Promise.resolve({}),
 };
+const emptyEncounterHttpService: EncounterHttpService = {
+  manage: () => Promise.reject(new Error('Encounter service is not used by this test')),
+};
 
 function appWith(
   actorRepository: ActorRepository = { findByReference: () => Promise.resolve(actor), listContent: () => Promise.resolve([contentItem]) },
@@ -88,7 +91,7 @@ function appWith(
   auditLog?: AuditLogWriter,
 ) {
   return createApp(config, {
-    actorRepository, contentRepository, gptRepository, readiness,
+    actorRepository, contentRepository, gptRepository, readiness, encounterHttpService: emptyEncounterHttpService,
     ...(auditLog === undefined ? {} : { auditLog }),
   });
 }
@@ -103,17 +106,6 @@ describe('HTTP API', () => {
     expect(notReady.status).toBe(503);
     expect(notReady.body).toEqual({ status: 'not_ready' });
     expect(JSON.stringify(notReady.body)).not.toContain('secret');
-  });
-  it('serves OpenAPI publicly with the configured base URL', async () => {
-    const response = await request(createApp({ ...config, PUBLIC_BASE_URL: 'https://rpg.example.com' }, {
-      actorRepository: { findByReference: () => Promise.resolve(actor), listContent: () => Promise.resolve([]) },
-      contentRepository: { findByReference: () => Promise.resolve(definition) },
-      gptRepository: emptyGptRepository,
-      readiness: { check: () => Promise.resolve(true) },
-    })).get('/openapi.json');
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({ servers: [{ url: 'https://rpg.example.com' }] });
-    expect(getOfficialContract()).toMatchObject({ servers: [{ url: 'https://api.example.com' }] });
   });
   it('rejects a private route without x-rpg-key', async () => { expect((await request(appWith()).get(`/api/v1/characters/ralph?${scopeQuery}`)).status).toBe(401); });
   it('rejects a private route with the wrong x-rpg-key', async () => { expect((await request(appWith()).get(`/api/v1/characters/ralph?${scopeQuery}`).set('x-rpg-key', 'wrong-key')).status).toBe(401); });
@@ -257,11 +249,11 @@ describe('HTTP API', () => {
     expect(response.status).toBe(400);
     expect(response.body).toMatchObject({
       error: {
-        code: 'INVALID_INPUT', retryable: true,
+        code: 'INVALID_INPUT', retryable: false, recoveryAction: 'correct_request',
         issues: [expect.objectContaining({ path: 'idempotencyKey', message: 'Required for write operations' })],
       },
     });
-    expect(JSON.stringify(response.body)).toContain('retry once');
+    expect(JSON.stringify(response.body)).not.toContain('retry once');
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({
       statusCode: 400,

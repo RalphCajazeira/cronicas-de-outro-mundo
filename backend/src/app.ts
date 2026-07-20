@@ -8,6 +8,8 @@ import { createContentRouter } from './modules/content/content.routes.js';
 import type { ContentRepository } from './modules/content/content.types.js';
 import { createGptRouter } from './modules/gpt/gpt.routes.js';
 import type { GptRepository } from './modules/gpt/gpt.types.js';
+import { createEncounterHttpRouter } from './modules/encounters/encounter-http.routes.js';
+import type { EncounterHttpService } from './modules/encounters/encounter-http.service.js';
 import { ACTIVE_API_ROUTES, createOpenApiRouter } from './modules/openapi/openapi.routes.js';
 import { createApiKeyAuth } from './shared/http/api-key-auth.js';
 import { errorHandler, notFoundHandler } from './shared/http/error-handler.js';
@@ -19,6 +21,7 @@ export interface AppDependencies {
   gptRepository: GptRepository;
   readiness: ReadinessCheck;
   auditLog?: AuditLogWriter;
+  encounterHttpService: EncounterHttpService;
 }
 
 export function createApp(config: AppConfig, dependencies: AppDependencies) {
@@ -30,6 +33,7 @@ export function createApp(config: AppConfig, dependencies: AppDependencies) {
   app.use('/health', createHealthRouter(dependencies.readiness));
   app.use('/openapi.json', createOpenApiRouter(config.PUBLIC_BASE_URL ?? `http://localhost:${config.PORT}`));
   app.use('/api/v1', createApiKeyAuth(config.RPG_API_KEY));
+  app.use('/api/v1/encounters', createEncounterHttpRouter(dependencies.encounterHttpService));
   app.use('/api/v1', createGptRouter(dependencies.gptRepository));
   app.use('/api/v1/characters', createCharactersRouter(dependencies.actorRepository));
   app.use('/api/v1/actors', createActorsRouter(dependencies.actorRepository));

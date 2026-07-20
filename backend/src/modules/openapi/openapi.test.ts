@@ -4,9 +4,11 @@ import {
   CORE_V1_SECONDARY_MODIFIER_CODES,
 } from '../rules/core-v1/core-v1.content-mechanics.config.js';
 import { ACTIVE_API_ROUTES, getOfficialContract } from './openapi.routes.js';
+import { manageEncounterSchema } from '../encounters/encounter-http.schemas.js';
 
-interface Operation { operationId?: string; security?: unknown; parameters?: Array<Schema & { name?: string; in?: string; required?: boolean }>; requestBody?: { content?: { 'application/json'?: { schema?: Schema } } }; description?: string; responses?: Record<string, unknown> }
+interface Operation { operationId?: string; security?: unknown; tags?: string[]; parameters?: Array<Schema & { name?: string; in?: string; required?: boolean }>; requestBody?: { content?: { 'application/json'?: { schema?: Schema; examples?: Record<string, { value?: unknown }> } } }; description?: string; responses?: Record<string, unknown> }
 interface Schema {
+  type?: string;
   $ref?: string;
   description?: string;
   required?: string[];
@@ -16,6 +18,7 @@ interface Schema {
   additionalProperties?: boolean;
   enum?: unknown[];
   format?: string;
+  minItems?: number;
   maxItems?: number;
   maxLength?: number;
   if?: Schema;
@@ -75,12 +78,12 @@ function collectEnums(value: unknown, result: unknown[][] = []): unknown[][] {
 }
 
 describe('official OpenAPI contract', () => {
-  it('is valid JSON loaded as OpenAPI 3.1 with exactly 19 unique operationIds', () => {
+  it('is valid JSON loaded as OpenAPI 3.1 with exactly 20 unique operationIds', () => {
     const ids = operations().map(({ operation }) => operation.operationId);
     expect(contract.openapi).toBe('3.1.0');
     expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(19);
+    expect(ids).toHaveLength(20);
   });
 
   it('matches every registered Express route exactly', () => {
@@ -88,12 +91,30 @@ describe('official OpenAPI contract', () => {
     expect(documented).toEqual([...ACTIVE_API_ROUTES].sort());
   });
 
+  it('contains no dangling local component references', () => {
+    const missing: string[] = [];
+    const visit = (value: unknown): void => {
+      if (Array.isArray(value)) value.forEach(visit);
+      else if (value !== null && typeof value === 'object') {
+        const record = value as Record<string, unknown>;
+        if (typeof record.$ref === 'string' && record.$ref.startsWith('#/components/')) {
+          const [, , group, name] = record.$ref.split('/');
+          const components = contract.components as unknown as Record<string, Record<string, unknown>>;
+          if (group === undefined || name === undefined || components[group]?.[name] === undefined) missing.push(record.$ref);
+        }
+        Object.values(record).forEach(visit);
+      }
+    };
+    visit(contract);
+    expect(missing).toEqual([]);
+  });
+
   it('uses x-rpg-key globally and explicitly keeps only public routes unauthenticated', () => {
     expect(contract.components.securitySchemes.RpgApiKey).toMatchObject({ type: 'apiKey', in: 'header', name: 'x-rpg-key' });
     expect(contract.security).toEqual([{ RpgApiKey: [] }]);
     const publicIds = operations().filter(({ operation }) => Array.isArray(operation.security) && operation.security.length === 0).map(({ operation }) => operation.operationId).sort();
     expect(publicIds).toEqual(['checkHealth', 'checkReadiness', 'getOpenApiContract']);
-    expect(operations().filter(({ operation }) => !Array.isArray(operation.security) || operation.security.length > 0)).toHaveLength(16);
+    expect(operations().filter(({ operation }) => !Array.isArray(operation.security) || operation.security.length > 0)).toHaveLength(17);
   });
 
   it('contains no localhost production server', () => {
@@ -155,7 +176,7 @@ describe('official OpenAPI contract', () => {
     const error = errorEnvelope?.properties?.error;
     expect(error?.properties).toMatchObject({
       retryable: { type: 'boolean' },
-      retryInstruction: { type: 'string' },
+      recoveryAction: { type: 'string' },
       issues: { type: 'array' },
     });
     expect(error?.properties?.issues?.items?.required).toEqual(['path', 'code', 'message']);
@@ -230,6 +251,67 @@ describe('official OpenAPI contract', () => {
     expect(start.properties?.initialContentPackages?.maxItems).toBe(24);
     expect(start.properties?.initialInventory?.maxItems).toBe(256);
     expect(start.properties?.initialPremise?.maxLength).toBe(1000);
+  });
+
+  it('publishes one closed manageEncounter Action with seven Zod-valid examples', () => {
+    const operation = operations().find((item) => item.operation.operationId === 'manageEncounter')?.operation;
+    expect(operations().filter((item) => item.operation.operationId === 'manageEncounter')).toHaveLength(1);
+    expect(operation?.tags).toEqual(['Encounters']);
+    expect(operation?.responses === undefined ? [] : Object.keys(operation.responses).sort()).toEqual([
+      '200', '400', '401', '404', '409', '422', '500', '503',
+    ]);
+    expect(JSON.stringify(operation?.responses)).toContain('#/components/headers/RequestId');
+    const schema = resolveSchema(operation?.requestBody?.content?.['application/json']?.schema);
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.properties?.operation?.enum).toEqual([
+      'create', 'load', 'submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel',
+    ]);
+    expect(schema.allOf).toHaveLength(5);
+    expect(JSON.stringify(schema)).not.toMatch(/"oneOf"|"anyOf"/);
+    const examples = operation?.requestBody?.content?.['application/json']?.examples ?? {};
+    expect(Object.keys(examples).sort()).toEqual([
+      'cancel', 'confirm_completion', 'continue', 'create', 'load', 'resolve_reaction', 'submit_intent',
+    ]);
+    for (const example of Object.values(examples)) expect(manageEncounterSchema.safeParse(example.value).success).toBe(true);
+    const intent = contract.components.schemas.EncounterIntentInput;
+    expect(intent?.required).toContain('targetSelector');
+    expect(intent?.properties).toHaveProperty('targetSelector');
+    expect(intent?.properties).not.toHaveProperty('selector');
+  });
+
+  it('keeps encounter request and response schemas closed, bounded and free of internal fields', () => {
+    const request = reachableSchemas('ManageEncounterInput');
+    const response = reachableSchemas('EncounterResult');
+    for (const [name, schema] of Object.entries({ ...request, ...response })) {
+      if (schema.type === 'object') expect(schema.additionalProperties, name).toBe(false);
+    }
+    expect(contract.components.schemas.ManageEncounterInput?.properties?.participants?.maxItems).toBe(64);
+    expect(contract.components.schemas.ManageEncounterInput?.properties?.relationOverrides?.maxItems).toBe(128);
+    expect(contract.components.schemas.EncounterIntentInput?.properties?.targetRefs?.maxItems).toBe(16);
+    expect(contract.components.schemas.EncounterNextRequiredAction?.properties?.actors?.minItems).toBe(1);
+    expect(contract.components.schemas.EncounterResult?.properties?.participants?.minItems).toBe(1);
+    expect(contract.components.schemas.EncounterTransitionSummary?.properties?.events?.minItems).toBe(1);
+    expect(contract.components.schemas.Code?.maxLength).toBe(100);
+    expect(contract.components.schemas.EncounterRuntimeRef?.maxLength).toBe(160);
+    expect(resolveSchema(contract.components.schemas.EncounterParticipantInput?.properties?.actorRef).maxLength).toBe(100);
+    expect(resolveSchema(contract.components.schemas.EncounterParticipant?.properties?.actorRef).maxLength).toBe(160);
+    const propertyNames: string[] = [];
+    const visitProperties = (value: unknown): void => {
+      if (Array.isArray(value)) value.forEach(visitProperties);
+      else if (value !== null && typeof value === 'object') {
+        const record = value as Record<string, unknown>;
+        if (record.properties !== null && typeof record.properties === 'object' && !Array.isArray(record.properties)) {
+          propertyNames.push(...Object.keys(record.properties));
+        }
+        Object.values(record).forEach(visitProperties);
+      }
+    };
+    visitProperties({ request, response });
+    expect(propertyNames).not.toEqual(expect.arrayContaining([
+      'stateHash', 'beforeStateHash', 'afterStateHash', 'inputHash', 'adapterState', 'snapshot',
+      'rolls', 'eventRef', 'actionRef', 'id',
+    ]));
+    expect(JSON.stringify(contract)).not.toMatch(/staging conclu[íi]do|deploy conclu[íi]do|action j[áa] publicada|importa[cç][aã]o no gpt validada/i);
   });
 
   it('exposes appearance, personality and an explicit linkedContent DTO', () => {

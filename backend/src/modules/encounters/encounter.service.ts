@@ -7,6 +7,7 @@ import {
   Prisma,
 } from '../../generated/prisma/client.js';
 import { resolveScope } from '../../shared/database/game-scope.js';
+import { NotFoundError } from '../../shared/errors/app-error.js';
 import { isExpectedUniqueConflict } from '../../shared/database/prisma-errors.js';
 import { prisma } from '../../shared/database/prisma.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
@@ -32,6 +33,7 @@ import {
 } from '../rules/core-v1/index.js';
 import { loadAuthoritativeEncounterAction } from './encounter-action-loader.js';
 import { EncounterError } from './encounter.errors.js';
+import { encounterNextRequiredAction, encounterTransitionSummary } from './encounter-response-projection.js';
 import {
   applyEncounterMutations,
   assertEncounterMutationPreflight,
@@ -195,8 +197,11 @@ function dto(
   state: CoreV1EncounterState,
   lifecycleStatus: EncounterLifecycleStatus,
   stopReason: string | null,
+  batch?: CoreV1EncounterBatchResult,
 ): EncounterDto {
   const binding = new Map(record.participants.map((participant) => [participant.actorRef, participant.bindingKind]));
+  const nextRequiredAction = encounterNextRequiredAction(state, lifecycleStatus);
+  const transitionSummary = batch === undefined ? undefined : encounterTransitionSummary(batch);
   return parseEncounterDto({
     operation,
     encounterRef: record.encounterRef,
@@ -218,6 +223,8 @@ function dto(
         sp: { ...participant.resources.sp },
       },
     })),
+    nextRequiredAction,
+    ...(transitionSummary === undefined ? {} : { transitionSummary }),
   });
 }
 
@@ -262,6 +269,7 @@ async function persistTransition(
   requestHash: string,
   recorder: RecordingEncounterRollProvider,
   stopReason: string | null,
+  batch?: CoreV1EncounterBatchResult,
 ): Promise<EncounterDto> {
   if (state.stateVersion <= loaded.state.stateVersion) throw new EncounterError('ENCOUNTER_CORE_REJECTED');
   const snapshot = serializeCoreV1EncounterState(state);
@@ -302,7 +310,7 @@ async function persistTransition(
     resultSummary: { adapterState } as unknown as Prisma.InputJsonValue,
   });
   await persistRolls(transaction, loaded.record.id, persistedOperation.id, recorder);
-  return dto(operation, loaded.record, state, lifecycleStatus, stopReason);
+  return dto(operation, loaded.record, state, lifecycleStatus, stopReason, batch);
 }
 
 async function lockAndLoad(
@@ -388,6 +396,7 @@ function deterministicReactionResolver(input: ResolveEncounterReactionInput): Re
 
 function translate(error: unknown): never {
   if (error instanceof EncounterError) throw error;
+  if (error instanceof NotFoundError) throw error;
   if (isRetryableEncounterTransactionError(error)) {
     throw new EncounterError('ENCOUNTER_TRANSACTION_RETRYABLE', { retryable: true, cause: error });
   }
@@ -441,6 +450,7 @@ export function createEncounterService(
             requestHash,
             recorder,
             executed.stopReason,
+            executed.batch,
           );
         },
       );

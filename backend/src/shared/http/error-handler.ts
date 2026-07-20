@@ -3,8 +3,6 @@ import { ZodError } from 'zod';
 import { AppError } from '../errors/app-error.js';
 import { setAuditError } from './request-audit.js';
 
-const validationRetryInstruction = 'Correct only the listed fields according to the OpenAPI contract and retry once. Do not invent missing values.';
-
 function validationIssue(issue: ZodError['issues'][number]) {
   const path = issue.path.map(String).join('.') || '$';
   let message = 'Value does not match the OpenAPI contract';
@@ -34,8 +32,8 @@ export const errorHandler: ErrorRequestHandler = (error: unknown, _request, resp
       error: {
         code: 'INVALID_INPUT',
         message: 'Invalid request input',
-        retryable: true,
-        retryInstruction: validationRetryInstruction,
+        retryable: false,
+        recoveryAction: 'correct_request',
         issues,
       },
     });
@@ -43,7 +41,12 @@ export const errorHandler: ErrorRequestHandler = (error: unknown, _request, resp
   }
   if (error instanceof AppError) {
     setAuditError(response, { type: 'application', code: error.code });
-    response.status(error.statusCode).json({ error: { code: error.code, message: error.message } });
+    response.status(error.statusCode).json({ error: {
+      code: error.code,
+      message: error.message,
+      ...(error.retryable === undefined ? {} : { retryable: error.retryable }),
+      ...(error.recoveryAction === undefined ? {} : { recoveryAction: error.recoveryAction }),
+    } });
     return;
   }
   setAuditError(response, { type: 'internal', code: 'INTERNAL_ERROR' });

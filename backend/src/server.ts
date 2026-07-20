@@ -5,6 +5,8 @@ import { prismaActorRepository } from './modules/actors/actors.repository.js';
 import { prismaContentRepository } from './modules/content/content.repository.js';
 import { prismaGptRepository } from './modules/gpt/gpt.repository.js';
 import { prismaReadinessCheck } from './modules/health/health.repository.js';
+import { createEncounterHttpService } from './modules/encounters/encounter-http.service.js';
+import { encounterService } from './modules/encounters/encounter.service.js';
 import { disconnectPrisma } from './shared/database/prisma.js';
 
 const config = parseConfig(process.env);
@@ -13,6 +15,7 @@ const app = createApp(config, {
   contentRepository: prismaContentRepository,
   gptRepository: prismaGptRepository,
   readiness: prismaReadinessCheck,
+  encounterHttpService: createEncounterHttpService(encounterService),
 });
 const server = app.listen(config.PORT, config.HOST, () => { console.info(`cronicas-backend listening on port ${config.PORT}`); });
 

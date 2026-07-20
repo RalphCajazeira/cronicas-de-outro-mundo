@@ -21,6 +21,8 @@ export interface HttpAuditRecord {
   request: Record<string, AuditValue>;
   response: Record<string, AuditValue>;
   error?: AuditErrorDiagnostic;
+  operationId?: string;
+  encounter?: Record<string, AuditValue>;
 }
 
 export type AuditLogWriter = (record: HttpAuditRecord) => void;
@@ -222,6 +224,24 @@ function summarizeResponse(body: unknown): Record<string, AuditValue> {
   return summary;
 }
 
+function summarizeEncounterAudit(value: unknown): Record<string, AuditValue> | undefined {
+  if (!isRecord(value) || value.operationId !== 'manageEncounter') return undefined;
+  const result: Record<string, AuditValue> = {};
+  for (const field of [
+    'operation', 'encounterRef', 'result', 'lifecycleStatus', 'sourceActorRef', 'reactorRef',
+  ]) {
+    const item = safeString(value[field]);
+    if (item !== undefined) result[field] = item;
+  }
+  for (const field of [
+    'participantCount', 'relationOverrideCount', 'processedEventCount', 'stateVersion', 'expectedStateVersion',
+  ]) {
+    const item = value[field];
+    if (typeof item === 'number' && Number.isSafeInteger(item) && item >= 0) result[field] = item;
+  }
+  return result;
+}
+
 export function setAuditError(response: Response, diagnostic: AuditErrorDiagnostic): void {
   response.locals.auditError = diagnostic;
 }
@@ -248,6 +268,7 @@ export function createRequestAudit(writer?: AuditLogWriter): RequestHandler {
       if (writer === undefined) return;
       const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
       const auditError = response.locals.auditError as AuditErrorDiagnostic | undefined;
+      const encounter = summarizeEncounterAudit(response.locals.encounterAudit);
       writer({
         event: 'http_request_completed',
         timestamp: new Date().toISOString(),
@@ -259,6 +280,7 @@ export function createRequestAudit(writer?: AuditLogWriter): RequestHandler {
         durationMs: Math.round(durationMs * 100) / 100,
         request: summarizeRequest(request),
         response: summarizeResponse(responseBody),
+        ...(encounter === undefined ? {} : { operationId: 'manageEncounter', encounter }),
         ...(auditError === undefined ? {} : { error: auditError }),
       });
     });
