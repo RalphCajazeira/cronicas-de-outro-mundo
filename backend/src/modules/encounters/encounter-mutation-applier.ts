@@ -345,26 +345,35 @@ export async function applyEncounterMutations(
     });
     if (campaign.count !== 1) throw new EncounterError('ENCOUNTER_CAMPAIGN_TICK_DRIFT');
   }
-  const authorityReloadRequired = [...flags.values()].some((change) => (
-    change.resources || change.inventory || change.effects
-  ));
-  const authorities = authorityReloadRequired
-    ? await loadPersistedEncounterAuthorities(
+  const changedActorRefs = [...flags]
+    .filter(([, change]) => change.resources || change.inventory || change.effects)
+    .map(([actorRef]) => actorRef);
+  let authorities = loaded.authorities;
+  if (changedActorRefs.length > 0) {
+    const actorIds = changedActorRefs.map((actorRef) => {
+      const authority = loaded.authorities.get(actorRef);
+      if (authority === undefined) throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
+      return authority.actor.id;
+    });
+    const reloadedAuthorities = await loadPersistedEncounterAuthorities(
       transaction,
-      [...loaded.authorities.values()].map((authority) => authority.actor.id),
+      actorIds,
       afterInput.currentTick,
-    )
-    : loaded.authorities;
-  if (authorityReloadRequired) {
-    for (const [actorRef, authorityAfter] of authorities) {
+    );
+    const mergedAuthorities = new Map(loaded.authorities);
+    for (const actorRef of changedActorRefs) {
+      const authorityAfter = reloadedAuthorities.get(actorRef);
       const authorityBefore = loaded.authorities.get(actorRef);
       const after = afterInput.participants.find((participant) => participant.actorRef === actorRef);
       const change = flags.get(actorRef);
-      if (authorityBefore === undefined || after === undefined || change === undefined) {
+      if (authorityAfter === undefined || authorityBefore === undefined
+        || after === undefined || change === undefined) {
         throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
       }
       assertPostWriteAuthority(after, authorityBefore, authorityAfter, change);
+      mergedAuthorities.set(actorRef, authorityAfter);
     }
+    authorities = mergedAuthorities;
   }
   const state = {
     ...afterInput,
