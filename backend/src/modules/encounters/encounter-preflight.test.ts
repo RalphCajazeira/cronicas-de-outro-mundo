@@ -1,15 +1,25 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { EncounterLifecycleStatus, EncounterOperationKind } from '../../generated/prisma/client.js';
 import type { CoreV1EncounterState, CoreV1MechanicalContentProfile } from '../rules/core-v1/index.js';
 import { createAuthoritativeTargetingContext } from './encounter-action-loader.js';
-import { assertEncounterMutationPreflight } from './encounter-mutation-applier.js';
+import {
+  applyEncounterMutations,
+  assertEncounterMutationPreflight,
+} from './encounter-mutation-applier.js';
 import { EncounterError } from './encounter.errors.js';
 import {
   assertEncounterOperationChainRows,
   deriveEncounterLifecycle,
+  loadPersistedEncounterAuthorities,
   type LoadedEncounter,
+  type PersistedEncounterAuthority,
 } from './encounter-state-loader.js';
-import { absentEncounterStateHash } from './encounter.repository.js';
+import { absentEncounterStateHash, type EncounterTransaction } from './encounter.repository.js';
+
+vi.mock('./encounter-state-loader.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./encounter-state-loader.js')>(),
+  loadPersistedEncounterAuthorities: vi.fn(),
+}));
 
 function loaded(sourcePersisted: boolean, targetPersisted: boolean): LoadedEncounter {
   return {
@@ -93,5 +103,84 @@ describe('encounter adapter preflight', () => {
     expect(() => assertEncounterOperationChainRows([
       rows[0]!, { ...rows[1]!, idempotencyRecord: { ...rows[1]!.idempotencyRecord, requestHash: 'c'.repeat(64) } },
     ], 3, secondHash, 'continue')).toThrow();
+  });
+
+  it('does not reload four unchanged authorities after processing initial actor_ready events', async () => {
+    const actorRefs = ['ally-mage', 'crystal-fawn', 'crystal-hunter', 'hero'];
+    const participant = (actorRef: string) => ({
+      actorRef,
+      actorStateVersion: 1,
+      mechanicsStateVersion: 1,
+      inventoryStateVersion: 1,
+      effectsStateVersion: 1,
+      combatState: 'ready',
+      primaryAttributes: {},
+      secondaryAttributes: {},
+      resources: {
+        hp: { current: 40, maximum: 40 },
+        mana: { current: 30, maximum: 30 },
+        sp: { current: 30, maximum: 30 },
+      },
+      activeEffects: [],
+      equipmentContext: { inventory: { entries: [] }, loadout: { slots: [] } },
+    });
+    const before = {
+      currentTick: 2301n,
+      stateVersion: 1,
+      participants: actorRefs.map(participant),
+      activeActions: [],
+    } as unknown as CoreV1EncounterState;
+    const after = {
+      ...before,
+      currentTick: 3751n,
+      stateVersion: 5,
+      scheduledEvents: [],
+    };
+    const authorities = new Map(actorRefs.map((actorRef) => [actorRef, {
+      actor: {
+        id: `${actorRef}-id`, code: actorRef, campaignId: 'campaign-id', level: 1, status: 'ACTIVE',
+        mechanicsStateVersion: 1, inventoryStateVersion: 1, effectsStateVersion: 1,
+      },
+      sheet: {
+        mechanicsStateVersion: 1, inventoryStateVersion: 1, effectsStateVersion: 1,
+        primaryAttributes: {}, secondaryAttributes: { elementalResistanceBps: {} },
+        resources: {
+          hp: { current: 40, max: 40, stateVersion: 1 },
+          mana: { current: 30, max: 30, stateVersion: 1 },
+          sp: { current: 30, max: 30, stateVersion: 1 },
+        },
+      },
+      inventory: { inventory: { entries: [] }, loadout: { slots: [] } },
+      effects: { activeEffects: [] },
+    } as unknown as PersistedEncounterAuthority]));
+    const fixture = {
+      record: {
+        id: 'encounter-id', campaignId: 'campaign-id', rulesetVersionId: 'ruleset-id',
+        campaign: { worldId: 'world-id', engineTick: 2301n, engineStateVersion: 1 },
+        participants: actorRefs.map((actorRef) => ({ actorRef, actorId: `${actorRef}-id` })),
+      },
+      state: before,
+      authorities,
+    } as unknown as LoadedEncounter;
+    const updateCampaignTick = vi.fn().mockResolvedValue({ count: 1 });
+    const transaction = {
+      campaign: { updateMany: updateCampaignTick },
+      actorResource: { updateMany: vi.fn() },
+    } as unknown as EncounterTransaction;
+    const expiredReload = vi.mocked(loadPersistedEncounterAuthorities);
+    expiredReload.mockRejectedValueOnce(new Error(
+      'Transaction API error: query cannot run after the 30000 ms interactive transaction timeout',
+    ));
+
+    const result = await applyEncounterMutations(transaction, fixture, after, {
+      processedEvents: actorRefs.map((actorRef) => ({
+        type: 'actor_ready', timelineEvent: { actorRef },
+      })),
+      resolvedActions: [],
+    } as never);
+
+    expect(result.authorities).toBe(authorities);
+    expect(expiredReload).not.toHaveBeenCalled();
+    expect(updateCampaignTick).toHaveBeenCalledOnce();
   });
 });
