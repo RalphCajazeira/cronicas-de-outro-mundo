@@ -712,15 +712,77 @@
       "post": {
         "operationId": "manageActorInventory",
         "summary": "Consultar e alterar o inventário físico autoritativo do ator",
-        "description": "get é leitura. Toda escrita exige idempotencyKey e expectedInventoryStateVersion; equipamento é derivado dos slots físicos.",
+        "description": "get é leitura. Escritas exigem idempotencyKey e expectedInventoryStateVersion; equip exige entryRef. Armas de uma mão exigem a mão; versáteis exigem versatileMode. Itens não acessórios podem omitir targetSlotRef; acessórios usam accessory_1 ou accessory_2.",
         "parameters": [{ "name": "actorRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActorInventoryManageInput" } } } },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ActorInventoryManageInput" },
+              "examples": {
+                "equip_chest_declared_slots": {
+                  "summary": "Equipar peitoral usando os slots declarados pelo item",
+                  "value": { "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "operation": "equip", "idempotencyKey": "equip-peitoral-001", "expectedInventoryStateVersion": 2, "entryRef": "peitoral-1" }
+                },
+                "equip_one_handed_weapon": {
+                  "summary": "Equipar arma de uma mão na mão principal",
+                  "value": { "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "operation": "equip", "idempotencyKey": "equip-adaga-001", "expectedInventoryStateVersion": 2, "entryRef": "adaga-1", "targetSlotRef": "main_hand" }
+                },
+                "equip_versatile_weapon": {
+                  "summary": "Equipar arma versátil em uma mão",
+                  "value": { "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "operation": "equip", "idempotencyKey": "equip-espada-versatil-001", "expectedInventoryStateVersion": 2, "entryRef": "espada-versatil-1", "targetSlotRef": "off_hand", "versatileMode": "one_handed" }
+                },
+                "equip_accessory": {
+                  "summary": "Equipar acessório em uma posição concreta",
+                  "value": { "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "operation": "equip", "idempotencyKey": "equip-anel-001", "expectedInventoryStateVersion": 2, "entryRef": "anel-1", "targetSlotRef": "accessory_1" }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": { "description": "Inventário físico atual", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActorInventory" } } } },
           "400": { "$ref": "#/components/responses/InvalidInput" },
           "401": { "$ref": "#/components/responses/Unauthorized" },
           "404": { "$ref": "#/components/responses/NotFound" },
-          "409": { "$ref": "#/components/responses/Conflict" },
+          "409": {
+            "description": "Versão otimista desatualizada ou conflito com o loadout atual",
+            "headers": { "x-request-id": { "$ref": "#/components/headers/RequestId" } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": {
+                  "inventory_state_version_conflict": {
+                    "summary": "O cliente deve recarregar o inventário",
+                    "value": { "error": { "code": "INVENTORY_STATE_VERSION_CONFLICT", "message": "Inventory state version does not match", "retryable": false, "recoveryAction": "load_inventory", "issues": [{ "path": "expectedInventoryStateVersion", "code": "STATE_VERSION_CONFLICT", "message": "Load the inventory again and use the returned inventoryStateVersion in a new request." }] } }
+                  },
+                  "occupied_slot": {
+                    "summary": "Um slot necessário está ocupado",
+                    "value": { "error": { "code": "INVENTORY_LOADOUT_CONFLICT", "message": "The inventory loadout changed or conflicts with this operation", "retryable": false, "recoveryAction": "load_inventory", "issues": [{ "path": "loadout", "code": "OCCUPIED_SLOT", "message": "A required slot is occupied. Load the current inventory and unequip the conflicting item, or choose another allowed slot." }] } }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Operação de inventário semanticamente inválida e corrigível",
+            "headers": { "x-request-id": { "$ref": "#/components/headers/RequestId" } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": {
+                  "body_incompatible_with_chest": {
+                    "summary": "body e chest permanecem slots distintos",
+                    "value": { "error": { "code": "INVALID_INVENTORY_OPERATION", "message": "The inventory operation could not be completed", "retryable": false, "recoveryAction": "correct_request", "issues": [{ "path": "targetSlotRef", "code": "INCOMPATIBLE_SLOT", "message": "This item accepts `chest`. Use an accepted slot or omit targetSlotRef when the item can use its declared slots." }] } }
+                  },
+                  "narrative_content_not_equippable": {
+                    "summary": "Conteúdo narrativo não possui perfil mecânico equipável",
+                    "value": { "error": { "code": "INVALID_INVENTORY_OPERATION", "message": "The inventory operation could not be completed", "retryable": false, "recoveryAction": "correct_request", "issues": [{ "path": "profile", "code": "MECHANICAL_EQUIPMENT", "message": "This content does not have an equippable mechanical profile. Changing only targetSlotRef will not make it equippable." }] } }
+                  }
+                }
+              }
+            }
+          },
           "500": { "$ref": "#/components/responses/InternalError" }
         }
       }
@@ -1980,7 +2042,7 @@
               },
               "recoveryAction": {
                 "type": "string",
-                "enum": ["correct_request", "load_encounter", "use_new_idempotency_key", "choose_new_intent", "retry_same_request", "stop_encounter_flow"]
+                "enum": ["correct_request", "load_inventory", "load_encounter", "use_new_idempotency_key", "choose_new_intent", "retry_same_request", "stop_encounter_flow"]
               },
               "issues": {
                 "type": "array",
@@ -2558,20 +2620,30 @@
           "worldRef": { "$ref": "#/components/schemas/Code" },
           "campaignRef": { "$ref": "#/components/schemas/Code" },
           "operation": { "type": "string", "enum": ["get", "grant", "remove", "split", "merge", "reserve", "release", "destroy", "equip", "unequip"] },
-          "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" },
-          "expectedInventoryStateVersion": { "type": "integer", "minimum": 1 },
+          "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey", "description": "Obrigatória em grant, remove, split, merge, reserve, release, destroy, equip e unequip." },
+          "expectedInventoryStateVersion": { "type": "integer", "minimum": 1, "description": "Obrigatória em toda escrita; use a inventoryStateVersion devolvida pela leitura mais recente." },
           "contentRef": { "$ref": "#/components/schemas/InventoryContentReference" },
           "quantity": { "type": "integer", "minimum": 1 },
           "entryRefs": { "type": "array", "maxItems": 256, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
           "customName": { "type": "string", "minLength": 1, "maxLength": 200 },
-          "entryRef": { "$ref": "#/components/schemas/Code" },
+          "entryRef": { "$ref": "#/components/schemas/Code", "description": "Obrigatória em equip e unequip, além das demais operações que atuam sobre uma entrada." },
           "newEntryRef": { "$ref": "#/components/schemas/Code" },
           "sourceEntryRef": { "$ref": "#/components/schemas/Code" },
           "targetEntryRef": { "$ref": "#/components/schemas/Code" },
-          "targetSlotRef": { "type": "string", "enum": ["main_hand", "off_hand", "head", "chest", "hands", "legs", "feet", "body", "accessory_1", "accessory_2"] },
-          "versatileMode": { "type": "string", "enum": ["one_handed", "two_handed"] }
+          "targetSlotRef": { "type": "string", "enum": ["main_hand", "off_hand", "head", "chest", "hands", "legs", "feet", "body", "accessory_1", "accessory_2"], "description": "Arma de uma mão exige main_hand ou off_hand. Itens não acessórios podem omitir o campo para usar slots declarados. Acessórios usam accessory_1 ou accessory_2; a categoria de criação é accessory." },
+          "versatileMode": { "type": "string", "enum": ["one_handed", "two_handed"], "description": "Obrigatória para arma versátil; one_handed também exige targetSlotRef com a mão escolhida." }
         },
-        "description": "Objeto fechado. get não aceita idempotencyKey nem expectedInventoryStateVersion; escritas exigem ambos. O backend valida os campos compatíveis com operation."
+        "allOf": [
+          {
+            "if": { "properties": { "operation": { "not": { "const": "get" } } }, "required": ["operation"] },
+            "then": { "required": ["idempotencyKey", "expectedInventoryStateVersion"] }
+          },
+          {
+            "if": { "properties": { "operation": { "const": "equip" } }, "required": ["operation"] },
+            "then": { "required": ["entryRef"] }
+          }
+        ],
+        "description": "Objeto fechado. get não aceita tokens de escrita. Toda escrita exige idempotencyKey e expectedInventoryStateVersion. equip exige entryRef; requisitos condicionais de mão, versatileMode e acessórios estão descritos nos campos."
       },
       "ActorInventoryEntry": {
         "type": "object", "additionalProperties": false,

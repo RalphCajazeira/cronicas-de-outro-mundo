@@ -3738,7 +3738,10 @@ describe('GPT v1 persistence with real transactions', () => {
       entryRef: 'inventory-greatsword-1',
     });
     expect(stale.status).toBe(409);
-    expect(responseErrorMessage(stale)).toBe('Inventory state version conflict');
+    expect(stale.body).toMatchObject({ error: {
+      code: 'INVENTORY_STATE_VERSION_CONFLICT', retryable: false, recoveryAction: 'load_inventory',
+      issues: [expect.objectContaining({ path: 'expectedInventoryStateVersion', code: 'STATE_VERSION_CONFLICT' })],
+    } });
 
     const equip = await post('/api/v1/actors/ralph/inventory/manage', {
       operation: 'equip', idempotencyKey: 'inventory-http-equip-001', expectedInventoryStateVersion: version,
@@ -3766,6 +3769,10 @@ describe('GPT v1 persistence with real transactions', () => {
       entryRef: 'inventory-greatsword-1', quantity: 1,
     });
     expect(equippedRemoval.status).toBe(409);
+    expect(equippedRemoval.body).toMatchObject({ error: {
+      code: 'INVENTORY_LOADOUT_CONFLICT', retryable: false, recoveryAction: 'load_inventory',
+      issues: [expect.objectContaining({ path: 'entryRef', code: 'EQUIPPED_REMOVAL' })],
+    } });
     expect(Number(bodyRecord(await getInventory()).inventoryStateVersion)).toBe(version);
 
     for (const [operation, key, expectedState] of [
@@ -3898,7 +3905,10 @@ describe('GPT v1 persistence with real transactions', () => {
       operation: 'grant', idempotencyKey: 'inventory-http-no-spec-001', expectedInventoryStateVersion: version,
       contentRef: { scope: 'world', contentType: 'item', code: 'inventory-nonphysical', versionNumber: 1 }, quantity: 1, entryRefs: ['nonphysical-item'],
     });
-    expect(noSpec.status).toBe(409);
+    expect(noSpec.status).toBe(422);
+    expect(noSpec.body).toMatchObject({ error: {
+      code: 'INVALID_INVENTORY_OPERATION', retryable: false, recoveryAction: 'correct_request',
+    } });
     const missingVersion = await post('/api/v1/actors/ralph/inventory/manage', {
       operation: 'grant', idempotencyKey: 'inventory-http-missing-version-001', expectedInventoryStateVersion: version,
       contentRef: { scope: 'world', contentType: 'consumable', code: 'inventory-potion', versionNumber: 999 }, quantity: 1, entryRefs: ['missing-version'],

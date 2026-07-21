@@ -6,7 +6,7 @@ import {
   Prisma,
 } from '../../generated/prisma/client.js';
 import { resolveScope, type DbClient } from '../../shared/database/game-scope.js';
-import { ConflictError, NotFoundError } from '../../shared/errors/app-error.js';
+import { NotFoundError } from '../../shared/errors/app-error.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import { scopedActorKey } from '../actors/actors.repository.js';
 import {
@@ -25,8 +25,10 @@ import {
   type CoreV1EquipmentRequirementContext,
   type CoreV1InventoryState,
 } from '../rules/core-v1/index.js';
+import type { ValidationIssue } from '../rules/core-v1/core-v1.types.js';
 import type { ManageActorInventoryInput } from '../gpt/gpt.schemas.js';
 import { loadActorInventoryMechanicalInputs } from './inventory-mechanical-inputs.js';
+import { InventoryOperationRejectedError, InventoryStateVersionRejectedError } from './inventory.errors.js';
 
 type InventoryClient = DbClient;
 
@@ -54,8 +56,8 @@ const inventoryContentTypeToDatabase = {
   other: ContentType.OTHER,
 } as const;
 
-function operationError(): ConflictError {
-  return new ConflictError('Inventory operation is invalid for the current state');
+function operationError(issues: readonly ValidationIssue[] = []): InventoryOperationRejectedError {
+  return new InventoryOperationRejectedError(issues);
 }
 
 async function resolveActor(client: InventoryClient, actorRef: string, input: ManageActorInventoryInput) {
@@ -74,7 +76,7 @@ export async function loadActorInventoryDto(client: InventoryClient, actorId: st
   const inputs = await loadActorInventoryMechanicalInputs(client, actorId);
   const sheet = await loadActorMechanicalSheet(client, actorId);
   const encumbrance = calculateInventoryEncumbrance(inputs.totalCarriedWeight, sheet.secondaryAttributes.carryingCapacity);
-  if (!encumbrance.ok) throw operationError();
+  if (!encumbrance.ok) throw operationError(encumbrance.issues);
   const rows = await client.inventoryEntry.findMany({
     where: { actorId },
     include: { contentVersion: { include: { contentDefinition: true } }, equipmentSlots: true },
@@ -122,7 +124,7 @@ export async function loadActorInventorySummary(client: InventoryClient, actorId
   const inputs = await loadActorInventoryMechanicalInputs(client, actorId);
   const sheet = await loadActorMechanicalSheet(client, actorId);
   const encumbrance = calculateInventoryEncumbrance(inputs.totalCarriedWeight, sheet.secondaryAttributes.carryingCapacity);
-  if (!encumbrance.ok) throw operationError();
+  if (!encumbrance.ok) throw operationError(encumbrance.issues);
   return {
     entryCount: inputs.inventory.entries.length,
     equippedCount: new Set(inputs.loadout.slots.flatMap((slot) => slot.entryRef === null ? [] : [slot.entryRef])).size,
@@ -261,7 +263,7 @@ export async function manageActorInventory(
   await client.$queryRaw(Prisma.sql`SELECT "id" FROM "Actor" WHERE "id" = ${scope.actor.id}::uuid FOR UPDATE`);
   const locked = await client.actor.findUnique({ where: { id: scope.actor.id }, select: { inventoryStateVersion: true } });
   if (locked === null) throw new NotFoundError('Actor');
-  if (locked.inventoryStateVersion !== input.expectedInventoryStateVersion) throw new ConflictError('Inventory state version conflict');
+  if (locked.inventoryStateVersion !== input.expectedInventoryStateVersion) throw new InventoryStateVersionRejectedError();
   const currentInputs = await loadActorInventoryMechanicalInputs(client, scope.actor.id);
   let nextInventory = currentInputs.inventory;
   let nextLoadout = currentInputs.loadout;
@@ -288,7 +290,7 @@ export async function manageActorInventory(
             ...(input.customName === undefined ? {} : { customName: input.customName }),
           },
         });
-        if (!result.ok) throw operationError();
+        if (!result.ok) throw operationError(result.issues);
         nextInventory = result.value.inventory;
       }
     } else {
@@ -296,21 +298,21 @@ export async function manageActorInventory(
         entryKind: 'stack', contentVersion: reference, inventorySpec: spec as never,
         profile: grantVersion.version.profile as never, quantity: input.quantity, newEntryRefs: input.entryRefs,
       });
-      if (!result.ok) throw operationError();
+      if (!result.ok) throw operationError(result.issues);
       nextInventory = result.value.inventory;
     }
   } else if (input.operation === 'remove') {
     const result = removeInventoryQuantity(nextInventory, input.entryRef ?? '', input.quantity ?? 0);
-    if (!result.ok) throw operationError();
+    if (!result.ok) throw operationError(result.issues);
     nextInventory = result.value.inventory;
   } else if (input.operation === 'split') {
     splitSourceRef = input.entryRef ?? null;
     const result = splitInventoryStack(nextInventory, input.entryRef ?? '', input.quantity ?? 0, input.newEntryRef ?? '');
-    if (!result.ok) throw operationError();
+    if (!result.ok) throw operationError(result.issues);
     nextInventory = result.value.inventory;
   } else if (input.operation === 'merge') {
     const result = mergeInventoryStacks(nextInventory, input.targetEntryRef ?? '', input.sourceEntryRef ?? '');
-    if (!result.ok) throw operationError();
+    if (!result.ok) throw operationError(result.issues);
     nextInventory = result.value.inventory;
   } else if (input.operation === 'equip') {
     const context = await requirementContext(client, scope.actor.id);
@@ -319,12 +321,12 @@ export async function manageActorInventory(
       ...(input.targetSlotRef === undefined ? {} : { targetSlotRef: input.targetSlotRef }),
       ...(input.versatileMode === undefined ? {} : { versatileMode: input.versatileMode }),
     }, context);
-    if (!result.ok) throw operationError();
+    if (!result.ok) throw operationError(result.issues);
     nextInventory = result.value.inventory;
     nextLoadout = result.value.loadout;
   } else if (input.operation === 'unequip') {
     const result = unequipItem(nextInventory, nextLoadout, input.entryRef ?? '');
-    if (!result.ok) throw operationError();
+    if (!result.ok) throw operationError(result.issues);
     nextInventory = result.value.inventory;
     nextLoadout = result.value.loadout;
   } else {
@@ -345,7 +347,7 @@ export async function manageActorInventory(
     });
     if (!entries.some((entry) => entry.entryRef === entryRef)) throw new NotFoundError('Inventory entry');
     const validation = validateCoreV1InventoryState({ entries });
-    if (!validation.ok) throw operationError();
+    if (!validation.ok) throw operationError(validation.issues);
     nextInventory = validation.value;
   }
 
@@ -354,7 +356,7 @@ export async function manageActorInventory(
     where: { id: scope.actor.id, inventoryStateVersion: locked.inventoryStateVersion },
     data: { inventoryStateVersion: { increment: 1 }, mechanicsStateVersion: { increment: 1 } },
   });
-  if (updated.count !== 1) throw new ConflictError('Inventory state version conflict');
+  if (updated.count !== 1) throw new InventoryStateVersionRejectedError();
   await recomputeActorDerivedSnapshot(client, scope.actor.id);
   return loadActorInventoryDto(client, scope.actor.id, scope.actor.code);
 }

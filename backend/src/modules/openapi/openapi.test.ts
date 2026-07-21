@@ -5,6 +5,7 @@ import {
 } from '../rules/core-v1/core-v1.content-mechanics.config.js';
 import { ACTIVE_API_ROUTES, getOfficialContract } from './openapi.routes.js';
 import { manageEncounterSchema } from '../encounters/encounter-http.schemas.js';
+import { manageActorInventorySchema } from '../gpt/gpt.schemas.js';
 
 interface Operation { operationId?: string; security?: unknown; tags?: string[]; parameters?: Array<Schema & { name?: string; in?: string; required?: boolean }>; requestBody?: { content?: { 'application/json'?: { schema?: Schema; examples?: Record<string, { value?: unknown }> } } }; description?: string; responses?: Record<string, unknown> }
 interface Schema {
@@ -144,16 +145,24 @@ describe('official OpenAPI contract', () => {
     ]));
   });
 
-  it('documents one inventory operation with physical refs and optimistic concurrency', () => {
+  it('documents inventory conditional fields with physical refs and optimistic concurrency', () => {
     const operation = operations().find((item) => item.operation.operationId === 'manageActorInventory')?.operation;
     const schema = resolveSchema(operation?.requestBody?.content?.['application/json']?.schema);
     expect(operation?.description).toContain('expectedInventoryStateVersion');
+    expect(operation?.description).toContain('versatileMode');
     expect(schema.additionalProperties).toBe(false);
     expect(schema.properties).toMatchObject({
       operation: { enum: ['get', 'grant', 'remove', 'split', 'merge', 'reserve', 'release', 'destroy', 'equip', 'unequip'] },
       expectedInventoryStateVersion: { type: 'integer' },
       contentRef: { $ref: '#/components/schemas/InventoryContentReference' },
     });
+    expect(schema.properties?.targetSlotRef?.description).toContain('accessory_1');
+    expect(schema.properties?.targetSlotRef?.description).toContain('omitir');
+    expect(schema.properties?.versatileMode?.description).toContain('Obrigatória');
+    expect(schema.allOf).toEqual(expect.arrayContaining([
+      expect.objectContaining({ then: { required: ['idempotencyKey', 'expectedInventoryStateVersion'] } }),
+      expect.objectContaining({ then: { required: ['entryRef'] } }),
+    ]));
     expect(contract.components.schemas.InventorySpec?.additionalProperties).toBe(false);
     expect(contract.components.schemas.ActorContent?.properties).not.toHaveProperty('equipped');
     expect(contract.components.schemas.ActorContent?.properties).not.toHaveProperty('quantity');
@@ -176,7 +185,7 @@ describe('official OpenAPI contract', () => {
     }
   });
 
-  it('documents retry guidance and field issues for invalid input only', () => {
+  it('documents retry guidance and field issues in the shared public error envelope', () => {
     const errorEnvelope = contract.components.schemas.Error;
     expect(errorEnvelope).toBeDefined();
     const error = errorEnvelope?.properties?.error;
@@ -186,6 +195,60 @@ describe('official OpenAPI contract', () => {
       issues: { type: 'array' },
     });
     expect(error?.properties?.issues?.items?.required).toEqual(['path', 'code', 'message']);
+    expect(error?.properties?.recoveryAction?.enum).toContain('load_inventory');
+  });
+
+  it('keeps manageActorInventory request examples valid against the real Zod schema', () => {
+    const operation = operations().find((item) => item.operation.operationId === 'manageActorInventory')?.operation;
+    const examples = operation?.requestBody?.content?.['application/json']?.examples ?? {};
+
+    expect(Object.keys(examples)).toEqual([
+      'equip_chest_declared_slots',
+      'equip_one_handed_weapon',
+      'equip_versatile_weapon',
+      'equip_accessory',
+    ]);
+    for (const [name, example] of Object.entries(examples)) {
+      expect(manageActorInventorySchema.safeParse(example.value).success, name).toBe(true);
+    }
+  });
+
+  it('documents sanitized actionable inventory error examples without changing the Action count', () => {
+    const operation = operations().find((item) => item.operation.operationId === 'manageActorInventory')?.operation;
+    const responses = operation?.responses as Record<string, {
+      content?: { 'application/json'?: { examples?: Record<string, { value?: unknown }> } };
+    }>;
+    const examples = {
+      ...(responses['409']?.content?.['application/json']?.examples ?? {}),
+      ...(responses['422']?.content?.['application/json']?.examples ?? {}),
+    };
+    const errorSchema = contract.components.schemas.Error?.properties?.error;
+    const recoveryActions = new Set(errorSchema?.properties?.recoveryAction?.enum ?? []);
+
+    expect(Object.keys(examples)).toEqual([
+      'inventory_state_version_conflict',
+      'occupied_slot',
+      'body_incompatible_with_chest',
+      'narrative_content_not_equippable',
+    ]);
+    for (const [name, example] of Object.entries(examples)) {
+      const envelope = example.value as { error?: Record<string, unknown> };
+      expect(Object.keys(envelope), name).toEqual(['error']);
+      expect(Object.keys(envelope.error ?? {}).sort(), name).toEqual(['code', 'issues', 'message', 'recoveryAction', 'retryable']);
+      expect(typeof envelope.error?.code, name).toBe('string');
+      expect(typeof envelope.error?.message, name).toBe('string');
+      expect(envelope.error?.retryable, name).toBe(false);
+      expect(recoveryActions.has(envelope.error?.recoveryAction), name).toBe(true);
+      const issues = envelope.error?.issues;
+      expect(Array.isArray(issues), name).toBe(true);
+      const firstIssue = (issues as unknown[])[0] as Record<string, unknown> | undefined;
+      expect(typeof firstIssue?.path, name).toBe('string');
+      expect(typeof firstIssue?.code, name).toBe('string');
+      expect(typeof firstIssue?.message, name).toBe('string');
+    }
+    expect(operation?.responses).toHaveProperty('422');
+    expect(operations()).toHaveLength(20);
+    expect(JSON.stringify(examples)).not.toMatch(/api[_-]?key|authorization|cookie|postgres|prisma|sql|stack trace|[0-9a-f]{8}-[0-9a-f-]{27}/i);
   });
 
   it('uses GPT Action-compatible inline parameters and explicit object properties', () => {
