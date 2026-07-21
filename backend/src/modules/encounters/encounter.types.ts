@@ -54,7 +54,7 @@ export function activeEncounterSummary(records: readonly ActiveEncounterRecord[]
 
 export type EncounterOperationName =
   | 'create' | 'submit_intent' | 'resolve_reaction' | 'continue'
-  | 'confirm_completion' | 'cancel';
+  | 'confirm_completion' | 'cancel' | 'resolve_beat';
 
 export interface EncounterPersistedParticipantInput {
   readonly bindingKind: 'persisted_actor';
@@ -96,6 +96,39 @@ export interface ResolveEncounterReactionInput extends EncounterMutationReferenc
   readonly reactionKind: 'block' | 'active_dodge' | 'interrupt' | 'counter_attack';
 }
 
+export type EncounterBeatComponent = (
+  | { readonly type: 'move'; readonly destination: CombatZone; readonly movementKind?: 'approach' | 'retreat' | 'run' | 'disengage' }
+  | { readonly type: 'defend' }
+  | { readonly type: 'protect'; readonly targetRef: string }
+  | { readonly type: 'prepare'; readonly contentRef: NonNullable<CoreV1EncounterActionIntent['contentRef']>; readonly trigger: 'enemy_advances' | 'enemy_attacks' | 'ally_attacked'; readonly targetRefs?: readonly string[] }
+  | { readonly type: 'intercept'; readonly targetRef: string }
+  | { readonly type: 'assist'; readonly targetRef: string }
+  | { readonly type: 'flee'; readonly destination?: 'far' | 'out_of_range' }
+  | { readonly type: 'observe'; readonly targetRef?: string }
+  | { readonly type: 'interact'; readonly targetRef: string; readonly description?: string }
+  | { readonly type: 'improvise'; readonly description: string; readonly targetRef?: string }
+  | { readonly type: 'use_item'; readonly inventoryEntryRef: string; readonly targetRefs?: readonly string[] }
+  | { readonly type: 'attack'; readonly inventoryEntryRef: string; readonly targetRefs: readonly string[]; readonly versatileMode?: 'one_handed' | 'two_handed' }
+  | { readonly type: 'cast'; readonly contentRef: NonNullable<CoreV1EncounterActionIntent['contentRef']>; readonly targetRefs?: readonly string[] }
+) & { readonly essential?: boolean };
+
+export interface EncounterNpcDirective {
+  readonly actorRef: string;
+  readonly strategy: 'aggressive' | 'defensive' | 'protect_ally' | 'attack_vulnerable' | 'flee_if_hurt' | 'prioritize_caster';
+  readonly targetRef?: string;
+}
+
+export interface ResolveEncounterBeatInput extends EncounterMutationReference {
+  readonly intent: {
+    readonly actorRef: string;
+    readonly objective: string;
+    readonly narrative: string;
+    readonly resolutionPolicy: 'atomic' | 'allow_partial';
+    readonly components: readonly EncounterBeatComponent[];
+  };
+  readonly npcDirectives: readonly EncounterNpcDirective[];
+}
+
 export type ContinueEncounterInput = EncounterMutationReference;
 export type ConfirmEncounterCompletionInput = EncounterMutationReference;
 export type CancelEncounterInput = EncounterMutationReference;
@@ -112,6 +145,62 @@ export interface EncounterParticipantDto {
     readonly mana: { readonly current: number; readonly maximum: number };
     readonly sp: { readonly current: number; readonly maximum: number };
   };
+}
+
+export type EncounterGenericAction =
+  | 'move' | 'defend' | 'protect' | 'prepare' | 'intercept' | 'assist' | 'flee'
+  | 'observe' | 'interact' | 'improvise' | 'use_item' | 'attack' | 'cast';
+
+export interface EncounterScenePackageDto {
+  readonly schemaVersion: 1;
+  readonly stateVersion: number;
+  readonly genericActions: readonly EncounterGenericAction[];
+  readonly environment: { readonly zoneModel: 'abstract_bands'; readonly notes: readonly string[] };
+  readonly participants: readonly {
+    readonly actorRef: string;
+    readonly role: string | null;
+    readonly zone: string;
+    readonly equippedEntryRefs: readonly string[];
+    readonly knownContentRefs: readonly { readonly contentType: string; readonly code: string }[];
+    readonly activeEffectRefs: readonly string[];
+    readonly preparedActionRefs: readonly string[];
+    readonly tacticalProfile: {
+      readonly strategy: string | null;
+      readonly objective: string | null;
+      readonly faction: string | null;
+      readonly traits: readonly string[];
+    };
+  }[];
+}
+
+export interface EncounterBeatSummaryDto {
+  readonly externalTransitions: 1;
+  readonly resolutionPolicy: 'atomic' | 'allow_partial';
+  readonly partialResolutionApplied: boolean;
+  readonly actorsActed: readonly string[];
+  readonly componentResults: readonly {
+    readonly index: number;
+    readonly type: EncounterGenericAction;
+    readonly status: 'accepted' | 'modified' | 'rejected' | 'conditional';
+    readonly code?: string;
+    readonly reason?: string;
+    readonly field?: string;
+    readonly alternative?: string;
+    readonly requested?: string;
+    readonly applied?: string;
+  }[];
+  readonly npcActions: readonly {
+    readonly actorRef: string;
+    readonly strategy: string;
+    readonly actionType: EncounterGenericAction;
+    readonly targetRef?: string;
+  }[];
+  readonly npcResults: readonly {
+    readonly actorRef: string;
+    readonly status: 'acted' | 'rejected';
+    readonly reason?: string;
+  }[];
+  readonly requiresPlayerDecision: boolean;
 }
 
 export type EncounterNextRequiredActionDto =
@@ -159,6 +248,8 @@ export interface EncounterDto {
   readonly nextRequiredAction: EncounterNextRequiredActionDto;
   readonly transitionSummary?: EncounterTransitionSummaryDto;
   readonly consequencesSummary?: EncounterPublicConsequencesSummaryV1;
+  readonly scene?: EncounterScenePackageDto;
+  readonly beatSummary?: EncounterBeatSummaryDto;
 }
 
 const stableRefPattern = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
@@ -265,6 +356,114 @@ const transitionCategories = new Set<EncounterTransitionCategory>([
   'effect_applied', 'effect_removed', 'movement_resolved', 'reaction_resolved',
   'participant_state_changed',
 ]);
+const genericActions = new Set<EncounterGenericAction>([
+  'move', 'defend', 'protect', 'prepare', 'intercept', 'assist', 'flee',
+  'observe', 'interact', 'improvise', 'use_item', 'attack', 'cast',
+]);
+
+function denseArray(value: unknown, maximum: number): value is unknown[] {
+  return Array.isArray(value) && value.length <= maximum && Object.keys(value).length === value.length;
+}
+
+function parseScenePackage(value: unknown, participantRefs: ReadonlySet<string>, stateVersion: number): void {
+  const scene = closedRecord(value, ['schemaVersion', 'stateVersion', 'genericActions', 'environment', 'participants'], '$.scene');
+  if (scene.schemaVersion !== 1 || scene.stateVersion !== stateVersion
+    || !denseArray(scene.genericActions, genericActions.size)
+    || scene.genericActions.length !== genericActions.size
+    || new Set(scene.genericActions).size !== scene.genericActions.length
+    || scene.genericActions.some((action) => !genericActions.has(action as EncounterGenericAction))
+    || !denseArray(scene.participants, 64) || scene.participants.length !== participantRefs.size) {
+    throw new TypeError('Encounter scene package is invalid');
+  }
+  const environment = closedRecord(scene.environment, ['zoneModel', 'notes'], '$.scene.environment');
+  if (environment.zoneModel !== 'abstract_bands' || !denseArray(environment.notes, 16)
+    || environment.notes.some((note) => typeof note !== 'string' || note.length > 500)) {
+    throw new TypeError('Encounter scene environment is invalid');
+  }
+  const seen = new Set<string>();
+  for (const valueParticipant of scene.participants) {
+    const participant = closedRecord(valueParticipant, [
+      'actorRef', 'role', 'zone', 'equippedEntryRefs', 'knownContentRefs', 'activeEffectRefs',
+      'preparedActionRefs', 'tacticalProfile',
+    ], '$.scene.participants');
+    if (!isPublicRef(participant.actorRef) || !participantRefs.has(participant.actorRef) || seen.has(participant.actorRef)
+      || (participant.role !== null && (typeof participant.role !== 'string' || participant.role.length > 160))
+      || !zones.has(participant.zone as string)
+      || !denseArray(participant.equippedEntryRefs, 64) || participant.equippedEntryRefs.some((ref) => !isPublicRef(ref))
+      || !denseArray(participant.activeEffectRefs, 128) || participant.activeEffectRefs.some((ref) => !isPublicRef(ref))
+      || !denseArray(participant.preparedActionRefs, 5) || participant.preparedActionRefs.some((ref) => !isPublicRef(ref))
+      || !denseArray(participant.knownContentRefs, 128)) {
+      throw new TypeError('Encounter scene participant is invalid');
+    }
+    seen.add(participant.actorRef);
+    for (const contentValue of participant.knownContentRefs) {
+      const content = closedRecord(contentValue, ['contentType', 'code'], '$.scene.participants.knownContentRefs');
+      if (!isPublicRef(content.contentType) || !isPublicRef(content.code)) throw new TypeError('Encounter scene content is invalid');
+    }
+    const tactical = closedRecord(participant.tacticalProfile, ['strategy', 'objective', 'faction', 'traits'], '$.scene.participants.tacticalProfile');
+    for (const field of ['strategy', 'objective', 'faction'] as const) {
+      if (tactical[field] !== null && (typeof tactical[field] !== 'string' || tactical[field].length > 200)) {
+        throw new TypeError('Encounter tactical profile is invalid');
+      }
+    }
+    if (!denseArray(tactical.traits, 16)
+      || tactical.traits.some((trait) => typeof trait !== 'string' || trait.length > 160)) {
+      throw new TypeError('Encounter tactical traits are invalid');
+    }
+  }
+}
+
+function parseBeatSummary(value: unknown, participantRefs: ReadonlySet<string>): void {
+  const summary = closedRecord(value, [
+    'externalTransitions', 'resolutionPolicy', 'partialResolutionApplied', 'actorsActed',
+    'componentResults', 'npcActions', 'npcResults', 'requiresPlayerDecision',
+  ], '$.beatSummary');
+  if (summary.externalTransitions !== 1 || typeof summary.requiresPlayerDecision !== 'boolean'
+    || !['atomic', 'allow_partial'].includes(summary.resolutionPolicy as string)
+    || typeof summary.partialResolutionApplied !== 'boolean'
+    || !denseArray(summary.actorsActed, 64) || new Set(summary.actorsActed).size !== summary.actorsActed.length
+    || summary.actorsActed.some((ref) => !isPublicRef(ref) || !participantRefs.has(ref))
+    || !denseArray(summary.componentResults, 3) || summary.componentResults.length < 1
+    || !denseArray(summary.npcActions, 4)
+    || !denseArray(summary.npcResults, 4)) throw new TypeError('Encounter beat summary is invalid');
+  for (const resultValue of summary.componentResults) {
+    const result = closedOptionalRecord(resultValue, ['index', 'type', 'status'], [
+      'code', 'reason', 'field', 'alternative', 'requested', 'applied',
+    ], '$.beatSummary.componentResults');
+    if (!Number.isSafeInteger(result.index) || (result.index as number) < 0 || (result.index as number) > 2
+      || !genericActions.has(result.type as EncounterGenericAction)
+      || !['accepted', 'modified', 'rejected', 'conditional'].includes(result.status as string)
+      || ['code', 'reason', 'field', 'alternative', 'requested', 'applied'].some((field) => (
+        result[field] !== undefined && (typeof result[field] !== 'string' || result[field].length > 500)
+      ))) {
+      throw new TypeError('Encounter beat component result is invalid');
+    }
+    if (result.status === 'modified' && ['code', 'reason', 'field', 'requested', 'applied']
+      .some((field) => typeof result[field] !== 'string')) throw new TypeError('Modified component result is incomplete');
+    if (result.status === 'rejected' && ['code', 'reason', 'field', 'alternative']
+      .some((field) => typeof result[field] !== 'string')) throw new TypeError('Rejected component result is incomplete');
+  }
+  for (const actionValue of summary.npcActions) {
+    const action = closedOptionalRecord(actionValue, ['actorRef', 'strategy', 'actionType'], ['targetRef'], '$.beatSummary.npcActions');
+    if (!isPublicRef(action.actorRef) || !participantRefs.has(action.actorRef)
+      || typeof action.strategy !== 'string' || action.strategy.length < 1 || action.strategy.length > 100
+      || !genericActions.has(action.actionType as EncounterGenericAction)
+      || (action.targetRef !== undefined && (!isPublicRef(action.targetRef) || !participantRefs.has(action.targetRef)))) {
+      throw new TypeError('Encounter NPC action summary is invalid');
+    }
+  }
+  const seenNpcResults = new Set<string>();
+  for (const resultValue of summary.npcResults) {
+    const result = closedOptionalRecord(resultValue, ['actorRef', 'status'], ['reason'], '$.beatSummary.npcResults');
+    if (!isPublicRef(result.actorRef) || !participantRefs.has(result.actorRef) || seenNpcResults.has(result.actorRef)
+      || !['acted', 'rejected'].includes(result.status as string)
+      || (result.status === 'rejected' && (typeof result.reason !== 'string' || result.reason.length > 300))
+      || (result.reason !== undefined && typeof result.reason !== 'string')) {
+      throw new TypeError('Encounter NPC result summary is invalid');
+    }
+    seenNpcResults.add(result.actorRef);
+  }
+}
 
 function parseTransitionSummary(value: unknown, participantRefs: ReadonlySet<string>): void {
   const summary = closedRecord(value, ['processedEventCount', 'events', 'changes'], '$.transitionSummary');
@@ -330,8 +529,8 @@ export function parseEncounterDto(value: unknown): EncounterDto {
   const root = closedOptionalRecord(value, [
     'operation', 'encounterRef', 'lifecycleStatus', 'stateVersion', 'currentTick',
     'stopReason', 'completionCandidate', 'participants', 'nextRequiredAction',
-  ], ['transitionSummary', 'consequencesSummary'], '$');
-  if (!['create', 'submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel', 'load']
+  ], ['transitionSummary', 'consequencesSummary', 'scene', 'beatSummary'], '$');
+  if (!['create', 'submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel', 'resolve_beat', 'load']
     .includes(root.operation as string)
     || !isPublicRef(root.encounterRef) || !lifecycleStatuses.has(root.lifecycleStatus as string)
     || !Number.isSafeInteger(root.stateVersion) || (root.stateVersion as number) < 1
@@ -374,10 +573,15 @@ export function parseEncounterDto(value: unknown): EncounterDto {
     throw new TypeError('Encounter next action does not match lifecycle');
   }
   if (root.transitionSummary !== undefined) {
-    if (!['submit_intent', 'resolve_reaction', 'continue'].includes(root.operation as string)) {
+    if (!['submit_intent', 'resolve_reaction', 'continue', 'resolve_beat'].includes(root.operation as string)) {
       throw new TypeError('Encounter transition summary does not match operation');
     }
     parseTransitionSummary(root.transitionSummary, participantRefs);
+  }
+  if (root.scene !== undefined) parseScenePackage(root.scene, participantRefs, root.stateVersion as number);
+  if (root.beatSummary !== undefined) {
+    if (root.operation !== 'resolve_beat') throw new TypeError('Encounter beat summary does not match operation');
+    parseBeatSummary(root.beatSummary, participantRefs);
   }
   if (root.consequencesSummary !== undefined) {
     if (!['completed', 'cancelled'].includes(root.lifecycleStatus as string)) {

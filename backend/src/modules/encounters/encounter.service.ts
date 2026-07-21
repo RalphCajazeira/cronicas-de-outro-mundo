@@ -15,6 +15,7 @@ import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import { validateCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
 import {
   applyCoreV1EncounterIntent,
+  applyCoreV1EncounterActionPlan,
   cancelCoreV1Encounter,
   confirmCoreV1EncounterCompletion,
   CORE_V1_MAX_ENCOUNTER_BATCH_ADVANCE,
@@ -30,9 +31,22 @@ import {
   type CoreV1EncounterParticipantInput,
   type CoreV1EncounterRuntime,
   type CoreV1EncounterState,
+  type CoreV1EncounterActionDefinition,
+  type CoreV1EncounterActionIntent,
+  type CoreV1EncounterTargetingContext,
   type ReactionOutcomeResolver,
 } from '../rules/core-v1/index.js';
 import { loadAuthoritativeEncounterAction } from './encounter-action-loader.js';
+import {
+  applyBeatGuardCapabilities,
+  automaticReactionResolver,
+  beatComponentRejectionReason,
+  consumeTriggeredBeatCapabilities,
+  encounterScenePackage,
+  genericEncounterAction,
+  normalizeBeatComponent,
+  selectNpcBeatComponent,
+} from './encounter-beat.js';
 import { EncounterError } from './encounter.errors.js';
 import {
   publicEncounterConsequencesSummary,
@@ -49,6 +63,7 @@ import {
 } from './encounter-mutation-applier.js';
 import {
   absentEncounterStateHash,
+  calculateEncounterRequestHash,
   createEncounterOperation,
   ENCOUNTER_TRANSACTION_OPTIONS,
   executeIdempotentEncounter,
@@ -84,10 +99,13 @@ import {
   type ContinueEncounterInput,
   type CreateEncounterInput,
   type EncounterDto,
+  type EncounterBeatComponent,
+  type EncounterBeatSummaryDto,
   type EncounterMutationReference,
   type EncounterOperationName,
   type LoadEncounterInput,
   type ResolveEncounterReactionInput,
+  type ResolveEncounterBeatInput,
   type SubmitEncounterIntentInput,
   ACTIVE_ENCOUNTER_LIFECYCLES,
 } from './encounter.types.js';
@@ -99,6 +117,7 @@ const idempotencyOperation = {
   continue: 'encounter.continue',
   confirm_completion: 'encounter.confirm_completion',
   cancel: 'encounter.cancel',
+  resolve_beat: 'encounter.resolve_beat',
 } as const;
 
 const operationKind = {
@@ -108,6 +127,7 @@ const operationKind = {
   continue: EncounterOperationKind.CONTINUE,
   confirm_completion: EncounterOperationKind.CONFIRM_COMPLETION,
   cancel: EncounterOperationKind.CANCEL,
+  resolve_beat: EncounterOperationKind.SUBMIT_INTENT,
 } as const;
 
 const refPattern = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
@@ -204,6 +224,8 @@ function dto(
   stopReason: string | null,
   batch?: CoreV1EncounterBatchResult,
   consequencesSummary?: EncounterConsequenceSummaryV1,
+  scene?: EncounterDto['scene'],
+  beatSummary?: EncounterBeatSummaryDto,
 ): EncounterDto {
   const binding = new Map(record.participants.map((participant) => [participant.actorRef, participant.bindingKind]));
   const nextRequiredAction = encounterNextRequiredAction(state, lifecycleStatus);
@@ -234,6 +256,8 @@ function dto(
     ...(consequencesSummary === undefined ? {} : {
       consequencesSummary: publicEncounterConsequencesSummary(consequencesSummary),
     }),
+    ...(scene === undefined ? {} : { scene }),
+    ...(beatSummary === undefined ? {} : { beatSummary }),
   });
 }
 
@@ -278,7 +302,8 @@ async function persistTransition(
   requestHash: string,
   recorder: RecordingEncounterRollProvider,
   stopReason: string | null,
-  batch?: CoreV1EncounterBatchResult,
+    batch?: CoreV1EncounterBatchResult,
+    beatSummary?: EncounterBeatSummaryDto,
 ): Promise<EncounterDto> {
   if (state.stateVersion <= loaded.state.stateVersion) throw new EncounterError('ENCOUNTER_CORE_REJECTED');
   const initialLifecycleStatus = deriveEncounterLifecycle(state, stopReason);
@@ -338,7 +363,17 @@ async function persistTransition(
       protagonistActorId: terminal.protagonistActorId,
     });
   }
-  return dto(operation, loaded.record, persistedState, lifecycleStatus, stopReason, batch, terminal?.summary);
+  return dto(
+    operation,
+    loaded.record,
+    persistedState,
+    lifecycleStatus,
+    stopReason,
+    batch,
+    terminal?.summary,
+    operation === 'resolve_beat' ? encounterScenePackage(persistedState, persistedAuthorities) : undefined,
+    beatSummary,
+  );
 }
 
 async function lockAndLoad(
@@ -422,6 +457,263 @@ function deterministicReactionResolver(input: ResolveEncounterReactionInput): Re
   };
 }
 
+function beatSlotRef(
+  state: CoreV1EncounterState,
+  actorRef: string,
+  component: EncounterBeatComponent,
+): string {
+  const actor = state.participants.find((participant) => participant.actorRef === actorRef);
+  if (actor === undefined) throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
+  const preferred = component.type === 'attack' || component.type === 'cast' ? 'primary' : 'secondary';
+  return actor.actionSlots.find((slot) => slot.slotRef === preferred)?.slotRef
+    ?? actor.actionSlots[0]?.slotRef
+    ?? (() => { throw new EncounterError('ENCOUNTER_CORE_REJECTED'); })();
+}
+
+function mechanicalBeatIntent(
+  component: Extract<EncounterBeatComponent, { type: 'attack' | 'cast' | 'use_item' | 'prepare' }>,
+  actorRef: string,
+  intentRef: string,
+  slotRef: string,
+): CoreV1EncounterActionIntent {
+  const targetRefs = component.targetRefs ?? [];
+  return {
+    intentRef,
+    sourceActorRef: actorRef,
+    slotRef,
+    actionSource: component.type === 'attack' ? 'basic_weapon_attack'
+      : component.type === 'use_item' ? 'consumable' : 'content',
+    targetSelector: targetRefs.length === 0 ? 'self' : 'explicit',
+    requestedTargetRefs: [...targetRefs],
+    ...(component.type === 'attack' || component.type === 'use_item'
+      ? { weaponEntryRef: component.inventoryEntryRef } : { contentRef: component.contentRef }),
+    ...(component.type === 'attack' && component.versatileMode !== undefined
+      ? { versatileMode: component.versatileMode } : {}),
+  };
+}
+
+async function beatAction(
+  transaction: EncounterTransaction,
+  loaded: LoadedEncounter,
+  state: CoreV1EncounterState,
+  actorRef: string,
+  component: EncounterBeatComponent,
+  intentRef: string,
+) {
+  const slotRef = beatSlotRef(state, actorRef, component);
+  if (component.type === 'attack' || component.type === 'cast' || component.type === 'use_item') {
+    const intent = mechanicalBeatIntent(component, actorRef, intentRef, slotRef);
+    const authoritative = await loadAuthoritativeEncounterAction(transaction, { ...loaded, state }, intent);
+    return { intent, ...authoritative };
+  }
+  if (component.type === 'prepare') {
+    const preparedIntent = mechanicalBeatIntent(component, actorRef, `${intentRef}-prepared`, 'primary');
+    await loadAuthoritativeEncounterAction(transaction, { ...loaded, state }, preparedIntent);
+  }
+  return genericEncounterAction(state, actorRef, component, intentRef, slotRef);
+}
+
+interface ExecutedBeatPlan {
+  readonly state: CoreV1EncounterState;
+  readonly report: CoreV1EncounterBatchResult;
+  readonly results: EncounterBeatSummaryDto['componentResults'];
+  readonly prepared: readonly { readonly index: number; readonly component: Extract<EncounterBeatComponent, { type: 'prepare' }> }[];
+  readonly resolvedConsumables: readonly { readonly actionRef: string; readonly actorRef: string; readonly entryRef: string }[];
+}
+
+function componentSnapshot(component: EncounterBeatComponent): string {
+  return JSON.stringify(component);
+}
+
+function rejectedComponentDetails(reason: string, index: number) {
+  const code = reason === 'distance_incompatible' ? 'DISTANCE_INCOMPATIBLE'
+    : reason === 'no_valid_target' ? 'NO_VALID_TARGET'
+      : reason === 'resource_below_required' ? 'RESOURCE_BELOW_REQUIRED'
+        : reason === 'reaction_required' ? 'REACTION_REQUIRED'
+          : 'COMPONENT_NOT_RESOLVED';
+  const alternative = reason === 'distance_incompatible'
+    ? 'Choose an adjacent zone, or use run only for at most two transitions.'
+    : reason === 'no_valid_target' ? 'Choose a target allowed by relation, range and action profile.'
+      : reason === 'resource_below_required' ? 'Choose a lower-cost action or recover the required resource.'
+        : 'Load the current encounter state and choose a compatible component.';
+  return { code, field: `intent.components.${String(index)}`, alternative };
+}
+
+function atomicBeatIssues(results: EncounterBeatSummaryDto['componentResults']) {
+  return results.map((result) => ({
+    path: `intent.components.${String(result.index)}`,
+    code: result.status === 'rejected' ? result.code ?? 'COMPONENT_REJECTED' : 'ATOMIC_ROLLBACK',
+    message: result.status === 'rejected'
+      ? `${result.reason ?? 'Component was rejected'}. ${result.alternative ?? 'Choose a compatible component.'}`
+      : `Component was ${result.status} in memory but was not persisted because the beat policy required full rollback.`,
+  }));
+}
+
+async function executeBeatPlan(
+  transaction: EncounterTransaction,
+  loaded: LoadedEncounter,
+  state: CoreV1EncounterState,
+  actorRef: string,
+  components: readonly EncounterBeatComponent[],
+  prefix: string,
+  recorder: RecordingEncounterRollProvider,
+): Promise<ExecutedBeatPlan> {
+  const intents: CoreV1EncounterActionIntent[] = [];
+  const definitions: Record<string, CoreV1EncounterActionDefinition> = {};
+  const targetingContexts: Record<string, CoreV1EncounterTargetingContext> = {};
+  const prepared: { index: number; component: Extract<EncounterBeatComponent, { type: 'prepare' }> }[] = [];
+  const expectedActions: { index: number; actionRef: string; component: EncounterBeatComponent }[] = [];
+  const normalized = components.map((component) => normalizeBeatComponent(state, actorRef, component));
+  const appliedComponents = normalized.map((entry) => entry.component);
+  const conditionalComponentIndexes = new Set(appliedComponents.flatMap((component, index) => (
+    component.type === 'protect' || component.type === 'intercept' || component.type === 'prepare' ? [index] : []
+  )));
+  const scheduledComponentIndexes = new Set(appliedComponents.flatMap((_, index) => (
+    conditionalComponentIndexes.has(index) ? [] : [index]
+  )));
+  if (scheduledComponentIndexes.size === 0) scheduledComponentIndexes.add(0);
+  let sequence = state.actionSequence;
+  for (const [index, component] of appliedComponents.entries()) {
+    const intentRef = `beat-${prefix}-${index}`;
+    const action = await beatAction(transaction, loaded, state, actorRef, component, intentRef);
+    if (scheduledComponentIndexes.has(index)) {
+      intents.push(action.intent);
+      definitions[intentRef] = action.definition;
+      targetingContexts[intentRef] = action.targetingContext;
+      expectedActions.push({ index, actionRef: `${state.encounterRef}-action-${sequence}`, component });
+      sequence += 1;
+    }
+    if (component.type === 'prepare') prepared.push({ index, component });
+  }
+  const report = coreValue(applyCoreV1EncounterActionPlan({
+    encounter: state,
+    plan: {
+      planRef: `beat-plan-${prefix}`,
+      actorRef,
+      expectedStateVersion: state.stateVersion,
+      intents,
+      stopConditions: ['actorIncapacitated', 'reactionRequired', 'processingLimit', 'noValidTarget'],
+    },
+    definitions,
+    targetingContexts,
+    runtime: { rolls: recorder, reactionOutcomes: automaticReactionResolver() },
+  }));
+  const resolved = new Set(report.resolvedActions);
+  const expectedByIndex = new Map(expectedActions.map((entry) => [entry.index, entry]));
+  const results = components.map((requestedComponent, index) => {
+    const component = appliedComponents[index] ?? requestedComponent;
+    const modification = normalized[index]?.modification;
+    const expected = expectedByIndex.get(index);
+    if (expected === undefined) return {
+      index,
+      type: component.type,
+      status: 'conditional' as const,
+      code: 'TRIGGER_PENDING',
+      reason: 'The conditional component was stored but its trigger has not fired.',
+      field: `intent.components.${String(index)}`,
+      alternative: 'Continue from this checkpoint; the backend will fire it only when its trigger occurs.',
+    };
+    const wasResolved = resolved.has(expected.actionRef);
+    const rejectedReason = beatComponentRejectionReason(
+      state,
+      actorRef,
+      component,
+      report.stopReason ?? 'component_not_resolved',
+    );
+    const status = !wasResolved ? 'rejected' as const
+      : conditionalComponentIndexes.has(index) ? 'conditional' as const
+        : modification === undefined ? 'accepted' as const : 'modified' as const;
+    return {
+      index,
+      type: component.type,
+      status,
+      ...(!wasResolved ? {
+        ...rejectedComponentDetails(rejectedReason, index),
+        reason: rejectedReason,
+      } : status === 'modified' && modification !== undefined ? {
+        code: modification.code,
+        reason: modification.reason,
+        field: `intent.components.${String(index)}.${modification.field}`,
+        requested: componentSnapshot(requestedComponent),
+        applied: componentSnapshot(component),
+      } : status === 'conditional' ? {
+        code: 'TRIGGER_PENDING',
+        reason: 'The conditional component was stored but its trigger has not fired.',
+        field: `intent.components.${String(index)}`,
+        alternative: 'Continue from this checkpoint; the backend will fire it only when its trigger occurs.',
+      } : {}),
+    };
+  });
+  return {
+    state: report.encounterAfter,
+    report,
+    results,
+    prepared: prepared.filter(({ index }) => results[index]?.status === 'conditional'),
+    resolvedConsumables: expectedActions.flatMap(({ actionRef, component }) => (
+      component.type === 'use_item' && resolved.has(actionRef)
+        ? [{ actionRef, actorRef, entryRef: component.inventoryEntryRef }] : []
+    )),
+  };
+}
+
+function storePreparedPlans(
+  state: CoreV1EncounterState,
+  actorRef: string,
+  prepared: ExecutedBeatPlan['prepared'],
+  prefix: string,
+): CoreV1EncounterState {
+  if (prepared.length === 0) return state;
+  const additions = prepared.map(({ index, component }) => {
+    const trigger = component.trigger.replaceAll('_', '-');
+    return {
+      planRef: `prepared-${trigger}-${prefix}-${index}`,
+      actorRef,
+      expectedStateVersion: state.stateVersion + 1,
+      intents: [mechanicalBeatIntent(component, actorRef, `prepared-intent-${prefix}-${index}`, 'primary')],
+      stopConditions: ['actorIncapacitated', 'reactionRequired', 'processingLimit', 'noValidTarget'] as const,
+    };
+  });
+  if (state.actionPlans.length + additions.length > 5) throw new EncounterError('ENCOUNTER_CORE_REJECTED');
+  return {
+    ...state,
+    stateVersion: state.stateVersion + 1,
+    actionPlans: [...state.actionPlans, ...additions].sort((left, right) => left.planRef.localeCompare(right.planRef)),
+  };
+}
+
+function preparedTriggerMatches(planRef: string, npcActions: EncounterBeatSummaryDto['npcActions']): boolean {
+  if (planRef.startsWith('prepared-enemy-advances-')) return npcActions.some((action) => action.actionType === 'move');
+  if (planRef.startsWith('prepared-enemy-attacks-')) return npcActions.some((action) => action.actionType === 'attack' || action.actionType === 'cast');
+  if (planRef.startsWith('prepared-ally-attacked-')) return npcActions.some((action) => action.actionType === 'attack' || action.actionType === 'cast');
+  return false;
+}
+
+async function executeTriggeredPreparedPlans(
+  transaction: EncounterTransaction,
+  loaded: LoadedEncounter,
+  state: CoreV1EncounterState,
+  npcActions: EncounterBeatSummaryDto['npcActions'],
+  recorder: RecordingEncounterRollProvider,
+): Promise<{ readonly state: CoreV1EncounterState; readonly reports: readonly CoreV1EncounterBatchResult[] }> {
+  let current = state;
+  const reports: CoreV1EncounterBatchResult[] = [];
+  for (const stored of state.actionPlans.filter((plan) => preparedTriggerMatches(plan.planRef, npcActions))) {
+    const intent = stored.intents[0];
+    if (intent === undefined) continue;
+    const authoritative = await loadAuthoritativeEncounterAction(transaction, { ...loaded, state: current }, intent);
+    const report = coreValue(applyCoreV1EncounterActionPlan({
+      encounter: current,
+      plan: { ...stored, expectedStateVersion: current.stateVersion },
+      definitions: { [intent.intentRef]: authoritative.definition },
+      targetingContexts: { [intent.intentRef]: authoritative.targetingContext },
+      runtime: { rolls: recorder, reactionOutcomes: automaticReactionResolver() },
+    }));
+    reports.push(report);
+    current = report.encounterAfter;
+  }
+  return { state: current, reports };
+}
+
 function translate(error: unknown): never {
   if (error instanceof EncounterError) throw error;
   if (error instanceof NotFoundError) throw error;
@@ -465,8 +757,19 @@ export function createEncounterService(
       transaction: EncounterTransaction,
       loaded: LoadedEncounter,
       recorder: RecordingEncounterRollProvider,
-    ) => Promise<{ readonly state: CoreV1EncounterState; readonly batch?: CoreV1EncounterBatchResult; readonly stopReason: string | null }>
-      | { readonly state: CoreV1EncounterState; readonly batch?: CoreV1EncounterBatchResult; readonly stopReason: string | null },
+    ) => Promise<{
+      readonly state: CoreV1EncounterState;
+      readonly batch?: CoreV1EncounterBatchResult;
+      readonly stopReason: string | null;
+      readonly beatSummary?: EncounterBeatSummaryDto;
+      readonly resolvedConsumables?: readonly { readonly actionRef: string; readonly actorRef: string; readonly entryRef: string }[];
+    }> | {
+      readonly state: CoreV1EncounterState;
+      readonly batch?: CoreV1EncounterBatchResult;
+      readonly stopReason: string | null;
+      readonly beatSummary?: EncounterBeatSummaryDto;
+      readonly resolvedConsumables?: readonly { readonly actionRef: string; readonly actorRef: string; readonly entryRef: string }[];
+    },
   ): Promise<EncounterDto> => {
     try {
       return await executeIdempotentEncounter(
@@ -479,7 +782,9 @@ export function createEncounterService(
           assertEncounterMutationPreflight(loaded);
           const recorder = rollRecorderFactory(requestHash);
           const executed = await execute(transaction, loaded, recorder);
-          const applied = await applyEncounterMutations(transaction, loaded, executed.state, executed.batch);
+          const applied = await applyEncounterMutations(
+            transaction, loaded, executed.state, executed.batch, executed.resolvedConsumables,
+          );
           return persistTransition(
             transaction,
             loaded,
@@ -491,6 +796,7 @@ export function createEncounterService(
             recorder,
             executed.stopReason,
             executed.batch,
+            executed.beatSummary,
           );
         },
       );
@@ -728,6 +1034,7 @@ export function createEncounterService(
             loaded.record.stopReason === null ? null : normalizeEnum(loaded.record.stopReason),
             undefined,
             loaded.consequencesSummary,
+            encounterScenePackage(loaded.state, loaded.authorities),
           );
         }, {
           ...ENCOUNTER_TRANSACTION_OPTIONS,
@@ -780,6 +1087,156 @@ export function createEncounterService(
       return mutate('continue', input, [EncounterLifecycleStatus.PROCESSING_PAUSED], (_transaction, loaded, recorder) => {
         const batch = processUntilReactionBoundary(loaded.state, { rolls: recorder });
         return { state: batch.encounterAfter, batch, stopReason: batch.stopReason };
+      });
+    },
+
+    async resolveBeat(input: ResolveEncounterBeatInput): Promise<EncounterDto> {
+      validateMutationReference(input, ['intent', 'npcDirectives']);
+      inputRecord(input.intent, ['actorRef', 'objective', 'narrative', 'resolutionPolicy', 'components']);
+      assertReference(input.intent.actorRef);
+      if (typeof input.intent.objective !== 'string' || input.intent.objective.length < 1 || input.intent.objective.length > 120
+        || typeof input.intent.narrative !== 'string' || input.intent.narrative.length < 1 || input.intent.narrative.length > 1_000
+        || !['atomic', 'allow_partial'].includes(input.intent.resolutionPolicy)
+        || !Array.isArray(input.intent.components) || input.intent.components.length < 1 || input.intent.components.length > 3
+        || !Array.isArray(input.npcDirectives) || input.npcDirectives.length > 16) {
+        throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
+      }
+      const prefix = calculateEncounterRequestHash(withoutIdempotency(input)).slice(0, 20);
+      return mutate('resolve_beat', input, [
+        EncounterLifecycleStatus.AWAITING_INTENT,
+        EncounterLifecycleStatus.AWAITING_REACTION,
+        EncounterLifecycleStatus.PROCESSING_PAUSED,
+      ], async (transaction, loaded, recorder) => {
+        let startingState = loaded.state;
+        const reports: CoreV1EncounterBatchResult[] = [];
+        if (loaded.record.lifecycleStatus !== EncounterLifecycleStatus.AWAITING_INTENT) {
+          const resumed = coreValue(processCoreV1EncounterBatch(startingState, {
+            rolls: recorder, reactionOutcomes: automaticReactionResolver(),
+          }));
+          reports.push(resumed);
+          startingState = resumed.encounterAfter;
+        }
+        const mainActor = startingState.participants.find((participant) => participant.actorRef === input.intent.actorRef);
+        if (mainActor === undefined || mainActor.combatState === 'removed' || mainActor.resources.hp.current === 0) {
+          throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
+        }
+        const main = await executeBeatPlan(
+          transaction, loaded, startingState, input.intent.actorRef, input.intent.components, prefix, recorder,
+        );
+        const rejectedResults = main.results.filter((result) => result.status === 'rejected');
+        const essentialRejected = rejectedResults.some((result) => input.intent.components[result.index]?.essential === true);
+        if (rejectedResults.length > 0 && (
+          input.intent.resolutionPolicy === 'atomic'
+          || essentialRejected
+          || rejectedResults.length === main.results.length
+        )) {
+          throw new EncounterError('ENCOUNTER_BEAT_ATOMIC_REJECTED', { issues: atomicBeatIssues(main.results) });
+        }
+        const resolvedMainComponents = input.intent.components.filter((_, index) => (
+          main.results[index]?.status !== 'rejected'
+        ));
+        let current = applyBeatGuardCapabilities(
+          main.state, input.intent.actorRef, resolvedMainComponents, prefix,
+        );
+        current = storePreparedPlans(current, input.intent.actorRef, main.prepared, prefix);
+        reports.push(main.report);
+        const actorsActed = new Set<string>(main.report.resolvedActions.length === 0 ? [] : [input.intent.actorRef]);
+        const npcActions: EncounterBeatSummaryDto['npcActions'][number][] = [];
+        const npcResults: EncounterBeatSummaryDto['npcResults'][number][] = [];
+        const directiveByActor = new Map(input.npcDirectives.map((directive) => [directive.actorRef, directive]));
+        const eligibleNpcRefs = current.participants.filter((participant) => (
+          participant.actorRef !== input.intent.actorRef
+          && participant.combatState !== 'removed'
+          && participant.resources.hp.current > 0
+          && participant.actionSlots.some((slot) => slot.nextActionAtTick <= current.currentTick)
+        )).map((participant) => participant.actorRef).sort();
+        if (eligibleNpcRefs.length > 4) {
+          throw new EncounterError('ENCOUNTER_NPC_LIMIT_EXCEEDED', { issues: [
+            {
+              path: 'npcDirectives',
+              code: 'NPC_LIMIT_EXCEEDED',
+              message: `Beat has ${String(eligibleNpcRefs.length)} eligible NPCs; maximum is 4. Split the encounter decision.`,
+            },
+            {
+              path: 'intent.components',
+              code: 'BEAT_ROLLED_BACK',
+              message: 'Player components were resolved only in memory; no checkpoint was persisted.',
+            },
+            ...eligibleNpcRefs.map((actorRef) => ({
+              path: `npc.${actorRef}`,
+              code: 'NPC_NOT_PROCESSED',
+              message: `${actorRef} did not act because the whole beat was rejected.`,
+            })),
+          ] });
+        }
+        for (const [npcIndex, actorRef] of eligibleNpcRefs.entries()) {
+          const selected = selectNpcBeatComponent(
+            current,
+            actorRef,
+            input.intent.actorRef,
+            loaded.authorities.get(actorRef),
+            directiveByActor.get(actorRef),
+          );
+          const npc = await executeBeatPlan(
+            transaction,
+            loaded,
+            current,
+            actorRef,
+            [selected.component],
+            `${prefix}-npc-${npcIndex}`,
+            recorder,
+          );
+          const npcResolved = npc.report.resolvedActions.length > 0;
+          current = applyBeatGuardCapabilities(
+            npc.state,
+            actorRef,
+            npcResolved ? [selected.component] : [],
+            `${prefix}-npc-${npcIndex}`,
+          );
+          reports.push(npc.report);
+          if (npcResolved) {
+            actorsActed.add(actorRef);
+            npcResults.push({ actorRef, status: 'acted' });
+            npcActions.push({
+              actorRef,
+              strategy: selected.strategy,
+              actionType: selected.component.type,
+              ...(selected.targetRef === undefined ? {} : { targetRef: selected.targetRef }),
+            });
+          } else {
+            npcResults.push({
+              actorRef,
+              status: 'rejected',
+              reason: npc.results[0]?.reason ?? 'npc_component_not_resolved',
+            });
+          }
+        }
+        const triggered = await executeTriggeredPreparedPlans(transaction, loaded, current, npcActions, recorder);
+        current = triggered.state;
+        reports.push(...triggered.reports);
+        for (const report of reports) current = consumeTriggeredBeatCapabilities(current, report);
+        const terminal = current.completionCandidate !== null;
+        if (terminal) current = coreValue(confirmCoreV1EncounterCompletion(current));
+        const finalStopReason = terminal ? 'encounter_completed' : 'new_intent_required';
+        const merged = mergeReports(loaded.state, reports, finalStopReason);
+        const batch = { ...merged, encounterAfter: current };
+        const beatSummary: EncounterBeatSummaryDto = {
+          externalTransitions: 1,
+          resolutionPolicy: input.intent.resolutionPolicy,
+          partialResolutionApplied: rejectedResults.length > 0,
+          actorsActed: [...actorsActed].sort(),
+          componentResults: main.results,
+          npcActions,
+          npcResults,
+          requiresPlayerDecision: !terminal,
+        };
+        return {
+          state: current,
+          batch,
+          stopReason: finalStopReason,
+          beatSummary,
+          resolvedConsumables: main.resolvedConsumables,
+        };
       });
     },
 

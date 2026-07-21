@@ -32,6 +32,14 @@ function fakeInternal() {
     }),
     confirmCompletion: vi.fn<EncounterApplicationService['confirmCompletion']>().mockResolvedValue({ ...internalDto('confirm_completion'), lifecycleStatus: 'completed', nextRequiredAction: { type: 'none' as const } }),
     cancel: vi.fn<EncounterApplicationService['cancel']>().mockResolvedValue({ ...internalDto('cancel'), lifecycleStatus: 'cancelled', nextRequiredAction: { type: 'none' as const } }),
+    resolveBeat: vi.fn<EncounterApplicationService['resolveBeat']>().mockResolvedValue({
+      ...internalDto('resolve_beat'),
+      beatSummary: {
+        externalTransitions: 1, resolutionPolicy: 'atomic', partialResolutionApplied: false, actorsActed: ['hero'],
+        componentResults: [{ index: 0, type: 'defend', status: 'accepted' }],
+        npcActions: [], npcResults: [], requiresPlayerDecision: true,
+      },
+    }),
   } satisfies EncounterApplicationService;
 }
 
@@ -120,6 +128,33 @@ describe('encounter HTTP facade', () => {
     expect(forwarded?.expectedStateVersion).toBe(7);
     expect(forwarded?.intent).toMatchObject({ sourceActorRef: 'hero', slotRef: 'custom-slot', actionSource: 'basic_weapon_attack', targetSelector: 'explicit', requestedTargetRefs: ['enemy'], weaponEntryRef: 'sword', versatileMode: 'two_handed' });
     expect(JSON.stringify(forwarded)).not.toMatch(/hit|critical|damage|roll|outcome/);
+  });
+
+  it('forwards one high-level beat to the central use case without micro-orchestrating legacy methods', async () => {
+    const internal = fakeInternal();
+    const input = manageEncounterSchema.parse({
+      operation: 'resolve_beat', ...scope, idempotencyKey: 'resolve-beat-001', expectedStateVersion: 7,
+      intent: {
+        actorRef: 'hero', objective: 'protect_and_prepare', narrative: 'Hero recua e protege Ally.',
+        resolutionPolicy: 'atomic',
+        components: [{ type: 'move', destination: 'far' }, { type: 'protect', targetRef: 'ally' }],
+      },
+      npcDirectives: [{ actorRef: 'enemy', strategy: 'aggressive', targetRef: 'hero' }],
+    });
+    const result = await createEncounterHttpService(internal).manage(input);
+    expect(result.result).toBe('beat_resolved');
+    expect(internal.resolveBeat).toHaveBeenCalledOnce();
+    const forwarded = internal.resolveBeat.mock.calls[0]?.[0];
+    expect(forwarded?.expectedStateVersion).toBe(7);
+    expect(forwarded?.intent).toMatchObject({ actorRef: 'hero', resolutionPolicy: 'atomic', components: [
+      { type: 'move', destination: 'far' }, { type: 'protect', targetRef: 'ally' },
+    ] });
+    expect(forwarded?.npcDirectives).toEqual([
+      { actorRef: 'enemy', strategy: 'aggressive', targetRef: 'hero' },
+    ]);
+    expect(internal.submitIntent).not.toHaveBeenCalled();
+    expect(internal.continue).not.toHaveBeenCalled();
+    expect(internal.resolveReaction).not.toHaveBeenCalled();
   });
 
   it.each(['load', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel'] as const)('dispatches %s only to its matching method', async (operation) => {

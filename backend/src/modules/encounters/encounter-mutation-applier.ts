@@ -277,6 +277,7 @@ export async function applyEncounterMutations(
   loaded: LoadedEncounter,
   afterInput: CoreV1EncounterState,
   batch?: CoreV1EncounterBatchResult,
+  resolvedConsumables: readonly { readonly actionRef: string; readonly actorRef: string; readonly entryRef: string }[] = [],
 ): Promise<{
   readonly state: CoreV1EncounterState;
   readonly authorities: ReadonlyMap<string, PersistedEncounterAuthority>;
@@ -296,14 +297,17 @@ export async function applyEncounterMutations(
       flags.get(actorRef)!.effects = changed;
     }
   }
+  const explicitConsumables = new Map(resolvedConsumables.map((entry) => [entry.actionRef, entry]));
   for (const actionRef of batch?.resolvedActions ?? []) {
     const action = loaded.state.activeActions.find((candidate) => candidate.actionRef === actionRef);
-    const entryRef = action?.executionPlan.consumedEntryRef;
-    if (entryRef === undefined || action === undefined) continue;
-    const authority = loaded.authorities.get(action.sourceActorRef);
+    const explicit = explicitConsumables.get(actionRef);
+    const entryRef = action?.executionPlan.consumedEntryRef ?? explicit?.entryRef;
+    const sourceActorRef = action?.sourceActorRef ?? explicit?.actorRef;
+    if (entryRef === undefined || sourceActorRef === undefined) continue;
+    const authority = loaded.authorities.get(sourceActorRef);
     if (authority === undefined) throw new EncounterError('ENCOUNTER_EPHEMERAL_MUTATION_UNSUPPORTED');
     await consumeInventoryEntry(transaction, authority.actor.id, entryRef);
-    flags.get(action.sourceActorRef)!.inventory = true;
+    flags.get(sourceActorRef)!.inventory = true;
   }
   for (const [actorRef, change] of flags) {
     if (!change.inventory && !change.effects) continue;

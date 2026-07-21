@@ -82,6 +82,34 @@ describe('encounter public DTO mapper', () => {
     expect(JSON.stringify(publicDto)).not.toMatch(/fx_private|private-id|"xp"|"gold"|"loot"/);
   });
 
+  it('returns a compact scene package on load and an authoritative one-call beat summary', () => {
+    const loaded = toEncounterPublicDto(dto({
+      scene: {
+        schemaVersion: 1, stateVersion: 2,
+        genericActions: ['move', 'defend', 'protect', 'prepare', 'intercept', 'assist', 'flee', 'observe', 'interact', 'improvise', 'use_item', 'attack', 'cast'],
+        environment: { zoneModel: 'abstract_bands', notes: ['Exact geometry is not inferred.'] },
+        participants: [{
+          actorRef: 'hero', role: 'guardian', zone: 'near', equippedEntryRefs: ['sword'],
+          knownContentRefs: [{ contentType: 'spell', code: 'spark' }], activeEffectRefs: [], preparedActionRefs: [],
+          tacticalProfile: { strategy: 'defensive', objective: 'protect ally', faction: 'party', traits: ['loyal'] },
+        }],
+      },
+    }));
+    expect(loaded.scene).toMatchObject({ stateVersion: 2, environment: { zoneModel: 'abstract_bands' } });
+
+    const resolved = toEncounterPublicDto(dto({
+      operation: 'resolve_beat',
+      beatSummary: {
+        externalTransitions: 1, resolutionPolicy: 'atomic', partialResolutionApplied: false, actorsActed: ['hero'],
+        componentResults: [{ index: 0, type: 'defend', status: 'accepted' }],
+        npcActions: [], npcResults: [], requiresPlayerDecision: true,
+      },
+    }));
+    expect(resolved).toMatchObject({
+      result: 'beat_resolved', beatSummary: { externalTransitions: 1, requiresPlayerDecision: true },
+    });
+  });
+
   it('rejects unknown lifecycle/operation combinations instead of selecting a fallback result', () => {
     expect(() => encounterPublicResult(dto({ operation: 'continue', lifecycleStatus: 'unknown' }))).toThrow();
   });

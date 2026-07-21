@@ -986,8 +986,8 @@
       "post": {
         "operationId": "manageEncounter",
         "tags": ["Encounters"],
-        "summary": "Criar, carregar ou avançar um encontro autoritativo",
-        "description": "Action única com sete operações. load é somente leitura. Mutações exigem idempotencyKey; operações após create também exigem expectedStateVersion. Em conflito, execute load. Reuse a chave só para replay idêntico. Envie intenção, nunca rolls, resultados mecânicos, snapshot ou IDs internos.",
+        "summary": "Criar, carregar ou resolver um beat autoritativo de encontro",
+        "description": "Prefira load uma vez e resolve_beat por decisão; o backend internaliza avanço, reações, NPCs e conclusão. O fluxo antigo é fallback. Mutações usam idempotencyKey e expectedStateVersion após create. Em conflito, use load. Nunca envie rolls, resultados, snapshots ou IDs internos.",
         "requestBody": {
           "required": true,
           "content": {
@@ -996,6 +996,16 @@
               "examples": {
                 "create": { "value": { "operation": "create", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-create-001", "partySideRef": "party", "participants": [{ "actorRef": "ralph", "sideRef": "party", "zone": "near" }, { "actorRef": "goblin-scout", "sideRef": "hostiles", "zone": "medium" }] } },
                 "load": { "value": { "operation": "load", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush" } },
+                "resolve_beat_attack": { "summary": "Ataque", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-attack-001", "expectedStateVersion": 1, "intent": { "actorRef": "ralph", "objective": "attack_scout", "narrative": "Ralph ataca o batedor.", "resolutionPolicy": "atomic", "components": [{ "type": "attack", "inventoryEntryRef": "starter-dagger-1", "targetRefs": ["goblin-scout"] }] }, "npcDirectives": [] } },
+                "resolve_beat_cast": { "summary": "Magia", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-cast-001", "expectedStateVersion": 2, "intent": { "actorRef": "ralph", "objective": "cast_spark", "narrative": "Ralph conjura Centelha Ígnea.", "resolutionPolicy": "atomic", "components": [{ "type": "cast", "contentRef": { "scope": "campaign", "contentType": "spell", "code": "centelha-ignea", "versionNumber": 1 }, "targetRefs": ["goblin-scout"] }] }, "npcDirectives": [] } },
+                "resolve_beat_use_item": { "summary": "Uso de item", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-item-001", "expectedStateVersion": 3, "intent": { "actorRef": "ralph", "objective": "recover", "narrative": "Ralph usa a poção.", "resolutionPolicy": "atomic", "components": [{ "type": "use_item", "inventoryEntryRef": "healing-potion-1", "targetRefs": ["ralph"] }] }, "npcDirectives": [] } },
+                "resolve_beat_move_protect_prepare": { "summary": "Mover, proteger e preparar", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-composite-001", "expectedStateVersion": 4, "intent": { "actorRef": "ralph", "objective": "protect_and_prepare", "narrative": "Ralph recua, protege Lyra e prepara a magia.", "resolutionPolicy": "atomic", "components": [{ "type": "move", "destination": "far" }, { "type": "protect", "targetRef": "lyra" }, { "type": "prepare", "contentRef": { "scope": "campaign", "contentType": "spell", "code": "centelha-ignea", "versionNumber": 1 }, "trigger": "enemy_advances", "targetRefs": ["goblin-scout"] }] }, "npcDirectives": [{ "actorRef": "lyra", "strategy": "aggressive", "targetRef": "goblin-scout" }] } },
+                "resolve_beat_impossible": { "summary": "Ação impossível — rejeição de domínio", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-impossible-001", "expectedStateVersion": 5, "intent": { "actorRef": "ralph", "objective": "attack_without_owned_weapon", "narrative": "Ralph tenta atacar com uma arma indisponível.", "resolutionPolicy": "atomic", "components": [{ "type": "attack", "inventoryEntryRef": "missing-weapon", "targetRefs": ["goblin-scout"] }] }, "npcDirectives": [] } },
+                "resolve_beat_after_component_limit": { "summary": "Correção após exceder três componentes", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-split-002", "expectedStateVersion": 5, "intent": { "actorRef": "ralph", "objective": "split_intention", "narrative": "Ralph divide a intenção e executa apenas este beat.", "resolutionPolicy": "atomic", "components": [{ "type": "move", "destination": "medium" }, { "type": "defend" }, { "type": "observe", "targetRef": "goblin-scout" }] }, "npcDirectives": [] } },
+                "resolve_beat_after_component_rejection": { "summary": "Alternativa após componente rejeitado", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-corrected-002", "expectedStateVersion": 5, "intent": { "actorRef": "ralph", "objective": "valid_adjacent_move", "narrative": "Ralph escolhe uma faixa adjacente.", "resolutionPolicy": "atomic", "components": [{ "type": "move", "destination": "medium", "essential": true }] }, "npcDirectives": [] } },
+                "resolve_beat_npc_limit": { "summary": "Mais NPCs elegíveis — beat rejeitado antes da persistência", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "large-ambush", "idempotencyKey": "beat-npc-limit-001", "expectedStateVersion": 1, "intent": { "actorRef": "ralph", "objective": "defend", "narrative": "Ralph assume postura defensiva.", "resolutionPolicy": "atomic", "components": [{ "type": "defend" }] }, "npcDirectives": [{ "actorRef": "npc-1", "strategy": "aggressive" }, { "actorRef": "npc-2", "strategy": "aggressive" }, { "actorRef": "npc-3", "strategy": "aggressive" }, { "actorRef": "npc-4", "strategy": "aggressive" }, { "actorRef": "npc-5", "strategy": "aggressive" }] } },
+                "resolve_beat_version_conflict": { "summary": "Conflito de versão — recarregar antes de nova chave", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-stale-001", "expectedStateVersion": 1, "intent": { "actorRef": "ralph", "objective": "defend", "narrative": "Ralph se defende com uma versão possivelmente antiga.", "resolutionPolicy": "atomic", "components": [{ "type": "defend" }] }, "npcDirectives": [] } },
+                "resolve_beat_idempotent_replay": { "summary": "Replay idempotente: payload e chave idênticos ao ataque", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-attack-001", "expectedStateVersion": 1, "intent": { "actorRef": "ralph", "objective": "attack_scout", "narrative": "Ralph ataca o batedor.", "resolutionPolicy": "atomic", "components": [{ "type": "attack", "inventoryEntryRef": "starter-dagger-1", "targetRefs": ["goblin-scout"] }] }, "npcDirectives": [] } },
                 "submit_intent": { "value": { "operation": "submit_intent", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-intent-001", "expectedStateVersion": 1, "intent": { "actorRef": "ralph", "slotRef": "primary", "actionSource": "basic_weapon_attack", "targetSelector": "explicit", "targetRefs": ["goblin-scout"], "inventoryEntryRef": "iron-sword", "versatileMode": "one_handed" } } },
                 "resolve_reaction": { "value": { "operation": "resolve_reaction", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-reaction-001", "expectedStateVersion": 2, "reactorRef": "ralph", "reactionKind": "block" } },
                 "continue": { "value": { "operation": "continue", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-continue-001", "expectedStateVersion": 3 } },
@@ -1257,12 +1267,50 @@
         ],
         "description": "Somente intenção. intentRef é derivada; rolls, hit, crítico, dano, custos e outcomes são proibidos."
       },
+      "EncounterBeatComponent": {
+        "oneOf": [
+          { "type": "object", "additionalProperties": false, "required": ["type", "destination"], "properties": { "type": { "const": "move" }, "essential": { "type": "boolean" }, "destination": { "type": "string", "enum": ["engaged", "near", "medium", "far", "out_of_range"] }, "movementKind": { "type": "string", "enum": ["approach", "retreat", "run", "disengage"] } } },
+          { "type": "object", "additionalProperties": false, "required": ["type"], "properties": { "type": { "const": "defend" }, "essential": { "type": "boolean" } } },
+          { "type": "object", "additionalProperties": false, "required": ["type", "targetRef"], "properties": { "type": { "const": "protect" }, "essential": { "type": "boolean" }, "targetRef": { "$ref": "#/components/schemas/Code" } } },
+          { "type": "object", "additionalProperties": false, "required": ["type", "contentRef", "trigger"], "properties": { "type": { "const": "prepare" }, "essential": { "type": "boolean" }, "contentRef": { "$ref": "#/components/schemas/EncounterContentReference" }, "trigger": { "type": "string", "enum": ["enemy_advances", "enemy_attacks", "ally_attacked"] }, "targetRefs": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } } } },
+          { "type": "object", "additionalProperties": false, "required": ["type", "targetRef"], "properties": { "type": { "const": "intercept" }, "essential": { "type": "boolean" }, "targetRef": { "$ref": "#/components/schemas/Code" } } },
+          { "type": "object", "additionalProperties": false, "required": ["type", "targetRef"], "properties": { "type": { "const": "assist" }, "essential": { "type": "boolean" }, "targetRef": { "$ref": "#/components/schemas/Code" } } },
+          { "type": "object", "additionalProperties": false, "required": ["type"], "properties": { "type": { "const": "flee" }, "essential": { "type": "boolean" }, "destination": { "type": "string", "enum": ["far", "out_of_range"] } } },
+          { "type": "object", "additionalProperties": false, "required": ["type"], "properties": { "type": { "const": "observe" }, "essential": { "type": "boolean" }, "targetRef": { "$ref": "#/components/schemas/Code" } } },
+          { "type": "object", "additionalProperties": false, "required": ["type", "targetRef"], "properties": { "type": { "const": "interact" }, "essential": { "type": "boolean" }, "targetRef": { "$ref": "#/components/schemas/Code" }, "description": { "type": "string", "minLength": 1, "maxLength": 500 } } },
+          { "type": "object", "additionalProperties": false, "required": ["type", "description"], "properties": { "type": { "const": "improvise" }, "essential": { "type": "boolean" }, "description": { "type": "string", "minLength": 1, "maxLength": 500 }, "targetRef": { "$ref": "#/components/schemas/Code" } } },
+          { "type": "object", "additionalProperties": false, "required": ["type", "inventoryEntryRef"], "properties": { "type": { "const": "use_item" }, "essential": { "type": "boolean" }, "inventoryEntryRef": { "$ref": "#/components/schemas/Code" }, "targetRefs": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } } } },
+          { "type": "object", "additionalProperties": false, "required": ["type", "inventoryEntryRef", "targetRefs"], "properties": { "type": { "const": "attack" }, "essential": { "type": "boolean" }, "inventoryEntryRef": { "$ref": "#/components/schemas/Code" }, "targetRefs": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } }, "versatileMode": { "type": "string", "enum": ["one_handed", "two_handed"] } } },
+          { "type": "object", "additionalProperties": false, "required": ["type", "contentRef"], "properties": { "type": { "const": "cast" }, "essential": { "type": "boolean" }, "contentRef": { "$ref": "#/components/schemas/EncounterContentReference" }, "targetRefs": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } } } }
+        ],
+        "description": "Componente de intenção; no máximo três por beat. Ações comuns não exigem habilidade homônima."
+      },
+      "EncounterBeatIntentInput": {
+        "type": "object", "additionalProperties": false,
+        "required": ["actorRef", "objective", "narrative", "resolutionPolicy", "components"],
+        "properties": {
+          "actorRef": { "$ref": "#/components/schemas/Code" },
+          "objective": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "narrative": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "resolutionPolicy": { "type": "string", "enum": ["atomic", "allow_partial"], "description": "atomic reverte tudo se qualquer componente falhar; allow_partial só persiste componentes não essenciais resolvidos." },
+          "components": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "$ref": "#/components/schemas/EncounterBeatComponent" } }
+        }
+      },
+      "EncounterNpcDirective": {
+        "type": "object", "additionalProperties": false,
+        "required": ["actorRef", "strategy"],
+        "properties": {
+          "actorRef": { "$ref": "#/components/schemas/Code" },
+          "strategy": { "type": "string", "enum": ["aggressive", "defensive", "protect_ally", "attack_vulnerable", "flee_if_hurt", "prioritize_caster"] },
+          "targetRef": { "$ref": "#/components/schemas/Code" }
+        }
+      },
       "ManageEncounterInput": {
         "type": "object",
         "additionalProperties": false,
         "required": ["operation", "playerRef", "worldRef", "campaignRef", "encounterRef"],
         "properties": {
-          "operation": { "type": "string", "enum": ["create", "load", "submit_intent", "resolve_reaction", "continue", "confirm_completion", "cancel"] },
+          "operation": { "type": "string", "enum": ["create", "load", "resolve_beat", "submit_intent", "resolve_reaction", "continue", "confirm_completion", "cancel"] },
           "playerRef": { "$ref": "#/components/schemas/Code" },
           "worldRef": { "$ref": "#/components/schemas/Code" },
           "campaignRef": { "$ref": "#/components/schemas/Code" },
@@ -1272,7 +1320,8 @@
           "partySideRef": { "$ref": "#/components/schemas/Code" },
           "participants": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/components/schemas/EncounterParticipantInput" } },
           "relationOverrides": { "type": "array", "maxItems": 128, "items": { "$ref": "#/components/schemas/EncounterRelationOverride" } },
-          "intent": { "$ref": "#/components/schemas/EncounterIntentInput" },
+          "intent": { "oneOf": [{ "$ref": "#/components/schemas/EncounterIntentInput" }, { "$ref": "#/components/schemas/EncounterBeatIntentInput" }] },
+          "npcDirectives": { "type": "array", "maxItems": 16, "items": { "$ref": "#/components/schemas/EncounterNpcDirective" } },
           "reactorRef": { "$ref": "#/components/schemas/Code" },
           "reactionKind": { "type": "string", "enum": ["block", "active_dodge", "interrupt", "counter_attack"] }
         },
@@ -1280,6 +1329,7 @@
           { "if": { "properties": { "operation": { "const": "create" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "participants"], "allOf": [{ "not": { "required": ["expectedStateVersion"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } },
           { "if": { "properties": { "operation": { "const": "load" } }, "required": ["operation"] }, "then": { "allOf": [{ "not": { "required": ["idempotencyKey"] } }, { "not": { "required": ["expectedStateVersion"] } }, { "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } },
           { "if": { "properties": { "operation": { "const": "submit_intent" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion", "intent"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } },
+          { "if": { "properties": { "operation": { "const": "resolve_beat" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion", "intent"], "properties": { "intent": { "$ref": "#/components/schemas/EncounterBeatIntentInput" } }, "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } },
           { "if": { "properties": { "operation": { "const": "resolve_reaction" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion", "reactorRef", "reactionKind"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }] } },
           { "if": { "properties": { "operation": { "enum": ["continue", "confirm_completion", "cancel"] } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } }
         ],
@@ -1366,11 +1416,95 @@
         },
         "description": "Consequências terminais oficiais e allowlisted. Não contém XP, level-up, ouro, loot, IDs, effectRefs, hashes, snapshots ou rolls."
       },
+      "EncounterSceneTacticalProfile": {
+        "type": "object", "additionalProperties": false,
+        "required": ["strategy", "objective", "faction", "traits"],
+        "properties": {
+          "strategy": { "type": ["string", "null"], "maxLength": 200 },
+          "objective": { "type": ["string", "null"], "maxLength": 200 },
+          "faction": { "type": ["string", "null"], "maxLength": 200 },
+          "traits": { "type": "array", "maxItems": 16, "items": { "type": "string", "maxLength": 160 } }
+        }
+      },
+      "EncounterSceneParticipant": {
+        "type": "object", "additionalProperties": false,
+        "required": ["actorRef", "role", "zone", "equippedEntryRefs", "knownContentRefs", "activeEffectRefs", "preparedActionRefs", "tacticalProfile"],
+        "properties": {
+          "actorRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" },
+          "role": { "type": ["string", "null"], "maxLength": 160 },
+          "zone": { "type": "string", "enum": ["engaged", "near", "medium", "far", "out_of_range"] },
+          "equippedEntryRefs": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/components/schemas/EncounterRuntimeRef" } },
+          "knownContentRefs": { "type": "array", "maxItems": 128, "items": { "type": "object", "additionalProperties": false, "required": ["contentType", "code"], "properties": { "contentType": { "$ref": "#/components/schemas/Code" }, "code": { "$ref": "#/components/schemas/Code" } } } },
+          "activeEffectRefs": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/components/schemas/EncounterRuntimeRef" } },
+          "preparedActionRefs": { "type": "array", "maxItems": 5, "uniqueItems": true, "items": { "$ref": "#/components/schemas/EncounterRuntimeRef" } },
+          "tacticalProfile": { "$ref": "#/components/schemas/EncounterSceneTacticalProfile" }
+        }
+      },
+      "EncounterScenePackage": {
+        "type": "object", "additionalProperties": false,
+        "required": ["schemaVersion", "stateVersion", "genericActions", "environment", "participants"],
+        "properties": {
+          "schemaVersion": { "type": "integer", "const": 1 },
+          "stateVersion": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+          "genericActions": { "type": "array", "minItems": 13, "maxItems": 13, "uniqueItems": true, "items": { "type": "string", "enum": ["move", "defend", "protect", "prepare", "intercept", "assist", "flee", "observe", "interact", "improvise", "use_item", "attack", "cast"] } },
+          "environment": { "type": "object", "additionalProperties": false, "required": ["zoneModel", "notes"], "properties": { "zoneModel": { "type": "string", "const": "abstract_bands" }, "notes": { "type": "array", "maxItems": 16, "items": { "type": "string", "maxLength": 500 } } } },
+          "participants": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/components/schemas/EncounterSceneParticipant" } }
+        },
+        "description": "Pacote compacto reutilizável enquanto stateVersion não mudar."
+      },
+      "EncounterBeatComponentResult": {
+        "type": "object", "additionalProperties": false,
+        "required": ["index", "type", "status"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 0, "maximum": 2 },
+          "type": { "type": "string", "enum": ["move", "defend", "protect", "prepare", "intercept", "assist", "flee", "observe", "interact", "improvise", "use_item", "attack", "cast"] },
+          "status": { "type": "string", "enum": ["accepted", "modified", "rejected", "conditional"] },
+          "code": { "type": "string", "maxLength": 100 },
+          "reason": { "type": "string", "maxLength": 300 },
+          "field": { "type": "string", "maxLength": 200 },
+          "alternative": { "type": "string", "maxLength": 300 },
+          "requested": { "type": "string", "maxLength": 2000 },
+          "applied": { "type": "string", "maxLength": 2000 }
+        }
+      },
+      "EncounterNpcActionSummary": {
+        "type": "object", "additionalProperties": false,
+        "required": ["actorRef", "strategy", "actionType"],
+        "properties": {
+          "actorRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" },
+          "strategy": { "type": "string", "maxLength": 100 },
+          "actionType": { "type": "string", "enum": ["move", "defend", "protect", "prepare", "intercept", "assist", "flee", "observe", "interact", "improvise", "use_item", "attack", "cast"] },
+          "targetRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" }
+        }
+      },
+      "EncounterNpcResult": {
+        "type": "object", "additionalProperties": false,
+        "required": ["actorRef", "status"],
+        "properties": {
+          "actorRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" },
+          "status": { "type": "string", "enum": ["acted", "rejected"] },
+          "reason": { "type": "string", "maxLength": 300 }
+        }
+      },
+      "EncounterBeatSummary": {
+        "type": "object", "additionalProperties": false,
+        "required": ["externalTransitions", "resolutionPolicy", "partialResolutionApplied", "actorsActed", "componentResults", "npcActions", "npcResults", "requiresPlayerDecision"],
+        "properties": {
+          "externalTransitions": { "type": "integer", "const": 1 },
+          "resolutionPolicy": { "type": "string", "enum": ["atomic", "allow_partial"] },
+          "partialResolutionApplied": { "type": "boolean" },
+          "actorsActed": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/components/schemas/EncounterRuntimeRef" } },
+          "componentResults": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "$ref": "#/components/schemas/EncounterBeatComponentResult" } },
+          "npcActions": { "type": "array", "maxItems": 4, "items": { "$ref": "#/components/schemas/EncounterNpcActionSummary" } },
+          "npcResults": { "type": "array", "maxItems": 4, "items": { "$ref": "#/components/schemas/EncounterNpcResult" } },
+          "requiresPlayerDecision": { "type": "boolean" }
+        }
+      },
       "EncounterResult": {
         "type": "object", "additionalProperties": false,
         "required": ["result", "encounterRef", "lifecycleStatus", "stateVersion", "currentTick", "stopReason", "completionCandidate", "participants", "nextRequiredAction"],
         "properties": {
-          "result": { "type": "string", "enum": ["encounter_created", "encounter_loaded", "intent_accepted", "reaction_required", "reaction_resolved", "processing_paused", "new_intent_required", "completion_confirmation_required", "encounter_completed", "encounter_cancelled", "encounter_failed"] },
+          "result": { "type": "string", "enum": ["encounter_created", "encounter_loaded", "beat_resolved", "intent_accepted", "reaction_required", "reaction_resolved", "processing_paused", "new_intent_required", "completion_confirmation_required", "encounter_completed", "encounter_cancelled", "encounter_failed"] },
           "encounterRef": { "$ref": "#/components/schemas/Code" },
           "lifecycleStatus": { "type": "string", "enum": ["awaiting_intent", "awaiting_reaction", "processing_paused", "completion_pending", "completed", "failed", "cancelled"] },
           "stateVersion": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
@@ -1380,7 +1514,9 @@
           "participants": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/components/schemas/EncounterParticipant" } },
           "nextRequiredAction": { "$ref": "#/components/schemas/EncounterNextRequiredAction" },
           "transitionSummary": { "$ref": "#/components/schemas/EncounterTransitionSummary" },
-          "consequencesSummary": { "$ref": "#/components/schemas/EncounterConsequencesSummary" }
+          "consequencesSummary": { "$ref": "#/components/schemas/EncounterConsequencesSummary" },
+          "scene": { "$ref": "#/components/schemas/EncounterScenePackage" },
+          "beatSummary": { "$ref": "#/components/schemas/EncounterBeatSummary" }
         }
       },
       "Appearance": {

@@ -22,6 +22,11 @@ vi.mock('./encounter-state-loader.js', async (importOriginal) => ({
   loadPersistedEncounterAuthorities: vi.fn(),
 }));
 
+vi.mock('../actors/actor-mechanics.service.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../actors/actor-mechanics.service.js')>(),
+  recomputeActorDerivedSnapshot: vi.fn().mockResolvedValue(undefined),
+}));
+
 function loaded(sourcePersisted: boolean, targetPersisted: boolean): LoadedEncounter {
   return {
     record: {
@@ -97,6 +102,12 @@ describe('encounter adapter preflight', () => {
     }];
     expect(() => assertEncounterOperationChainRows(rows, 3, secondHash, 'continue')).not.toThrow();
     expect(() => assertEncounterOperationChainRows([
+      rows[0]!, {
+        ...rows[1]!, id: 'beat', operation: EncounterOperationKind.SUBMIT_INTENT,
+        idempotencyRecord: { ...rows[1]!.idempotencyRecord, operation: 'encounter.resolve_beat' },
+      },
+    ], 3, secondHash, 'beat')).not.toThrow();
+    expect(() => assertEncounterOperationChainRows([
       rows[0]!, { ...rows[1]!, beforeStateHash: 'f'.repeat(64) },
     ], 3, secondHash, 'continue')).toThrow(expect.objectContaining<Partial<EncounterError>>({
       code: 'ENCOUNTER_DENORMALIZED_DRIFT',
@@ -106,7 +117,7 @@ describe('encounter adapter preflight', () => {
     ], 3, secondHash, 'continue')).toThrow();
   });
 
-  it('does not reload four unchanged authorities after processing initial actor_ready events', async () => {
+  it('does not reload four unchanged authorities after actor_ready events and movement-only state changes', async () => {
     const actorRefs = ['ally-mage', 'crystal-fawn', 'crystal-hunter', 'hero'];
     const participant = (actorRef: string) => ({
       actorRef,
@@ -115,6 +126,7 @@ describe('encounter adapter preflight', () => {
       inventoryStateVersion: 1,
       effectsStateVersion: 1,
       combatState: 'ready',
+      zone: 'near',
       primaryAttributes: {},
       secondaryAttributes: {},
       resources: {
@@ -135,8 +147,11 @@ describe('encounter adapter preflight', () => {
       ...before,
       currentTick: 3751n,
       stateVersion: 5,
+      participants: actorRefs.map((actorRef) => ({
+        ...participant(actorRef), zone: actorRef === 'hero' ? 'medium' : 'near',
+      })),
       scheduledEvents: [],
-    };
+    } as unknown as CoreV1EncounterState;
     const authorities = new Map(actorRefs.map((actorRef) => [actorRef, {
       actor: {
         id: `${actorRef}-id`, code: actorRef, campaignId: 'campaign-id', level: 1, status: 'ACTIVE',
@@ -185,7 +200,7 @@ describe('encounter adapter preflight', () => {
     expect(updateCampaignTick).toHaveBeenCalledOnce();
   });
 
-  it('reloads only the actors changed by a spell resolution before rebuilding adapter state', async () => {
+  it('reloads only actors changed by spell or attack deltas before rebuilding adapter state', async () => {
     const actorRefs = ['cacador-cristalino', 'cervo-cristalino-jovem', 'kael', 'lysandra-vale'];
     const participant = (
       actorRef: string,
@@ -275,6 +290,58 @@ describe('encounter adapter preflight', () => {
     expect(result.authorities.size).toBe(4);
     expect(result.authorities.get('kael')?.sheet.resources.mana.current).toBe(26);
     expect(result.authorities.get('cacador-cristalino')?.sheet.resources.hp.current).toBe(34);
+
+    const attackAfter = {
+      ...before,
+      currentTick: 3900n,
+      stateVersion: 7,
+      participants: actorRefs.map((actorRef) => (
+        actorRef === 'cacador-cristalino' ? participant(actorRef, 34, 30) : participant(actorRef)
+      )),
+    };
+    selectiveReload.mockReset();
+    selectiveReload.mockResolvedValueOnce(new Map([
+      ['cacador-cristalino', authority('cacador-cristalino', 34, 30)],
+    ]));
+
+    const attackResult = await applyEncounterMutations(transaction, fixture, attackAfter, {
+      processedEvents: [{ type: 'action_started' }, { type: 'action_effect' }],
+      resolvedActions: [],
+    } as never);
+
+    expect(selectiveReload).toHaveBeenCalledOnce();
+    expect(selectiveReload.mock.calls[0]?.[1]).toEqual(['cacador-cristalino-id']);
+    expect(attackResult.authorities.size).toBe(4);
+    expect(attackResult.authorities.get('kael')).toBe(authorities.get('kael'));
+
+    const itemAuthority = authority('kael');
+    const reloadedItemAuthority = {
+      ...itemAuthority,
+      actor: { ...itemAuthority.actor, mechanicsStateVersion: 2, inventoryStateVersion: 2 },
+      sheet: { ...itemAuthority.sheet, mechanicsStateVersion: 2, inventoryStateVersion: 2 },
+    } as PersistedEncounterAuthority;
+    const itemTransaction = {
+      inventoryEntry: {
+        findUnique: vi.fn().mockResolvedValue({ id: 'potion-id', entryKind: 'STACK', quantity: 2 }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      actor: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    } as unknown as EncounterTransaction;
+    selectiveReload.mockReset();
+    selectiveReload.mockResolvedValueOnce(new Map([['kael', reloadedItemAuthority]]));
+
+    const itemResult = await applyEncounterMutations(
+      itemTransaction,
+      fixture,
+      { ...before, stateVersion: 7 },
+      { processedEvents: [{ type: 'action_effect' }], resolvedActions: ['item-action'] } as never,
+      [{ actionRef: 'item-action', actorRef: 'kael', entryRef: 'healing-potion' }],
+    );
+
+    expect(selectiveReload).toHaveBeenCalledOnce();
+    expect(selectiveReload.mock.calls[0]?.[1]).toEqual(['kael-id']);
+    expect(itemResult.authorities.size).toBe(4);
+    expect(itemResult.authorities.get('kael')?.actor.inventoryStateVersion).toBe(2);
   });
 
   it('reloads only actors changed by terminal consequences before closing the encounter', async () => {

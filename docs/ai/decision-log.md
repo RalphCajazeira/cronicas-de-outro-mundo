@@ -460,3 +460,38 @@ Impacto:
 - migration remota, deploy, staging/Preview e alteração do GPT ao vivo permanecem fora desta implementação.
 
 Status: implementada localmente; revisão final e gates locais obrigatórios antes de commit
+
+## 2026-07-21 — Uma decisão significativa por beat de encontro
+
+Decisão:
+- ampliar `manageEncounter` com `resolve_beat`, preservando exatamente 20 `operationIds` e todo o fluxo granular como fallback;
+- manter o caso de uso no módulo de encounters e o adapter GPT/HTTP fino;
+- reutilizar action plans, movement/wait, reações, loaders de conteúdo/inventário, mutation applier, snapshots, idempotência, locks, rolls, consequência e finalização existentes;
+- limitar intenção composta a três componentes e fallback automático inicial a quatro NPCs;
+- representar defesas/preparações no snapshot existente e usar `Actor.metadata`/relações/equipamento como orientação determinística, sem migration ou IA externa;
+- devolver pacote de cena no load e resumo autoritativo/deltas no beat, persistindo um checkpoint por chamada;
+- manter staging, Render, GPT Builder e banco remoto inalterados até revisão.
+
+Impacto:
+- uma chamada externa absorve avanços, reações, NPCs e confirmação terminal normalmente expostos;
+- ações comuns deixam de depender de habilidade homônima, enquanto ataque/magia/item continuam exigindo autoridade cadastrada;
+- frontend futuro pode reutilizar o mesmo caso de uso;
+- limitações numéricas de assist/observe/interact/improvise e orçamento de NPCs ficam explícitas para telemetria e próxima iteração.
+
+## 2026-07-21 — Hardening fechado de beats compostos
+
+Decisão:
+
+- tornar `resolutionPolicy` obrigatória: `atomic` reverte qualquer rejeição; `allow_partial` permite apenas rejeições não essenciais e nunca silenciosas;
+- reportar cada componente como `accepted|modified|rejected|conditional`, com solicitado/aplicado na modificação e diagnóstico/alternativa na rejeição;
+- rejeitar mais de três componentes na borda, informando limite, quantidade e orientação, sem escrita;
+- processar até quatro NPCs em ordem de `actorRef`; com mais elegíveis, rejeitar o beat antes do checkpoint e listar os não processados;
+- manter `EncounterOperation.operation=SUBMIT_INTENT`, distinguindo o beat pelo namespace validado e obrigatório `IdempotencyRecord.operation=encounter.resolve_beat`; o legado usa `encounter.submit_intent`.
+
+Consequências:
+
+- não há migration, mudança Prisma, timeout maior ou execução parcial implícita;
+- replay e métricas distinguem os dois fluxos pelo namespace, enquanto versões anterior/nova e hashes continuam no ledger append-only;
+- origem de transporte (GPT/frontend) não é inventada: será registrada futuramente somente quando existir campo autorizado no contrato.
+
+Status: implementada e validada localmente; commit e rollout pendentes de autorização

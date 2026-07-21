@@ -1,11 +1,17 @@
-import type { EncounterDto, EncounterNextRequiredActionDto, EncounterTransitionSummaryDto } from './encounter.types.js';
+import type {
+  EncounterBeatSummaryDto,
+  EncounterDto,
+  EncounterNextRequiredActionDto,
+  EncounterScenePackageDto,
+  EncounterTransitionSummaryDto,
+} from './encounter.types.js';
 import type { EncounterPublicConsequencesSummaryV1 } from './encounter-consequence.js';
 
 export type EncounterPublicResult =
   | 'encounter_created' | 'encounter_loaded' | 'intent_accepted' | 'reaction_required'
   | 'reaction_resolved' | 'processing_paused' | 'new_intent_required'
   | 'completion_confirmation_required' | 'encounter_completed' | 'encounter_cancelled'
-  | 'encounter_failed';
+  | 'encounter_failed' | 'beat_resolved';
 
 export interface EncounterPublicDto {
   readonly result: EncounterPublicResult;
@@ -30,6 +36,8 @@ export interface EncounterPublicDto {
   readonly nextRequiredAction: EncounterNextRequiredActionDto;
   readonly transitionSummary?: EncounterTransitionSummaryDto;
   readonly consequencesSummary?: EncounterPublicConsequencesSummaryV1;
+  readonly scene?: EncounterScenePackageDto;
+  readonly beatSummary?: EncounterBeatSummaryDto;
 }
 
 export function encounterPublicResult(dto: EncounterDto): EncounterPublicResult {
@@ -38,6 +46,7 @@ export function encounterPublicResult(dto: EncounterDto): EncounterPublicResult 
   if (dto.lifecycleStatus === 'failed') return 'encounter_failed';
   if (dto.lifecycleStatus === 'completion_pending') return 'completion_confirmation_required';
   if (dto.lifecycleStatus === 'awaiting_reaction') return 'reaction_required';
+  if (dto.operation === 'resolve_beat') return 'beat_resolved';
   const processed = (dto.transitionSummary?.processedEventCount ?? 0) > 0;
   if (dto.lifecycleStatus === 'awaiting_intent' && processed) return 'new_intent_required';
   if (dto.lifecycleStatus === 'processing_paused' && processed) return 'processing_paused';
@@ -128,5 +137,7 @@ export function toEncounterPublicDto(dto: EncounterDto): EncounterPublicDto {
         persistentEvent: { ...dto.consequencesSummary.persistentEvent },
       },
     }),
+    ...(dto.scene === undefined ? {} : { scene: structuredClone(dto.scene) }),
+    ...(dto.beatSummary === undefined ? {} : { beatSummary: structuredClone(dto.beatSummary) }),
   };
 }
