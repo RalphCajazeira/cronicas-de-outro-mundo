@@ -12,6 +12,7 @@ import type { AuditLogWriter, HttpAuditRecord } from './shared/http/request-audi
 import { actorMechanicalSheetFixture } from '../tests/support/actor-mechanics-fixture.js';
 import { getInitialAttributePreset } from './modules/rules/core-v1/index.js';
 import { actorContentFixture, publishedContentFixture, skillPublicationInput } from '../tests/support/content-fixture.js';
+import { inventoryOperationError, inventoryStateVersionConflictError } from './modules/inventory/inventory-http.errors.js';
 
 const config: AppConfig = { NODE_ENV: 'test', HOST: '0.0.0.0', PORT: 3000, DATABASE_URL: 'postgresql://test:test@localhost:5432/test', DIRECT_URL: 'postgresql://test:test@localhost:5432/test', RPG_API_KEY: 'test-key' };
 const primaryAttributes = getInitialAttributePreset('balanced');
@@ -320,5 +321,68 @@ describe('HTTP API', () => {
     });
     expect(JSON.stringify(response.body)).not.toContain('private rejected value');
     expect(JSON.stringify(records)).not.toContain('private rejected value');
+  });
+  it('returns actionable sanitized inventory issues through the public HTTP envelope and audit', async () => {
+    const records: HttpAuditRecord[] = [];
+    const repository: GptRepository = {
+      ...emptyGptRepository,
+      manageActorInventory: () => Promise.reject(inventoryOperationError([{
+        path: 'targetSlotRef', rule: 'INCOMPATIBLE_SLOT', message: 'private domain message',
+        expected: ['chest'], received: 'private-rejected-slot',
+      }])),
+    };
+    const response = await request(appWith(undefined, undefined, repository, undefined, (record) => records.push(record)))
+      .post('/api/v1/actors/ralph/inventory/manage')
+      .set('x-rpg-key', 'test-key')
+      .send({
+        ...scope, operation: 'equip', idempotencyKey: 'inventory-http-error-001',
+        expectedInventoryStateVersion: 2, entryRef: 'peitoral-1', targetSlotRef: 'body',
+      });
+
+    expect(response.status).toBe(422);
+    const responseBody = response.body as { error: { issues: Array<{ message: string }> } };
+    expect(responseBody).toMatchObject({ error: {
+      code: 'INVALID_INVENTORY_OPERATION', retryable: false, recoveryAction: 'correct_request',
+      issues: [{ path: 'targetSlotRef', code: 'INCOMPATIBLE_SLOT' }],
+    } });
+    expect(responseBody.error.issues[0]?.message).toContain('`chest`');
+    expect(records[0]?.error).toMatchObject({
+      type: 'application', code: 'INVENTORY_OPERATION_REJECTED',
+      issues: [{ path: 'targetSlotRef', code: 'INCOMPATIBLE_SLOT' }],
+    });
+    expect(JSON.stringify([response.body, records])).not.toMatch(/private-rejected-slot|private domain message|test-key|inventory-http-error-001/i);
+  });
+  it('returns an explicit load action for stale inventory state', async () => {
+    const repository: GptRepository = {
+      ...emptyGptRepository,
+      manageActorInventory: () => Promise.reject(inventoryStateVersionConflictError()),
+    };
+    const response = await request(appWith(undefined, undefined, repository))
+      .post('/api/v1/actors/ralph/inventory/manage')
+      .set('x-rpg-key', 'test-key')
+      .send({
+        ...scope, operation: 'equip', idempotencyKey: 'inventory-http-stale-001',
+        expectedInventoryStateVersion: 1, entryRef: 'peitoral-1',
+      });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ error: {
+      code: 'INVENTORY_STATE_VERSION_CONFLICT', retryable: false, recoveryAction: 'load_inventory',
+      issues: [{ path: 'expectedInventoryStateVersion', code: 'STATE_VERSION_CONFLICT' }],
+    } });
+  });
+  it('keeps unknown inventory failures sanitized', async () => {
+    const repository: GptRepository = {
+      ...emptyGptRepository,
+      manageActorInventory: () => Promise.reject(new Error('postgresql://secret Prisma SQL private payload')),
+    };
+    const response = await request(appWith(undefined, undefined, repository))
+      .post('/api/v1/actors/ralph/inventory/manage')
+      .set('x-rpg-key', 'test-key')
+      .send({ ...scope, operation: 'get' });
+
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
+    expect(JSON.stringify(response.body)).not.toMatch(/postgres|secret|Prisma|SQL|private payload/i);
   });
 });

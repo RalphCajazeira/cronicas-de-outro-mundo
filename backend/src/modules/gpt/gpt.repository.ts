@@ -9,6 +9,7 @@ import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import { scopedActorKey } from '../actors/actors.repository.js';
 import { createActorMechanicalState, loadActorMechanicalSheet } from '../actors/actor-mechanics.service.js';
 import { findScopedContent } from '../content/content.repository.js';
+import { mapInventoryHttpError } from '../inventory/inventory-http.errors.js';
 import { loadActorInventorySummary, manageActorInventory } from '../inventory/inventory.service.js';
 import {
   contentVersionPublicInclude,
@@ -623,9 +624,15 @@ export const prismaGptRepository: GptRepository = {
   },
 
   async manageActorInventory(actorRef: string, input: ManageActorInventoryInput) {
-    if (input.operation === 'get') return manageActorInventory(prisma, actorRef, input);
-    return executeIdempotent(input.idempotencyKey ?? '', `actorInventory.${input.operation}`, { actorRef, ...input },
-      (transaction) => manageActorInventory(transaction, actorRef, input));
+    try {
+      if (input.operation === 'get') return await manageActorInventory(prisma, actorRef, input);
+      return await executeIdempotent(input.idempotencyKey ?? '', `actorInventory.${input.operation}`, { actorRef, ...input },
+        (transaction) => manageActorInventory(transaction, actorRef, input));
+    } catch (error) {
+      const publicError = mapInventoryHttpError(error);
+      if (publicError !== null) throw publicError;
+      throw error;
+    }
   },
 
   async createEvent(input: CreateEventInput) {

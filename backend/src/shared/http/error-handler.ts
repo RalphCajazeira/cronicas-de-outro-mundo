@@ -40,12 +40,22 @@ export const errorHandler: ErrorRequestHandler = (error: unknown, _request, resp
     return;
   }
   if (error instanceof AppError) {
-    setAuditError(response, { type: 'application', code: error.auditCode ?? error.code });
+    const issues = error.issues?.slice(0, 20).map((issue) => ({
+      path: issue.path.slice(0, 200),
+      code: issue.code.slice(0, 100),
+      message: issue.message.slice(0, 200),
+    }));
+    setAuditError(response, {
+      type: 'application',
+      code: error.auditCode ?? error.code,
+      ...(issues === undefined ? {} : { issues }),
+    });
     response.status(error.statusCode).json({ error: {
       code: error.code,
       message: error.message,
       ...(error.retryable === undefined ? {} : { retryable: error.retryable }),
       ...(error.recoveryAction === undefined ? {} : { recoveryAction: error.recoveryAction }),
+      ...(issues === undefined ? {} : { issues }),
     } });
     return;
   }
