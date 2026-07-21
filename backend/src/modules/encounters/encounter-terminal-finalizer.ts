@@ -124,6 +124,7 @@ export async function applyEncounterTerminalConsequences(
     orderBy: [{ targetActorId: 'asc' }, { effectRef: 'asc' }],
   });
   const removedByActor = new Map<string, string[]>();
+  const changedActorRefs: string[] = [];
   for (const effect of removable) {
     const actorRef = actorRefById.get(effect.targetActorId);
     if (actorRef === undefined) throw new EncounterError('ENCOUNTER_EFFECT_OWNERSHIP_CONFLICT');
@@ -161,9 +162,29 @@ export async function applyEncounterTerminalConsequences(
     });
     if (updated.count !== 1) throw new EncounterError('ENCOUNTER_MECHANICS_DRIFT');
     if (removeEffects) await recomputeActorDerivedSnapshot(transaction, authority.actor.id);
+    changedActorRefs.push(participant.actorRef);
   }
 
-  const authorities = await loadPersistedEncounterAuthorities(transaction, actorIds, state.currentTick);
+  let authorities = authoritiesBefore;
+  if (changedActorRefs.length > 0) {
+    const changedActorIds = changedActorRefs.map((actorRef) => {
+      const authority = authoritiesBefore.get(actorRef);
+      if (authority === undefined) throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
+      return authority.actor.id;
+    });
+    const reloadedAuthorities = await loadPersistedEncounterAuthorities(
+      transaction,
+      changedActorIds,
+      state.currentTick,
+    );
+    const mergedAuthorities = new Map(authoritiesBefore);
+    for (const actorRef of changedActorRefs) {
+      const authority = reloadedAuthorities.get(actorRef);
+      if (authority === undefined) throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
+      mergedAuthorities.set(actorRef, authority);
+    }
+    authorities = mergedAuthorities;
+  }
   const actors = [...authoritiesBefore.keys()].sort().map((actorRef) => {
     const before = authoritiesBefore.get(actorRef);
     const after = authorities.get(actorRef);

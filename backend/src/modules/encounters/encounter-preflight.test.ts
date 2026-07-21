@@ -6,6 +6,7 @@ import {
   applyEncounterMutations,
   assertEncounterMutationPreflight,
 } from './encounter-mutation-applier.js';
+import { applyEncounterTerminalConsequences } from './encounter-terminal-finalizer.js';
 import { EncounterError } from './encounter.errors.js';
 import {
   assertEncounterOperationChainRows,
@@ -274,5 +275,78 @@ describe('encounter adapter preflight', () => {
     expect(result.authorities.size).toBe(4);
     expect(result.authorities.get('kael')?.sheet.resources.mana.current).toBe(26);
     expect(result.authorities.get('cacador-cristalino')?.sheet.resources.hp.current).toBe(34);
+  });
+
+  it('reloads only actors changed by terminal consequences before closing the encounter', async () => {
+    const actorRefs = ['cacador-cristalino', 'cervo-cristalino-jovem', 'kael', 'lysandra-vale'];
+    const participant = (actorRef: string) => ({
+      actorRef,
+      resources: {
+        hp: { current: actorRef === 'cacador-cristalino' ? 0 : 40, maximum: 40 },
+        mana: { current: 30, maximum: 30 },
+        sp: { current: 30, maximum: 30 },
+      },
+    });
+    const authority = (actorRef: string, status = 'ACTIVE') => ({
+      actor: {
+        id: `${actorRef}-id`, code: actorRef, campaignId: 'campaign-id', level: 1, status,
+        mechanicsStateVersion: 1, inventoryStateVersion: 1, effectsStateVersion: 1,
+      },
+      sheet: {
+        mechanicsStateVersion: 1, inventoryStateVersion: 1, effectsStateVersion: 1,
+        primaryAttributes: {}, secondaryAttributes: { elementalResistanceBps: {} },
+        resources: {
+          hp: { current: actorRef === 'cacador-cristalino' ? 0 : 40, max: 40, stateVersion: 1 },
+          mana: { current: 30, max: 30, stateVersion: 1 },
+          sp: { current: 30, max: 30, stateVersion: 1 },
+        },
+      },
+      inventory: { inventory: { entries: [] }, loadout: { slots: [] } },
+      effects: { activeEffects: [] },
+    } as unknown as PersistedEncounterAuthority);
+    const authorities = new Map(actorRefs.map((actorRef) => [actorRef, authority(actorRef)]));
+    const state = {
+      currentTick: 8149n,
+      stateVersion: 37,
+      completionCandidate: 'party_victory_candidate',
+      participants: actorRefs.map(participant),
+    } as unknown as CoreV1EncounterState;
+    const fixture = {
+      record: {
+        id: 'encounter-id', campaignId: 'campaign-id', rulesetVersionId: 'ruleset-id',
+        encounterRef: 'emboscada-cacador-cristalino',
+        campaign: { worldId: 'world-id', engineTick: 8149n, engineStateVersion: 1 },
+        participants: actorRefs.map((actorRef) => ({ actorRef, actorId: `${actorRef}-id` })),
+      },
+      state,
+      authorities,
+    } as unknown as LoadedEncounter;
+    const transaction = {
+      activeEffect: { findMany: vi.fn().mockResolvedValue([]) },
+      actor: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        findFirst: vi.fn().mockResolvedValue({ id: 'kael-id', code: 'kael' }),
+      },
+      world: { findUnique: vi.fn().mockResolvedValue({ player: { slug: 'kael' } }) },
+    } as unknown as EncounterTransaction;
+    const terminalReload = vi.mocked(loadPersistedEncounterAuthorities);
+    terminalReload.mockReset();
+    terminalReload.mockImplementationOnce((_transaction, actorIds) => {
+      if (actorIds.length > 1) {
+        return Promise.reject(new Error(
+          'Transaction API error: query cannot run after the 30000 ms interactive transaction timeout',
+        ));
+      }
+      return Promise.resolve(new Map([
+        ['cacador-cristalino', authority('cacador-cristalino', 'DEFEATED')],
+      ]));
+    });
+
+    const result = await applyEncounterTerminalConsequences(transaction, fixture, state, authorities);
+
+    expect(terminalReload).toHaveBeenCalledWith(transaction, ['cacador-cristalino-id'], 8149n);
+    expect(result.authorities.size).toBe(4);
+    expect(result.authorities.get('cacador-cristalino')?.actor.status).toBe('DEFEATED');
+    expect(result.authorities.get('kael')).toBe(authorities.get('kael'));
   });
 });
