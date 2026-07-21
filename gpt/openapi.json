@@ -98,6 +98,7 @@
       "post": {
         "operationId": "loadGame",
         "summary": "Carregar o estado normalizado da campanha",
+        "description": "Consulta somente leitura para carregar ou continuar uma campanha existente. NOT_FOUND não autoriza criação automática: informe, ofereça criar e aguarde escolha explícita.",
         "requestBody": {
           "required": true,
           "content": {
@@ -141,7 +142,7 @@
       "post": {
         "operationId": "startGame",
         "summary": "Criar um jogo estruturado em uma transação",
-        "description": "Após confirmação explícita, cria ou reutiliza Player/World sem atualizá-los, cria uma Campaign nova, protagonista, conteúdos, vínculos e o evento campaign-started. Reuse de conteúdo envia apenas mode, scope, code e contentType.",
+        "description": "Somente após pedido explícito e confirmação, cria/reutiliza Player e World sem atualizá-los e cria Campaign, protagonista, conteúdos, vínculos e campaign-started. Reuse envia apenas mode, scope, code e contentType.",
         "requestBody": {
           "required": true,
           "content": {
@@ -185,6 +186,7 @@
       "get": {
         "operationId": "listPlayerWorlds",
         "summary": "Listar os mundos pertencentes ao jogador",
+        "description": "Consulta somente leitura para listar/mostrar mundos ou localizar jogo existente. Use antes de criação; lista vazia não autoriza startGame.",
         "parameters": [
           {
             "name": "playerRef",
@@ -231,6 +233,7 @@
       "get": {
         "operationId": "listWorldCampaigns",
         "summary": "Listar as campanhas do mundo pertencente ao jogador",
+        "description": "Consulta somente leitura para listar/mostrar campanhas após obter playerRef e worldRef. Use antes de criação; lista vazia não autoriza startGame.",
         "parameters": [
           {
             "name": "playerRef",
