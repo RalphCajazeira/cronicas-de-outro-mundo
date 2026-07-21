@@ -1,4 +1,7 @@
 import type { CampaignReference } from '../../shared/database/game-scope.js';
+import { EncounterLifecycleStatus } from '../../generated/prisma/client.js';
+import { AppError } from '../../shared/errors/app-error.js';
+import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import type {
   CombatZone,
   CoreV1EncounterActionIntent,
@@ -9,6 +12,45 @@ import {
   parseEncounterPublicConsequencesSummary,
   type EncounterPublicConsequencesSummaryV1,
 } from './encounter-consequence.js';
+
+export const ACTIVE_ENCOUNTER_LIFECYCLES = [
+  EncounterLifecycleStatus.AWAITING_INTENT,
+  EncounterLifecycleStatus.AWAITING_REACTION,
+  EncounterLifecycleStatus.PROCESSING_PAUSED,
+  EncounterLifecycleStatus.COMPLETION_PENDING,
+] as const;
+
+export interface ActiveEncounterRecord {
+  readonly encounterRef: string;
+  readonly lifecycleStatus: EncounterLifecycleStatus;
+  readonly stateVersion: number;
+}
+
+export function activeEncounterSummary(records: readonly ActiveEncounterRecord[]) {
+  if (records.length === 0) return null;
+  if (records.length > 1) {
+    throw new AppError(500, 'ACTIVE_ENCOUNTER_INTEGRITY_ERROR', 'Campaign has multiple active encounters', {
+      retryable: false,
+      recoveryAction: 'stop_encounter_flow',
+      auditCode: 'MULTIPLE_ACTIVE_ENCOUNTERS',
+      issues: [{
+        path: 'activeEncounter',
+        code: 'MULTIPLE_ACTIVE_ENCOUNTERS',
+        message: 'Do not choose an encounter automatically; request administrative repair.',
+      }],
+    });
+  }
+  const encounter = records[0];
+  if (encounter === undefined) throw new TypeError('Active encounter lookup returned an invalid result');
+  return {
+    encounterRef: encounter.encounterRef,
+    lifecycleStatus: normalizeEnum(encounter.lifecycleStatus),
+    stateVersion: encounter.stateVersion,
+    canContinue: true,
+    canCancel: true,
+    recoveryAction: 'load_encounter',
+  };
+}
 
 export type EncounterOperationName =
   | 'create' | 'submit_intent' | 'resolve_reaction' | 'continue'

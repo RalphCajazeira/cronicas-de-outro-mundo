@@ -17,6 +17,7 @@ interface Schema {
   properties?: Record<string, Schema>;
   items?: Schema;
   allOf?: Schema[];
+  oneOf?: Schema[];
   additionalProperties?: boolean;
   enum?: unknown[];
   format?: string;
@@ -277,6 +278,7 @@ describe('official OpenAPI contract', () => {
     expect(byId.get('listWorldCampaigns')?.description).toContain('Consulta somente leitura');
     expect(byId.get('listWorldCampaigns')?.description).toContain('lista vazia não autoriza startGame');
     expect(byId.get('loadGame')?.description).toContain('NOT_FOUND não autoriza criação automática');
+    expect(byId.get('loadGame')?.description).toContain('activeEncounter');
     expect(byId.get('startGame')?.description).toContain('Somente após pedido explícito e confirmação');
     const expectedQueryParameters: Record<string, string[]> = {
       listCampaignActors: ['playerRef', 'worldRef'],
@@ -301,6 +303,26 @@ describe('official OpenAPI contract', () => {
     expect(JSON.stringify(contract)).not.toContain('"default"');
   });
 
+  it('exposes a nullable, public-only active encounter recovery summary from loadGame', () => {
+    const gameState = contract.components.schemas.GameState;
+    const summary = contract.components.schemas.ActiveEncounterSummary;
+    expect(gameState?.required).toContain('activeEncounter');
+    expect(gameState?.properties?.activeEncounter?.oneOf).toEqual([
+      { $ref: '#/components/schemas/ActiveEncounterSummary' },
+      { type: 'null' },
+    ]);
+    expect(summary).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      required: ['encounterRef', 'lifecycleStatus', 'stateVersion', 'canContinue', 'canCancel', 'recoveryAction'],
+    });
+    expect(summary?.properties?.lifecycleStatus?.enum).toEqual([
+      'awaiting_intent', 'awaiting_reaction', 'processing_paused', 'completion_pending',
+    ]);
+    expect(summary?.properties?.recoveryAction?.enum).toEqual(['load_encounter']);
+    expect(JSON.stringify(summary)).not.toMatch(/campaignId|encounterId|rulesetVersionId|stateHash|snapshot/i);
+  });
+
   it('routes existing-game requests before creation in Instructions and Knowledge', () => {
     expect(gptInstructions).toContain('Listar, mostrar, consultar, localizar, carregar ou continuar algo existente usa só Actions read-only');
     expect(gptInstructions).toContain('nunca `startGame`, criação rápida ou escrita');
@@ -308,6 +330,11 @@ describe('official OpenAPI contract', () => {
     expect(gptInstructions).toContain('Para carregar, continuar ou mostrar o personagem atual');
     expect(continuityKnowledge).toContain('“Mostre meus mundos e campanhas” lista Worlds e suas Campaigns');
     expect(continuityKnowledge).toContain('“Quero continuar jogando” descobre o escopo e usa `loadGame`');
+    expect(gptInstructions).toContain('`loadGame.activeEncounter` é a única descoberta de encontro ativo');
+    expect(gptInstructions).toContain('Nunca invente `encounterRef`');
+    expect(gptInstructions).toContain('crie outro encontro enquanto `activeEncounter` existir');
+    expect(continuityKnowledge).toContain('o estado completo só se torna autoritativo depois de `manageEncounter load`');
+    expect(continuityKnowledge).toContain('cancelamento só pode atingir o encontro exato já carregado');
   });
 
   it('starts creation only explicitly and handles empty discovery or missing identity without a questionnaire', () => {

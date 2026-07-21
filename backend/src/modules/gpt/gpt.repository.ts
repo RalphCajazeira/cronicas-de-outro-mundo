@@ -35,6 +35,7 @@ import {
   type CampaignStartedPayload,
 } from './gpt.start-game.js';
 import { inspectIdempotencyRecord, isIdempotencyKeyConflict, isUniqueConflict } from './gpt.prisma-errors.js';
+import { ACTIVE_ENCOUNTER_LIFECYCLES, activeEncounterSummary } from '../encounters/encounter.types.js';
 
 const actorSelect = {
   id: true, code: true, name: true, actorType: true, species: true, className: true, role: true,
@@ -46,6 +47,16 @@ const contentInclude = {
   contentDefinition: true,
   contentVersion: { include: contentVersionPublicInclude },
 } satisfies Prisma.ActorContentInclude;
+
+async function loadActiveEncounterSummary(client: DbClient, campaignId: string) {
+  const records = await client.encounter.findMany({
+    where: { campaignId, lifecycleStatus: { in: [...ACTIVE_ENCOUNTER_LIFECYCLES] } },
+    select: { encounterRef: true, lifecycleStatus: true, stateVersion: true },
+    orderBy: { encounterRef: 'asc' },
+    take: 2,
+  });
+  return activeEncounterSummary(records);
+}
 
 export function calculateGptRequestHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
@@ -162,6 +173,7 @@ async function loadGameState(client: DbClient, input: LoadGameInput) {
   const actors = await client.actor.findMany({ where: { campaignId: campaign.id }, select: actorSelect, orderBy: [{ role: 'asc' }, { name: 'asc' }, { code: 'asc' }], take: 50 });
   const links = await client.actorContent.findMany({ where: { actor: { campaignId: campaign.id } }, include: { ...contentInclude, actor: { select: { code: true } } }, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], take: 100 });
   const events = await client.gameEvent.findMany({ where: { campaignId: campaign.id }, include: { actor: { select: { code: true } } }, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], take: 20 });
+  const activeEncounter = await loadActiveEncounterSummary(client, campaign.id);
   const protagonist = actors.find((actor) => actor.code === player.slug && actor.actorType === ActorType.CHARACTER) ?? null;
   const actorDtos = new Map<string, Record<string, unknown>>();
   for (const actor of actors) actorDtos.set(actor.id, await actorDto(client, actor));
@@ -172,6 +184,7 @@ async function loadGameState(client: DbClient, input: LoadGameInput) {
     protagonist: protagonist === null ? null : actorDtos.get(protagonist.id) ?? null,
     mainActors: actors.filter((actor) => actor.id !== protagonist?.id).map((actor) => actorDtos.get(actor.id) ?? {}),
     linkedContent: links.map((link) => ({ actorRef: link.actor.code, ...actorContentDto(link) })),
+    activeEncounter,
     recentEvents: events.map((event) => ({ actorRef: event.actor?.code ?? null, eventType: event.eventType, title: event.title, payload: event.payload, createdAt: event.createdAt.toISOString() })),
   };
 }

@@ -2428,6 +2428,33 @@ describe('Phase 1L-C encounter HTTP integration', () => {
     if (typeof createdStateVersion !== 'number') throw new Error('Encounter stateVersion must be numeric');
     expect(JSON.stringify(created.body)).not.toMatch(/stateHash|snapshot|adapterState|rolls|eventRef|actionRef|"id"/);
 
+    const campaignWithEncounter = await post('/api/v1/game/load', {});
+    expect(campaignWithEncounter.status).toBe(200);
+    expect(campaignWithEncounter.body).toMatchObject({
+      activeEncounter: {
+        encounterRef,
+        lifecycleStatus: 'processing_paused',
+        stateVersion: createdStateVersion,
+        canContinue: true,
+        canCancel: true,
+        recoveryAction: 'load_encounter',
+      },
+    });
+    const activeEncounter = bodyRecord({ body: bodyRecord(campaignWithEncounter).activeEncounter });
+    expect(activeEncounter).not.toHaveProperty('id');
+    expect(activeEncounter).not.toHaveProperty('encounterId');
+    const recoveredEncounterRef = activeEncounter.encounterRef;
+    if (typeof recoveredEncounterRef !== 'string') throw new Error('loadGame must return the active encounter ref');
+    const recovered = await post('/api/v1/encounters/manage', { operation: 'load', encounterRef: recoveredEncounterRef });
+    expect(recovered.status).toBe(200);
+    expect(recovered.body).toMatchObject({ result: 'encounter_loaded', encounterRef, stateVersion: createdStateVersion });
+    const recoveredParticipants = bodyRecord(recovered).participants;
+    if (!Array.isArray(recoveredParticipants)) throw new Error('Recovered encounter must return participants');
+    expect(recoveredParticipants).toEqual(expect.arrayContaining([
+        expect.objectContaining({ actorRef: 'ralph' }),
+        expect.objectContaining({ actorRef: 'lyra' }),
+    ]));
+
     const replay = await post('/api/v1/encounters/manage', createBody);
     expect(replay.status).toBe(200);
     expect(replay.body).toEqual(created.body);
@@ -2505,6 +2532,11 @@ describe('Phase 1L-C encounter HTTP integration', () => {
         name: 'Phase 1L-C Isolated Campaign',
         status: CampaignStatus.ACTIVE,
       },
+    });
+    const alternateCampaignLoad = await post('/api/v1/game/load', { campaignRef: alternateCampaign.code });
+    expect(alternateCampaignLoad.status).toBe(200);
+    expect(alternateCampaignLoad.body).toMatchObject({
+      campaign: { ref: alternateCampaign.code }, activeEncounter: null,
     });
     const alternateActor = await createMechanicalActor({
       campaignId: alternateCampaign.id,
@@ -2607,6 +2639,9 @@ describe('Phase 1L-C encounter HTTP integration', () => {
     await prisma.actor.delete({ where: { id: otherInventoryActor.id } });
     await prisma.actor.delete({ where: { id: alternateActor.id } });
     await prisma.campaign.delete({ where: { id: alternateCampaign.id } });
+    const campaignAfterCancel = await post('/api/v1/game/load', {});
+    expect(campaignAfterCancel.status).toBe(200);
+    expect(campaignAfterCancel.body).toMatchObject({ activeEncounter: null });
   });
 
   it('loads a coherent legacy terminal Encounter without inventing a consequence summary', async () => {
@@ -3060,6 +3095,7 @@ describe('GPT v1 persistence with real transactions', () => {
     expect(response.body).toMatchObject({
       player: { ref: 'ralph' }, world: { ref: 'elarion' }, campaign: { ref: 'main-campaign', status: 'active' },
       protagonist: { code: 'ralph', actorType: 'character' },
+      activeEncounter: null,
     });
     const body = response.body as Record<string, unknown>;
     expect(body.mainActors).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'lyra', actorType: 'spirit' })]));

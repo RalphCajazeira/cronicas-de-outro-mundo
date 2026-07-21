@@ -98,7 +98,7 @@
       "post": {
         "operationId": "loadGame",
         "summary": "Carregar o estado normalizado da campanha",
-        "description": "Consulta somente leitura para carregar ou continuar uma campanha existente. NOT_FOUND não autoriza criação automática: informe, ofereça criar e aguarde escolha explícita.",
+        "description": "Consulta somente leitura para carregar ou continuar uma campanha existente. Se activeEncounter não for nulo, use a ref devolvida em manageEncounter load antes de narrar ou agir. NOT_FOUND não autoriza criação automática.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3108,6 +3108,49 @@
           }
         }
       },
+      "ActiveEncounterSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "encounterRef",
+          "lifecycleStatus",
+          "stateVersion",
+          "canContinue",
+          "canCancel",
+          "recoveryAction"
+        ],
+        "properties": {
+          "encounterRef": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "lifecycleStatus": {
+            "type": "string",
+            "enum": [
+              "awaiting_intent",
+              "awaiting_reaction",
+              "processing_paused",
+              "completion_pending"
+            ]
+          },
+          "stateVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "canContinue": {
+            "type": "boolean",
+            "description": "Verdadeiro quando o fluxo pode ser retomado após manageEncounter load validar o estado autoritativo."
+          },
+          "canCancel": {
+            "type": "boolean"
+          },
+          "recoveryAction": {
+            "type": "string",
+            "enum": [
+              "load_encounter"
+            ]
+          }
+        }
+      },
       "GameState": {
         "type": "object",
         "additionalProperties": false,
@@ -3118,6 +3161,7 @@
           "protagonist",
           "mainActors",
           "linkedContent",
+          "activeEncounter",
           "recentEvents"
         ],
         "properties": {
@@ -3151,6 +3195,17 @@
             "items": {
               "$ref": "#/components/schemas/LinkedActorContent"
             }
+          },
+          "activeEncounter": {
+            "description": "Encontro não terminal desta Campaign, ou null quando não existe. Nunca contém ID interno.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ActiveEncounterSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "recentEvents": {
             "type": "array",

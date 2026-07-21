@@ -89,14 +89,8 @@ import {
   type LoadEncounterInput,
   type ResolveEncounterReactionInput,
   type SubmitEncounterIntentInput,
+  ACTIVE_ENCOUNTER_LIFECYCLES,
 } from './encounter.types.js';
-
-const openLifecycles = [
-  EncounterLifecycleStatus.AWAITING_INTENT,
-  EncounterLifecycleStatus.AWAITING_REACTION,
-  EncounterLifecycleStatus.PROCESSING_PAUSED,
-  EncounterLifecycleStatus.COMPLETION_PENDING,
-] as const;
 
 const idempotencyOperation = {
   create: 'encounter.create',
@@ -546,7 +540,7 @@ export function createEncounterService(
               throw new EncounterError('ENCOUNTER_MECHANICS_DRIFT', { cause: error });
             }
             const existing = await transaction.encounter.findFirst({
-              where: { campaignId: scope.campaign.id, lifecycleStatus: { in: [...openLifecycles] } },
+              where: { campaignId: scope.campaign.id, lifecycleStatus: { in: [...ACTIVE_ENCOUNTER_LIFECYCLES] } },
               select: { id: true },
             });
             if (existing !== null) throw new EncounterError('ENCOUNTER_ALREADY_OPEN');
@@ -799,7 +793,7 @@ export function createEncounterService(
 
     async cancel(input: CancelEncounterInput): Promise<EncounterDto> {
       validateMutationReference(input);
-      return mutate('cancel', input, openLifecycles, (_transaction, loaded) => ({
+      return mutate('cancel', input, ACTIVE_ENCOUNTER_LIFECYCLES, (_transaction, loaded) => ({
         state: coreValue(cancelCoreV1Encounter(loaded.state)),
         stopReason: null,
       }));
