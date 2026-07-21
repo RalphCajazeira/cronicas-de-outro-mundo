@@ -183,4 +183,96 @@ describe('encounter adapter preflight', () => {
     expect(expiredReload).not.toHaveBeenCalled();
     expect(updateCampaignTick).toHaveBeenCalledOnce();
   });
+
+  it('reloads only the actors changed by a spell resolution before rebuilding adapter state', async () => {
+    const actorRefs = ['cacador-cristalino', 'cervo-cristalino-jovem', 'kael', 'lysandra-vale'];
+    const participant = (
+      actorRef: string,
+      hp = 40,
+      mana = 30,
+    ): CoreV1EncounterState['participants'][number] => ({
+      actorRef,
+      actorStateVersion: 1,
+      mechanicsStateVersion: 1,
+      inventoryStateVersion: 1,
+      effectsStateVersion: 1,
+      combatState: actorRef === 'kael' ? 'casting' : 'ready',
+      primaryAttributes: {},
+      secondaryAttributes: {},
+      resources: {
+        hp: { current: hp, maximum: 40 },
+        mana: { current: mana, maximum: 30 },
+        sp: { current: 30, maximum: 30 },
+      },
+      activeEffects: [],
+      equipmentContext: { inventory: { entries: [] }, loadout: { slots: [] } },
+    } as unknown as CoreV1EncounterState['participants'][number]);
+    const authority = (actorRef: string, hp = 40, mana = 30) => ({
+      actor: {
+        id: `${actorRef}-id`, code: actorRef, campaignId: 'campaign-id', level: 1, status: 'ACTIVE',
+        mechanicsStateVersion: 1, inventoryStateVersion: 1, effectsStateVersion: 1,
+      },
+      sheet: {
+        mechanicsStateVersion: 1, inventoryStateVersion: 1, effectsStateVersion: 1,
+        primaryAttributes: {}, secondaryAttributes: { elementalResistanceBps: {} },
+        resources: {
+          hp: { current: hp, max: 40, stateVersion: hp === 40 ? 1 : 2 },
+          mana: { current: mana, max: 30, stateVersion: mana === 30 ? 1 : 2 },
+          sp: { current: 30, max: 30, stateVersion: 1 },
+        },
+      },
+      inventory: { inventory: { entries: [] }, loadout: { slots: [] } },
+      effects: { activeEffects: [] },
+    } as unknown as PersistedEncounterAuthority);
+    const before = {
+      currentTick: 3751n,
+      stateVersion: 6,
+      participants: actorRefs.map((actorRef) => participant(actorRef)),
+      activeActions: [],
+    } as unknown as CoreV1EncounterState;
+    const after = {
+      ...before,
+      currentTick: 4082n,
+      stateVersion: 8,
+      participants: actorRefs.map((actorRef) => {
+        if (actorRef === 'kael') return participant(actorRef, 40, 26);
+        if (actorRef === 'cacador-cristalino') return participant(actorRef, 34, 30);
+        return participant(actorRef);
+      }),
+    };
+    const authorities = new Map(actorRefs.map((actorRef) => [actorRef, authority(actorRef)]));
+    const fixture = {
+      record: {
+        id: 'encounter-id', campaignId: 'campaign-id', rulesetVersionId: 'ruleset-id',
+        campaign: { worldId: 'world-id', engineTick: 3751n, engineStateVersion: 6 },
+        participants: actorRefs.map((actorRef) => ({ actorRef, actorId: `${actorRef}-id` })),
+      },
+      state: before,
+      authorities,
+    } as unknown as LoadedEncounter;
+    const transaction = {
+      actorResource: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      campaign: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    } as unknown as EncounterTransaction;
+    const selectiveReload = vi.mocked(loadPersistedEncounterAuthorities);
+    selectiveReload.mockReset();
+    selectiveReload.mockResolvedValueOnce(new Map([
+      ['cacador-cristalino', authority('cacador-cristalino', 34, 30)],
+      ['kael', authority('kael', 40, 26)],
+    ]));
+
+    const result = await applyEncounterMutations(transaction, fixture, after, {
+      processedEvents: [{ type: 'action_started' }, { type: 'action_effect' }],
+      resolvedActions: [],
+    } as never);
+
+    const reloadedActorIds = selectiveReload.mock.calls[0]?.[1] ?? [];
+    expect([...reloadedActorIds].sort()).toEqual([
+      'cacador-cristalino-id',
+      'kael-id',
+    ]);
+    expect(result.authorities.size).toBe(4);
+    expect(result.authorities.get('kael')?.sheet.resources.mana.current).toBe(26);
+    expect(result.authorities.get('cacador-cristalino')?.sheet.resources.hp.current).toBe(34);
+  });
 });
