@@ -20,6 +20,8 @@ export type EncounterErrorCode =
   | 'ENCOUNTER_IDEMPOTENCY_RESPONSE_PENDING'
   | 'ENCOUNTER_ROLL_INVALID'
   | 'ENCOUNTER_CORE_REJECTED'
+  | 'ENCOUNTER_BEAT_ATOMIC_REJECTED'
+  | 'ENCOUNTER_NPC_LIMIT_EXCEEDED'
   | 'ENCOUNTER_CONSTRAINT_CONFLICT'
   | 'ENCOUNTER_TRANSACTION_RETRYABLE'
   | 'ENCOUNTER_INTERNAL';
@@ -46,6 +48,8 @@ const safeMessages: Readonly<Record<EncounterErrorCode, string>> = {
   ENCOUNTER_IDEMPOTENCY_RESPONSE_PENDING: 'Idempotent operation has no confirmed response',
   ENCOUNTER_ROLL_INVALID: 'Backend roll validation failed',
   ENCOUNTER_CORE_REJECTED: 'Encounter core rejected the operation',
+  ENCOUNTER_BEAT_ATOMIC_REJECTED: 'Encounter beat was rejected without partial persistence',
+  ENCOUNTER_NPC_LIMIT_EXCEEDED: 'Encounter beat exceeds the eligible NPC processing limit',
   ENCOUNTER_CONSTRAINT_CONFLICT: 'Encounter persistence constraint conflict',
   ENCOUNTER_TRANSACTION_RETRYABLE: 'Encounter transaction may be retried with the same idempotency key',
   ENCOUNTER_INTERNAL: 'Encounter operation failed',
@@ -54,13 +58,25 @@ const safeMessages: Readonly<Record<EncounterErrorCode, string>> = {
 export class EncounterError extends Error {
   readonly code: EncounterErrorCode;
   readonly retryable: boolean;
+  readonly issues: readonly EncounterErrorIssue[] | undefined;
 
-  constructor(code: EncounterErrorCode, options?: { readonly retryable?: boolean; readonly cause?: unknown }) {
+  constructor(code: EncounterErrorCode, options?: {
+    readonly retryable?: boolean;
+    readonly cause?: unknown;
+    readonly issues?: readonly EncounterErrorIssue[];
+  }) {
     super(safeMessages[code], options?.cause === undefined ? undefined : { cause: options.cause });
     this.name = 'EncounterError';
     this.code = code;
     this.retryable = options?.retryable ?? code === 'ENCOUNTER_TRANSACTION_RETRYABLE';
+    this.issues = options?.issues;
   }
+}
+
+export interface EncounterErrorIssue {
+  readonly path: string;
+  readonly code: string;
+  readonly message: string;
 }
 
 export function encounterError(code: EncounterErrorCode, cause?: unknown): EncounterError {

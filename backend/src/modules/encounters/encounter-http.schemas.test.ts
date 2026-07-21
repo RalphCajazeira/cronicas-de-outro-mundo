@@ -16,6 +16,19 @@ const valid = {
   continue: { operation: 'continue', ...mutation },
   confirm_completion: { operation: 'confirm_completion', ...mutation },
   cancel: { operation: 'cancel', ...mutation },
+  resolve_beat: {
+    operation: 'resolve_beat', ...mutation,
+    intent: {
+      actorRef: 'hero', objective: 'protect_and_prepare', narrative: 'Hero recua, protege Ally e prepara uma reação.',
+      resolutionPolicy: 'atomic',
+      components: [
+        { type: 'move', destination: 'far' },
+        { type: 'protect', targetRef: 'ally' },
+        { type: 'prepare', trigger: 'enemy_advances', targetRefs: ['enemy'], contentRef: { scope: 'campaign', contentType: 'spell', code: 'spark', versionNumber: 1 } },
+      ],
+    },
+    npcDirectives: [{ actorRef: 'ally', strategy: 'defensive' }],
+  },
 } as const;
 
 describe('manageEncounter public schemas', () => {
@@ -41,7 +54,7 @@ describe('manageEncounter public schemas', () => {
   });
 
   it('enforces idempotency and expectedStateVersion on every mutation', () => {
-    for (const operation of ['submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel'] as const) {
+    for (const operation of ['submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel', 'resolve_beat'] as const) {
       const withoutKey = { ...valid[operation] } as Record<string, unknown>;
       delete withoutKey.idempotencyKey;
       const withoutVersion = { ...valid[operation] } as Record<string, unknown>;
@@ -53,6 +66,41 @@ describe('manageEncounter public schemas', () => {
     const parsed = manageEncounterSchema.parse({ ...valid.create, idempotencyKey: '  encounter-create-001  ' });
     if (parsed.operation !== 'create') throw new Error('fixture');
     expect(parsed.idempotencyKey).toBe('encounter-create-001');
+  });
+
+  it('accepts the closed generic action catalog and rejects unlimited or mechanically forged beats', () => {
+    const base = valid.resolve_beat;
+    for (const component of [
+      { type: 'move', destination: 'near' }, { type: 'defend' }, { type: 'protect', targetRef: 'ally' },
+      { type: 'intercept', targetRef: 'ally' }, { type: 'assist', targetRef: 'ally' },
+      { type: 'flee' }, { type: 'observe' }, { type: 'interact', targetRef: 'gate' },
+      { type: 'improvise', description: 'derrubar uma mesa' },
+      { type: 'use_item', inventoryEntryRef: 'potion' },
+      { type: 'attack', inventoryEntryRef: 'sword', targetRefs: ['enemy'] },
+      { type: 'cast', contentRef: { scope: 'campaign', contentType: 'spell', code: 'spark', versionNumber: 1 }, targetRefs: ['enemy'] },
+    ]) {
+      expect(manageEncounterSchema.safeParse({ ...base, intent: { ...base.intent, components: [component] } }).success, component.type).toBe(true);
+    }
+    const four = manageEncounterSchema.safeParse({
+      ...base, intent: { ...base.intent, components: Array.from({ length: 4 }, () => ({ type: 'defend' })) },
+    });
+    expect(four.success).toBe(false);
+    if (four.success) throw new Error('fixture');
+    expect(four.error.issues).toEqual(expect.arrayContaining([expect.objectContaining({
+      path: ['intent', 'components'],
+      message: 'A beat accepts at most 3 components; received 4. Split the intention into separate decisions.',
+    })]));
+    expect(manageEncounterSchema.safeParse({
+      ...base, intent: { ...base.intent, resolutionPolicy: 'allow_partial', components: [{ type: 'defend', essential: true }] },
+    }).success).toBe(true);
+    expect(manageEncounterSchema.safeParse({
+      ...base, intent: { ...base.intent, resolutionPolicy: undefined },
+    }).success).toBe(false);
+    expect(manageEncounterSchema.safeParse({ ...base, damage: 99 }).success).toBe(false);
+    expect(manageEncounterSchema.safeParse({ ...base, intent: { ...base.intent, components: [{ type: 'attack', targetRefs: ['enemy'] }] } }).success).toBe(false);
+    expect(manageEncounterSchema.safeParse({ ...base, npcDirectives: [
+      { actorRef: 'ally', strategy: 'defensive' }, { actorRef: 'ally', strategy: 'aggressive' },
+    ] }).success).toBe(false);
   });
 
   it('enforces source and targetSelector-specific intent fields without accepting client mechanics', () => {

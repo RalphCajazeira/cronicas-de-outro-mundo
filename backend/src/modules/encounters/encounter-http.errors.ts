@@ -20,6 +20,8 @@ const definitions: Readonly<Record<EncounterErrorCode, PublicErrorDefinition>> =
   ENCOUNTER_EPHEMERAL_MUTATION_UNSUPPORTED: { status: 422, code: 'ACTION_REJECTED', message: 'Encounter action cannot mutate an ephemeral participant', retryable: false, recoveryAction: 'choose_new_intent' },
   ENCOUNTER_SPATIAL_CONTEXT_UNAVAILABLE: { status: 422, code: 'SPATIAL_CONTEXT_UNAVAILABLE', message: 'Authoritative spatial context is unavailable for this action', retryable: false, recoveryAction: 'choose_new_intent' },
   ENCOUNTER_CORE_REJECTED: { status: 422, code: 'ACTION_REJECTED', message: 'Encounter action was rejected by the authoritative rules', retryable: false, recoveryAction: 'load_encounter' },
+  ENCOUNTER_BEAT_ATOMIC_REJECTED: { status: 422, code: 'BEAT_REJECTED', message: 'Encounter beat was rejected and no component was persisted', retryable: false, recoveryAction: 'choose_new_intent' },
+  ENCOUNTER_NPC_LIMIT_EXCEEDED: { status: 422, code: 'NPC_LIMIT_EXCEEDED', message: 'Encounter beat has more than four eligible NPCs', retryable: false, recoveryAction: 'choose_new_intent' },
   ENCOUNTER_TRANSACTION_RETRYABLE: { status: 503, code: 'TEMPORARY_UNAVAILABLE', message: 'Encounter operation is temporarily unavailable', retryable: true, recoveryAction: 'retry_same_request' },
   ENCOUNTER_SNAPSHOT_HASH_INVALID: integrity(),
   ENCOUNTER_SNAPSHOT_INVALID: integrity(),
@@ -46,16 +48,37 @@ function integrity(): PublicErrorDefinition {
   };
 }
 
-function publicAppError(definition: PublicErrorDefinition, auditCode?: EncounterErrorCode): AppError {
+function publicAppError(
+  definition: PublicErrorDefinition,
+  auditCode?: EncounterErrorCode,
+  issues?: EncounterError['issues'],
+): AppError {
   return new AppError(definition.status, definition.code, definition.message, {
     retryable: definition.retryable,
     ...(definition.recoveryAction === undefined ? {} : { recoveryAction: definition.recoveryAction }),
     ...(auditCode === undefined ? {} : { auditCode }),
+    ...(issues === undefined ? {} : { issues }),
   });
 }
 
 export function mapEncounterHttpError(error: unknown): AppError {
-  if (error instanceof EncounterError) return publicAppError(definitions[error.code], error.code);
+  if (error instanceof EncounterError) {
+    const definition = definitions[error.code];
+    const npcRefs = error.code === 'ENCOUNTER_NPC_LIMIT_EXCEEDED'
+      ? error.issues?.flatMap((issue) => {
+        const actorRef = issue.path.startsWith('npc.') ? issue.path.slice(4) : '';
+        return /^[a-z0-9][a-z0-9_-]{0,99}$/.test(actorRef) ? [actorRef] : [];
+      }) ?? []
+      : [];
+    return publicAppError(
+      npcRefs.length === 0 ? definition : {
+        ...definition,
+        message: `${definition.message}; none acted: ${npcRefs.join(', ')}`,
+      },
+      error.code,
+      error.issues,
+    );
+  }
   if (error instanceof NotFoundError) {
     return new AppError(404, 'SCOPE_NOT_FOUND', 'Requested game scope was not found', { retryable: false });
   }

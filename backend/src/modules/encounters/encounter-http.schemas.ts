@@ -4,6 +4,8 @@ import { codeSchema } from '../actors/actors.schemas.js';
 export const ENCOUNTER_HTTP_MAX_PARTICIPANTS = 64;
 export const ENCOUNTER_HTTP_MAX_RELATION_OVERRIDES = 128;
 export const ENCOUNTER_HTTP_MAX_TARGETS = 16;
+export const ENCOUNTER_HTTP_MAX_BEAT_COMPONENTS = 3;
+export const ENCOUNTER_HTTP_MAX_NPC_DIRECTIVES = 16;
 export const ENCOUNTER_HTTP_JSON_LIMIT_BYTES = 100 * 1024;
 
 const scopeFields = {
@@ -93,6 +95,84 @@ const intentSchema = z.strictObject({
   }
 });
 
+const beatTargetRefsSchema = z.array(codeSchema).min(1).max(ENCOUNTER_HTTP_MAX_TARGETS).superRefine((refs, context) => {
+  const seen = new Set<string>();
+  refs.forEach((ref, index) => {
+    if (seen.has(ref)) context.addIssue({ code: 'custom', path: [index], message: 'Target references must be unique' });
+    seen.add(ref);
+  });
+});
+
+const beatComponentFields = { essential: z.boolean().optional() };
+
+const beatComponentSchema = z.discriminatedUnion('type', [
+  z.strictObject({
+    ...beatComponentFields,
+    type: z.literal('move'), destination: zoneSchema,
+    movementKind: z.enum(['approach', 'retreat', 'run', 'disengage']).optional(),
+  }),
+  z.strictObject({ ...beatComponentFields, type: z.literal('defend') }),
+  z.strictObject({ ...beatComponentFields, type: z.literal('protect'), targetRef: codeSchema }),
+  z.strictObject({
+    ...beatComponentFields,
+    type: z.literal('prepare'), contentRef: contentReferenceSchema,
+    trigger: z.enum(['enemy_advances', 'enemy_attacks', 'ally_attacked']),
+    targetRefs: beatTargetRefsSchema.optional(),
+  }),
+  z.strictObject({ ...beatComponentFields, type: z.literal('intercept'), targetRef: codeSchema }),
+  z.strictObject({ ...beatComponentFields, type: z.literal('assist'), targetRef: codeSchema }),
+  z.strictObject({ ...beatComponentFields, type: z.literal('flee'), destination: z.enum(['far', 'out_of_range']).optional() }),
+  z.strictObject({ ...beatComponentFields, type: z.literal('observe'), targetRef: codeSchema.optional() }),
+  z.strictObject({ ...beatComponentFields, type: z.literal('interact'), targetRef: codeSchema, description: z.string().trim().min(1).max(500).optional() }),
+  z.strictObject({ ...beatComponentFields, type: z.literal('improvise'), description: z.string().trim().min(1).max(500), targetRef: codeSchema.optional() }),
+  z.strictObject({ ...beatComponentFields, type: z.literal('use_item'), inventoryEntryRef: codeSchema, targetRefs: beatTargetRefsSchema.optional() }),
+  z.strictObject({
+    ...beatComponentFields,
+    type: z.literal('attack'), inventoryEntryRef: codeSchema, targetRefs: beatTargetRefsSchema,
+    versatileMode: z.enum(['one_handed', 'two_handed']).optional(),
+  }),
+  z.strictObject({ ...beatComponentFields, type: z.literal('cast'), contentRef: contentReferenceSchema, targetRefs: beatTargetRefsSchema.optional() }),
+]);
+
+const beatComponentsSchema = z.array(beatComponentSchema).min(1).max(64).superRefine((components, context) => {
+  if (components.length > ENCOUNTER_HTTP_MAX_BEAT_COMPONENTS) {
+    context.addIssue({
+      code: 'custom',
+      message: `A beat accepts at most 3 components; received ${String(Math.min(components.length, 64))}. Split the intention into separate decisions.`,
+    });
+  }
+});
+
+const npcDirectiveSchema = z.strictObject({
+  actorRef: codeSchema,
+  strategy: z.enum(['aggressive', 'defensive', 'protect_ally', 'attack_vulnerable', 'flee_if_hurt', 'prioritize_caster']),
+  targetRef: codeSchema.optional(),
+});
+
+const resolveBeatSchema = z.strictObject({
+  operation: z.literal('resolve_beat'), ...scopeFields,
+  idempotencyKey: idempotencyKeySchema, expectedStateVersion: expectedStateVersionSchema,
+  intent: z.strictObject({
+    actorRef: codeSchema,
+    objective: z.string().trim().min(1).max(120),
+    narrative: z.string().trim().min(1).max(1_000),
+    resolutionPolicy: z.enum(['atomic', 'allow_partial']),
+    components: beatComponentsSchema,
+  }),
+  npcDirectives: z.array(npcDirectiveSchema).max(ENCOUNTER_HTTP_MAX_NPC_DIRECTIVES).optional(),
+}).superRefine((input, context) => {
+  const directed = new Set<string>();
+  input.npcDirectives?.forEach((directive, index) => {
+    if (directed.has(directive.actorRef)) {
+      context.addIssue({ code: 'custom', path: ['npcDirectives', index, 'actorRef'], message: 'NPC directives must use unique actor references' });
+    }
+    if (directive.actorRef === input.intent.actorRef) {
+      context.addIssue({ code: 'custom', path: ['npcDirectives', index, 'actorRef'], message: 'The primary actor cannot also be an NPC directive' });
+    }
+    directed.add(directive.actorRef);
+  });
+});
+
 const createSchema = z.strictObject({
   operation: z.literal('create'),
   ...scopeFields,
@@ -157,7 +237,7 @@ const cancelSchema = z.strictObject({
 
 const manageEncounterOperationSchema = z.discriminatedUnion('operation', [
   createSchema, loadSchema, submitIntentSchema, resolveReactionSchema,
-  continueSchema, confirmCompletionSchema, cancelSchema,
+  continueSchema, confirmCompletionSchema, cancelSchema, resolveBeatSchema,
 ]);
 
 export const manageEncounterSchema = z.preprocess((value, context) => {
@@ -171,3 +251,4 @@ export const manageEncounterSchema = z.preprocess((value, context) => {
 export type ManageEncounterInput = z.infer<typeof manageEncounterSchema>;
 export type CreateEncounterHttpInput = z.infer<typeof createSchema>;
 export type SubmitIntentHttpInput = z.infer<typeof submitIntentSchema>;
+export type ResolveBeatHttpInput = z.infer<typeof resolveBeatSchema>;

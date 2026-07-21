@@ -32,7 +32,8 @@ import { publishContentVersion } from '../../src/modules/content/content-publica
 import { prismaGptRepository } from '../../src/modules/gpt/gpt.repository.js';
 import { canonicalize, jsonByteSize } from '../../src/modules/gpt/gpt.start-game.js';
 import { prismaReadinessCheck } from '../../src/modules/health/health.repository.js';
-import { encounterService } from '../../src/modules/encounters/encounter.service.js';
+import { createEncounterService, encounterService } from '../../src/modules/encounters/encounter.service.js';
+import { RecordingEncounterRollProvider } from '../../src/modules/encounters/encounter-roll-provider.js';
 import { createEncounterHttpService } from '../../src/modules/encounters/encounter-http.service.js';
 import { getOfficialContract } from '../../src/modules/openapi/openapi.routes.js';
 import { lockActorAuthorities } from '../../src/modules/encounters/encounter.repository.js';
@@ -414,6 +415,61 @@ async function createEncounterFixture(
     },
   });
   return { rulesetVersion, player, world, campaign, actor, encounter };
+}
+
+async function createBeatNpcFixture(suffix: string, npcCount: number) {
+  const rulesetVersion = await prisma.$transaction((transaction) => ensureCoreV1RulesetVersion(transaction));
+  const player = await prisma.player.create({
+    data: { slug: `beat-${suffix}-player`, displayName: `Beat ${suffix} Player` },
+  });
+  const world = await prisma.world.create({
+    data: {
+      playerId: player.id, defaultRulesetVersionId: rulesetVersion.id,
+      code: `beat-${suffix}-world`, name: `Beat ${suffix} World`,
+    },
+  });
+  const campaign = await prisma.campaign.create({
+    data: {
+      worldId: world.id, rulesetVersionId: rulesetVersion.id,
+      code: `beat-${suffix}-campaign`, name: `Beat ${suffix} Campaign`, status: CampaignStatus.ACTIVE,
+    },
+  });
+  const heroRef = `beat-${suffix}-hero`;
+  await createMechanicalActor({
+    campaignId: campaign.id, code: heroRef, name: `Beat ${suffix} Hero`, actorType: ActorType.CHARACTER,
+  });
+  const npcRefs: string[] = [];
+  for (let index = 1; index <= npcCount; index += 1) {
+    const actorRef = `beat-${suffix}-npc-${String(index)}`;
+    const npc = await createMechanicalActor({
+      campaignId: campaign.id, code: actorRef, name: `Beat ${suffix} NPC ${String(index)}`,
+      actorType: ActorType.CREATURE,
+    });
+    await prisma.actor.update({ where: { id: npc.id }, data: { metadata: { tactic: 'defensive' } } });
+    npcRefs.push(actorRef);
+  }
+  const scope = { playerRef: player.slug, worldRef: world.code, campaignRef: campaign.code };
+  const encounterRef = `beat-${suffix}-encounter`;
+  const participants = [
+    { bindingKind: 'persisted_actor' as const, actorRef: heroRef, sideRef: 'party', zone: 'near' as const },
+    ...npcRefs.map((actorRef) => ({
+      bindingKind: 'persisted_actor' as const, actorRef, sideRef: 'hostile', zone: 'near' as const,
+    })),
+  ];
+  const actorRefs = [heroRef, ...npcRefs].sort();
+  const relations = actorRefs.flatMap((leftActorRef, leftIndex) => (
+    actorRefs.slice(leftIndex).map((rightActorRef) => ({
+      leftActorRef,
+      rightActorRef,
+      relation: leftActorRef === rightActorRef ? 'self' as const
+        : leftActorRef === heroRef || rightActorRef === heroRef ? 'hostile' as const : 'ally' as const,
+    }))
+  ));
+  const created = await encounterService.create({
+    ...scope, encounterRef, idempotencyKey: `beat-${suffix}-create`, partySideRef: 'party',
+    participants, relations,
+  });
+  return { scope, encounterRef, heroRef, npcRefs, created };
 }
 
 afterAll(async () => {
@@ -1273,6 +1329,308 @@ describe('idempotent seed', () => {
 encounterPersistenceConstraintTests();
 
 describe('Phase 1L-B transactional encounter adapter', () => {
+  it('resolves a composite player beat, NPC fallback, reaction preparation and checkpoint in one external mutation', async () => {
+    const encounterRef = 'phase-beat-resolution';
+    const created = await encounterService.create({
+      ...seedScope,
+      idempotencyKey: 'phase-beat-create-0001',
+      encounterRef,
+      partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'near' },
+        { bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'hostile', zone: 'far' },
+      ],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+      ],
+    });
+    let cleanupNeeded = true;
+    try {
+      expect(created.lifecycleStatus).toBe('processing_paused');
+      const input = {
+        ...seedScope,
+        encounterRef,
+        idempotencyKey: 'phase-beat-resolve-0001',
+        expectedStateVersion: created.stateVersion,
+        intent: {
+        actorRef: 'ralph',
+        objective: 'reposition_protect_prepare',
+        narrative: 'Ralph recua, assume uma guarda e prepara sua magia se Lyra avançar.',
+        resolutionPolicy: 'atomic' as const,
+          components: [
+            { type: 'move' as const, destination: 'medium' as const },
+            { type: 'protect' as const, targetRef: 'ralph' },
+            {
+              type: 'prepare' as const,
+              trigger: 'enemy_advances' as const,
+              targetRefs: ['ralph'],
+              contentRef: {
+                scope: 'campaign' as const, contentType: 'spell' as const,
+                code: 'seed-mark-spell', versionNumber: 1,
+              },
+            },
+          ],
+        },
+        npcDirectives: [{ actorRef: 'lyra', strategy: 'aggressive' as const }],
+      };
+      const resolved = await encounterService.resolveBeat(input);
+      expect(resolved).toMatchObject({
+        operation: 'resolve_beat', lifecycleStatus: 'awaiting_intent',
+      beatSummary: {
+        externalTransitions: 1, resolutionPolicy: 'atomic', partialResolutionApplied: false,
+        requiresPlayerDecision: true,
+        componentResults: [
+          {
+            index: 0, type: 'move', status: 'modified', code: 'MOVEMENT_KIND_INFERRED',
+          },
+          { index: 1, type: 'protect', status: 'conditional' },
+          { index: 2, type: 'prepare', status: 'conditional' },
+        ],
+        },
+      });
+      expect(typeof resolved.beatSummary?.componentResults[0]?.requested).toBe('string');
+      expect(typeof resolved.beatSummary?.componentResults[0]?.applied).toBe('string');
+      expect(resolved.stateVersion).toBeGreaterThan(created.stateVersion);
+      expect(resolved.beatSummary?.actorsActed).toEqual(expect.arrayContaining(['ralph', 'lyra']));
+    expect(resolved.beatSummary?.npcActions).toEqual([
+      expect.objectContaining({ actorRef: 'lyra', strategy: 'aggressive' }),
+    ]);
+    expect(resolved.beatSummary?.npcResults).toEqual([{ actorRef: 'lyra', status: 'acted' }]);
+    expect(resolved.scene).toMatchObject({ stateVersion: resolved.stateVersion });
+    expect(resolved.nextRequiredAction.type).not.toBe('continue');
+    expect(resolved.scene?.participants.find((participant) => participant.actorRef === 'ralph')?.preparedActionRefs)
+      .toEqual(expect.arrayContaining([expect.stringContaining('prepared-enemy-advances-')]));
+      await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } })).resolves.toBe(2);
+
+      const replay = await encounterService.resolveBeat(input);
+      expect(replay).toEqual(resolved);
+      await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } })).resolves.toBe(2);
+
+      const auditRows = await prisma.encounterOperation.findMany({
+        where: { encounter: { encounterRef } }, orderBy: { nextStateVersion: 'asc' },
+        select: { operation: true, idempotencyRecord: { select: { operation: true } } },
+      });
+      expect(auditRows.map((row) => ({ kind: row.operation, namespace: row.idempotencyRecord.operation })))
+        .toEqual([
+          { kind: EncounterOperationKind.CREATE, namespace: 'encounter.create' },
+          { kind: EncounterOperationKind.SUBMIT_INTENT, namespace: 'encounter.resolve_beat' },
+        ]);
+      await expect(encounterService.submitIntent({
+        ...seedScope, encounterRef, idempotencyKey: input.idempotencyKey,
+        expectedStateVersion: resolved.stateVersion,
+        intent: {
+          intentRef: 'legacy-key-collision', sourceActorRef: 'ralph', slotRef: 'primary',
+          actionSource: 'basic_weapon_attack', targetSelector: 'explicit',
+          requestedTargetRefs: ['lyra'], weaponEntryRef: 'starter-dagger-1',
+        },
+      })).rejects.toMatchObject({ code: 'ENCOUNTER_IDEMPOTENCY_KEY_REUSED' });
+
+      const staleKey = 'phase-beat-stale-0001';
+      await expect(encounterService.resolveBeat({
+        ...input, idempotencyKey: staleKey, expectedStateVersion: created.stateVersion,
+      })).rejects.toMatchObject({ code: 'ENCOUNTER_EXPECTED_VERSION_CONFLICT' });
+      await expect(prisma.idempotencyRecord.count({ where: { key: `encounter:${staleKey}` } })).resolves.toBe(0);
+
+      await encounterService.cancel({
+        ...seedScope,
+        encounterRef,
+        idempotencyKey: 'phase-beat-cancel-0001',
+        expectedStateVersion: resolved.stateVersion,
+      });
+      cleanupNeeded = false;
+    } finally {
+      if (cleanupNeeded) {
+        const persisted = await prisma.encounter.findFirst({
+          where: { encounterRef },
+          select: { lifecycleStatus: true, stateVersion: true },
+        });
+        const terminalStatuses = new Set<EncounterLifecycleStatus>([
+          EncounterLifecycleStatus.COMPLETED,
+          EncounterLifecycleStatus.FAILED,
+          EncounterLifecycleStatus.CANCELLED,
+        ]);
+        if (persisted !== null && !terminalStatuses.has(persisted.lifecycleStatus)) {
+          await encounterService.cancel({
+            ...seedScope,
+            encounterRef,
+            idempotencyKey: 'phase-beat-cleanup-0001',
+            expectedStateVersion: persisted.stateVersion,
+          });
+        }
+      }
+    }
+  });
+
+  it('requires explicit partial policy and rolls back essential failures without hidden mutations', async () => {
+    const encounterRef = 'phase-beat-partial-policy';
+    const created = await encounterService.create({
+      ...seedScope, encounterRef, idempotencyKey: 'phase-beat-partial-create', partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'near' },
+        { bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'hostile', zone: 'far' },
+      ],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+      ],
+    });
+    let currentVersion = created.stateVersion;
+    try {
+      const invalidFourKey = 'phase-beat-four-components';
+      const invalidFour = await post('/api/v1/encounters/manage', {
+        operation: 'resolve_beat', encounterRef, idempotencyKey: invalidFourKey,
+        expectedStateVersion: created.stateVersion,
+        intent: {
+          actorRef: 'ralph', objective: 'too_many_components', narrative: 'This request must be rejected.',
+          resolutionPolicy: 'atomic',
+          components: [{ type: 'defend' }, { type: 'defend' }, { type: 'defend' }, { type: 'defend' }],
+        },
+        npcDirectives: [],
+      });
+      expect(invalidFour.status).toBe(400);
+      expect(invalidFour.body).toMatchObject({ error: { code: 'INVALID_INPUT' } });
+      expect(JSON.stringify(invalidFour.body)).toContain('received 4');
+      expect(JSON.stringify(invalidFour.body)).toContain('Split the intention');
+      await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } })).resolves.toBe(1);
+      await expect(prisma.idempotencyRecord.count({ where: { key: `encounter:${invalidFourKey}` } })).resolves.toBe(0);
+
+      const components = [
+        { type: 'move' as const, destination: 'medium' as const },
+        { type: 'move' as const, destination: 'far' as const, essential: true },
+        {
+          type: 'prepare' as const, trigger: 'enemy_attacks' as const, targetRefs: ['ralph'],
+          contentRef: { scope: 'campaign' as const, contentType: 'spell' as const, code: 'seed-mark-spell', versionNumber: 1 },
+        },
+      ];
+      const essentialKey = 'phase-beat-essential-rejected';
+      await expect(encounterService.resolveBeat({
+        ...seedScope, encounterRef, idempotencyKey: essentialKey,
+        expectedStateVersion: created.stateVersion,
+        intent: {
+          actorRef: 'ralph', objective: 'test_essential_rollback', narrative: 'Test essential rollback.',
+          resolutionPolicy: 'allow_partial', components,
+        },
+        npcDirectives: [{ actorRef: 'lyra', strategy: 'defensive' }],
+      })).rejects.toMatchObject({
+        code: 'ENCOUNTER_BEAT_ATOMIC_REJECTED',
+        issues: [
+          expect.objectContaining({ path: 'intent.components.0', code: 'ATOMIC_ROLLBACK' }),
+          expect.objectContaining({ path: 'intent.components.1', code: 'DISTANCE_INCOMPATIBLE' }),
+          expect.objectContaining({ path: 'intent.components.2', code: 'ATOMIC_ROLLBACK' }),
+        ],
+      });
+      await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } })).resolves.toBe(1);
+      await expect(prisma.idempotencyRecord.count({ where: { key: `encounter:${essentialKey}` } })).resolves.toBe(0);
+      const afterRollback = await encounterService.load({ ...seedScope, encounterRef });
+      expect(afterRollback.stateVersion).toBe(created.stateVersion);
+      expect(afterRollback.scene?.participants.find((entry) => entry.actorRef === 'ralph'))
+        .toMatchObject({ zone: 'near', preparedActionRefs: [] });
+
+      const partialKey = 'phase-beat-partial-accepted';
+      const partial = await encounterService.resolveBeat({
+        ...seedScope, encounterRef, idempotencyKey: partialKey,
+        expectedStateVersion: created.stateVersion,
+        intent: {
+          actorRef: 'ralph', objective: 'test_safe_partial', narrative: 'Test explicit safe partial resolution.',
+          resolutionPolicy: 'allow_partial',
+          components: components.map((component) => ({ ...component, essential: false })),
+        },
+        npcDirectives: [{ actorRef: 'lyra', strategy: 'defensive' }],
+      });
+      currentVersion = partial.stateVersion;
+      expect(partial.beatSummary).toMatchObject({
+        resolutionPolicy: 'allow_partial', partialResolutionApplied: true,
+        componentResults: [
+          { index: 0, status: 'modified', code: 'MOVEMENT_KIND_INFERRED' },
+          { index: 1, status: 'rejected', code: 'DISTANCE_INCOMPATIBLE' },
+          { index: 2, status: 'conditional', code: 'TRIGGER_PENDING' },
+        ],
+        npcResults: [{ actorRef: 'lyra', status: 'rejected', reason: 'no_valid_target' }],
+      });
+      expect(partial.scene?.participants.find((entry) => entry.actorRef === 'ralph'))
+        .toMatchObject({ zone: 'medium' });
+      expect(partial.scene?.participants.find((entry) => entry.actorRef === 'ralph')?.preparedActionRefs)
+        .toEqual(expect.arrayContaining([expect.stringContaining('prepared-enemy-attacks-')]));
+      await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } })).resolves.toBe(2);
+    } finally {
+      const persisted = await prisma.encounter.findFirst({ where: { encounterRef }, select: { lifecycleStatus: true, stateVersion: true } });
+      if (persisted !== null && !new Set<EncounterLifecycleStatus>([
+        EncounterLifecycleStatus.COMPLETED, EncounterLifecycleStatus.FAILED, EncounterLifecycleStatus.CANCELLED,
+      ]).has(persisted.lifecycleStatus)) {
+        await encounterService.cancel({
+          ...seedScope, encounterRef, idempotencyKey: 'phase-beat-partial-cleanup',
+          expectedStateVersion: Math.max(currentVersion, persisted.stateVersion),
+        });
+      }
+    }
+  });
+
+  it('processes exactly four NPCs deterministically and rejects five before any actor acts', async () => {
+    const four = await createBeatNpcFixture('limit-four', 4);
+    const five = await createBeatNpcFixture('limit-five', 5);
+    let fourVersion = four.created.stateVersion;
+    try {
+      const fiveKey = 'beat-limit-five-resolve';
+      const fiveResponse = await post('/api/v1/encounters/manage', {
+        ...five.scope, operation: 'resolve_beat', encounterRef: five.encounterRef, idempotencyKey: fiveKey,
+        expectedStateVersion: five.created.stateVersion,
+        intent: {
+          actorRef: five.heroRef, objective: 'reposition', narrative: 'The hero repositions.',
+          resolutionPolicy: 'atomic', components: [{ type: 'move', destination: 'medium' }],
+        },
+        npcDirectives: five.npcRefs.map((actorRef) => ({ actorRef, strategy: 'aggressive' })),
+      });
+      expect(fiveResponse.status).toBe(422);
+      expect(fiveResponse.body).toMatchObject({
+        error: { code: 'NPC_LIMIT_EXCEEDED', retryable: false, recoveryAction: 'choose_new_intent' },
+      });
+      for (const actorRef of five.npcRefs) expect(JSON.stringify(fiveResponse.body)).toContain(actorRef);
+      await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef: five.encounterRef } } })).resolves.toBe(1);
+      await expect(prisma.idempotencyRecord.count({ where: { key: `encounter:${fiveKey}` } })).resolves.toBe(0);
+      const fiveReloaded = await encounterService.load({ ...five.scope, encounterRef: five.encounterRef });
+      expect(fiveReloaded.stateVersion).toBe(five.created.stateVersion);
+
+      const resolvedFour = await encounterService.resolveBeat({
+        ...four.scope, encounterRef: four.encounterRef, idempotencyKey: 'beat-limit-four-resolve',
+        expectedStateVersion: four.created.stateVersion,
+        intent: {
+          actorRef: four.heroRef, objective: 'reposition', narrative: 'The hero repositions.',
+          resolutionPolicy: 'atomic', components: [{ type: 'move', destination: 'medium' }],
+        },
+        npcDirectives: four.npcRefs.map((actorRef) => ({ actorRef, strategy: 'aggressive' })),
+      });
+      fourVersion = resolvedFour.stateVersion;
+      expect(resolvedFour.beatSummary?.npcResults).toEqual(
+        [...four.npcRefs].sort().map((actorRef) => ({
+          actorRef, status: 'rejected', reason: 'distance_incompatible',
+        })),
+      );
+      expect(resolvedFour.beatSummary?.npcActions).toEqual([]);
+      expect(resolvedFour.scene?.participants).toHaveLength(5);
+      expect(resolvedFour.scene?.participants.map((participant) => participant.actorRef))
+        .not.toEqual(expect.arrayContaining(five.npcRefs));
+      await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef: four.encounterRef } } })).resolves.toBe(2);
+    } finally {
+      for (const fixture of [four, five]) {
+        const persisted = await prisma.encounter.findFirst({
+          where: { encounterRef: fixture.encounterRef }, select: { lifecycleStatus: true, stateVersion: true },
+        });
+        if (persisted !== null && !new Set<EncounterLifecycleStatus>([
+          EncounterLifecycleStatus.COMPLETED, EncounterLifecycleStatus.FAILED, EncounterLifecycleStatus.CANCELLED,
+        ]).has(persisted.lifecycleStatus)) {
+          await encounterService.cancel({
+            ...fixture.scope, encounterRef: fixture.encounterRef,
+            idempotencyKey: `${fixture.encounterRef}-cleanup`,
+            expectedStateVersion: fixture === four ? Math.max(fourVersion, persisted.stateVersion) : persisted.stateVersion,
+          });
+        }
+      }
+    }
+  });
+
   it('creates, loads, replays, advances, submits content, persists effects and cancels without consequences', async () => {
     const actorBefore = await prisma.actor.findUniqueOrThrow({
       where: { campaignId_code: {
@@ -1386,6 +1744,15 @@ describe('Phase 1L-B transactional encounter adapter', () => {
       },
     });
     expect(submitted.lifecycleStatus).toBe('processing_paused');
+    const legacyAudit = await prisma.encounterOperation.findFirstOrThrow({
+      where: { encounter: { encounterRef: createInput.encounterRef }, idempotencyRecord: { operation: 'encounter.submit_intent' } },
+      select: { operation: true, previousStateVersion: true, nextStateVersion: true, idempotencyRecord: { select: { operation: true } } },
+    });
+    expect(legacyAudit).toMatchObject({
+      operation: EncounterOperationKind.SUBMIT_INTENT,
+      idempotencyRecord: { operation: 'encounter.submit_intent' },
+    });
+    expect(legacyAudit.nextStateVersion).toBeGreaterThan(legacyAudit.previousStateVersion);
 
     const resolved = await encounterService.continue({
       ...seedScope,
@@ -4498,5 +4865,196 @@ describe('authoritative effect persistence', () => {
     expect(replay.status).toBe(200);
     expect(replay.body).toEqual(first.body);
     await expect(prisma.effectResolution.count({ where: { idempotencyKey: body.idempotencyKey } })).resolves.toBe(1);
+  });
+});
+
+describe('resolve_beat mechanical vertical slice', () => {
+  it('resolves attack, spell and consumable beats with authoritative deltas and one checkpoint each', async () => {
+    const beatService = createEncounterService(
+      prisma,
+      (executionRef) => new RecordingEncounterRollProvider({ nextBps: () => 1 }, executionRef),
+    );
+    const source = await prisma.actor.findFirstOrThrow({
+      where: { code: 'ralph', campaign: { code: seedScope.campaignRef, world: { code: seedScope.worldRef } } },
+      include: { campaign: { include: { world: true } }, derivedSnapshot: true },
+    });
+    const target = await prisma.actor.findFirstOrThrow({
+      where: { code: 'lyra', campaignId: source.campaignId },
+      include: { derivedSnapshot: true },
+    });
+    if (source.derivedSnapshot === null || target.derivedSnapshot === null) {
+      throw new Error('Beat mechanical actors require derived snapshots');
+    }
+    const sourceMaxHp = source.derivedSnapshot.maxHp;
+    const sourceMaxMana = source.derivedSnapshot.maxMana;
+    const targetMaxHp = target.derivedSnapshot.maxHp;
+    await prisma.$transaction(async (transaction) => {
+      await transaction.activeEffect.deleteMany({
+        where: {
+          targetActorId: { in: [source.id, target.id] },
+          sourceContentVersion: { contentDefinition: { code: 'seed-mark-spell' } },
+        },
+      });
+      await recomputeActorDerivedSnapshot(transaction, source.id);
+      await recomputeActorDerivedSnapshot(transaction, target.id);
+    });
+    const [sourceHp, sourceMana, targetHp] = await Promise.all([
+      prisma.actorResource.findUniqueOrThrow({ where: { actorId_type: { actorId: source.id, type: 'HP' } } }),
+      prisma.actorResource.findUniqueOrThrow({ where: { actorId_type: { actorId: source.id, type: 'MANA' } } }),
+      prisma.actorResource.findUniqueOrThrow({ where: { actorId_type: { actorId: target.id, type: 'HP' } } }),
+    ]);
+    const woundedHp = Math.max(1, sourceMaxHp - 10);
+    await prisma.$transaction([
+      prisma.actorResource.update({
+        where: { id: sourceHp.id }, data: { current: woundedHp, stateVersion: { increment: 1 } },
+      }),
+      prisma.actorResource.update({
+        where: { id: sourceMana.id }, data: { current: sourceMaxMana, stateVersion: { increment: 1 } },
+      }),
+      prisma.actorResource.update({
+        where: { id: targetHp.id }, data: { current: targetMaxHp, stateVersion: { increment: 1 } },
+      }),
+      prisma.actor.update({ where: { id: source.id }, data: { status: 'ACTIVE' } }),
+      prisma.actor.update({ where: { id: target.id }, data: { status: 'ACTIVE' } }),
+    ]);
+
+    const potion = await prisma.$transaction((transaction) => publishContentVersion(transaction, {
+      worldId: source.campaign.world.id,
+      campaignId: source.campaignId,
+      contentType: ContentType.CONSUMABLE,
+      code: 'beat-healing-potion',
+      name: 'Poção de Cura do Beat',
+      description: 'Restaura HP durante a integração de resolve_beat.',
+      profile: {
+        schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical', contentKind: 'consumable',
+        code: 'beat-healing-potion', name: 'Poção de Cura do Beat',
+        description: 'Restaura HP durante a integração de resolve_beat.',
+        tier: 1, rarity: 'common', activation: { type: 'active' }, cost: { type: 'none' },
+        actionProfile: 'potion', consumable: true,
+        effects: [{ type: 'restore_resource', resource: 'hp', amount: 10, targeting: { type: 'self', rangeBand: 'self' } }],
+      },
+      inventorySpec: { ...inventorySpecBase, unitWeight: 1, stacking: { mode: 'stackable', maxStack: 20 } },
+      presentation: {}, tags: ['integration', 'beat'], status: ContentStatus.ACTIVE, metadata: {},
+    }));
+    const potionVersion = potion.versions[0];
+    if (potionVersion === undefined) throw new Error('Beat potion version is required');
+    const actorBeforeGrant = await prisma.actor.findUniqueOrThrow({ where: { id: source.id } });
+    const granted = await post(`/api/v1/actors/${source.code}/inventory/manage`, {
+      operation: 'grant', expectedInventoryStateVersion: actorBeforeGrant.inventoryStateVersion,
+      idempotencyKey: 'beat-grant-potion-0001',
+      contentRef: {
+        scope: 'campaign', contentType: 'consumable', code: potion.code,
+        versionNumber: potionVersion.versionNumber,
+      },
+      quantity: 1, entryRefs: ['beat-potion-stack'],
+    });
+    expect(granted.status).toBe(200);
+
+    const resolve = async (
+      suffix: string,
+      component: Parameters<typeof encounterService.resolveBeat>[0]['intent']['components'][number],
+      verify: () => Promise<void>,
+    ) => {
+      const encounterRef = `phase-beat-mechanical-${suffix}`;
+      const zone = suffix === 'attack' ? 'engaged' as const : 'near' as const;
+      const created = await beatService.create({
+        ...seedScope,
+        encounterRef,
+        idempotencyKey: `phase-beat-mechanical-${suffix}-create-0001`,
+        partySideRef: 'party',
+        participants: [
+          { bindingKind: 'persisted_actor', actorRef: source.code, sideRef: 'party', zone },
+          { bindingKind: 'persisted_actor', actorRef: target.code, sideRef: 'hostile', zone },
+        ],
+        relations: [
+          { leftActorRef: source.code, rightActorRef: source.code, relation: 'self' },
+          { leftActorRef: target.code, rightActorRef: target.code, relation: 'self' },
+          { leftActorRef: source.code, rightActorRef: target.code, relation: 'hostile' },
+        ],
+      });
+      let cleanupNeeded = true;
+      try {
+        const result = await beatService.resolveBeat({
+          ...seedScope,
+          encounterRef,
+          expectedStateVersion: created.stateVersion,
+          idempotencyKey: `phase-beat-mechanical-${suffix}-resolve-0001`,
+          intent: {
+            actorRef: source.code,
+            objective: suffix,
+            narrative: `Ralph executa ${suffix} como uma decisão significativa.`,
+            resolutionPolicy: 'atomic',
+            components: [component],
+          },
+          npcDirectives: [{ actorRef: target.code, strategy: 'defensive' }],
+        });
+        expect(result).toMatchObject({
+          operation: 'resolve_beat', lifecycleStatus: 'awaiting_intent',
+          beatSummary: {
+            externalTransitions: 1, resolutionPolicy: 'atomic', partialResolutionApplied: false,
+            componentResults: [{ index: 0, type: component.type, status: 'accepted' }],
+            requiresPlayerDecision: true,
+          },
+        });
+        expect(result.scene).toMatchObject({ stateVersion: result.stateVersion });
+        expect(result.scene?.participants).toHaveLength(2);
+        expect(result.nextRequiredAction.type).not.toBe('continue');
+        await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } })).resolves.toBe(2);
+        await verify();
+        await beatService.cancel({
+          ...seedScope,
+          encounterRef,
+          idempotencyKey: `phase-beat-mechanical-${suffix}-cancel-0001`,
+          expectedStateVersion: result.stateVersion,
+        });
+        cleanupNeeded = false;
+      } finally {
+        if (cleanupNeeded) {
+          const persisted = await prisma.encounter.findFirst({
+            where: { encounterRef }, select: { lifecycleStatus: true, stateVersion: true },
+          });
+          const terminalStatuses = new Set<EncounterLifecycleStatus>([
+            EncounterLifecycleStatus.COMPLETED,
+            EncounterLifecycleStatus.FAILED,
+            EncounterLifecycleStatus.CANCELLED,
+          ]);
+          if (persisted !== null && !terminalStatuses.has(persisted.lifecycleStatus)) {
+            await beatService.cancel({
+              ...seedScope,
+              encounterRef,
+              idempotencyKey: `phase-beat-mechanical-${suffix}-cleanup-0001`,
+              expectedStateVersion: persisted.stateVersion,
+            });
+          }
+        }
+      }
+    };
+
+    await resolve('attack', {
+      type: 'attack', inventoryEntryRef: 'starter-dagger-1', targetRefs: [target.code],
+    }, async () => {
+      const targetAfterAttack = await prisma.actorResource.findUniqueOrThrow({ where: { id: targetHp.id } });
+      expect(targetAfterAttack.current).toBeLessThan(targetMaxHp);
+    });
+
+    await resolve('cast', {
+      type: 'cast',
+      contentRef: { scope: 'campaign', contentType: 'spell', code: 'seed-mark-spell', versionNumber: 1 },
+      targetRefs: [source.code],
+    }, async () => {
+      await expect(prisma.actorResource.findUniqueOrThrow({ where: { id: sourceMana.id } }))
+        .resolves.toMatchObject({ current: sourceMaxMana - 3 });
+      await expect(prisma.activeEffect.count({
+        where: { targetActorId: source.id, sourceContentVersion: { contentDefinition: { code: 'seed-mark-spell' } } },
+      })).resolves.toBe(1);
+    });
+
+    await resolve('use-item', { type: 'use_item', inventoryEntryRef: 'beat-potion-stack' }, async () => {
+      await expect(prisma.inventoryEntry.findUnique({
+        where: { actorId_entryRef: { actorId: source.id, entryRef: 'beat-potion-stack' } },
+      })).resolves.toBeNull();
+      await expect(prisma.actorResource.findUniqueOrThrow({ where: { id: sourceHp.id } }))
+        .resolves.toMatchObject({ current: sourceMaxHp });
+    });
   });
 });

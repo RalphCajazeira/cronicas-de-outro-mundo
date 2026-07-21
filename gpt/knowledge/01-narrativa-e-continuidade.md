@@ -16,7 +16,9 @@ Se a consulta não encontrar registros ou `loadGame` não encontrar o escopo, in
 
 ## Continuidade de encontros
 
-`loadGame` informa explicitamente se a Campaign possui um encontro ativo e fornece sua referência pública, lifecycle e versão. Esse resumo identifica o encontro, mas o estado completo só se torna autoritativo depois de `manageEncounter load` confirmar participantes e próximo passo. Enquanto houver encontro ativo, não inicie outro e não transforme memória narrativa em ação, custo, dano ou encerramento persistido.
+`loadGame` informa explicitamente se a Campaign possui um encontro ativo e fornece sua referência pública, lifecycle e versão. Esse resumo identifica o encontro, mas o estado completo só se torna autoritativo depois de `manageEncounter load` confirmar o pacote `scene`. Reutilize esse pacote enquanto a versão permanecer igual; recarregue apenas no início, em conflito, recuperação, perda de contexto ou pedido explícito.
+
+Depois da carga, cada decisão significativa do jogador deve produzir uma única intenção `resolve_beat`. O backend processa a ação composta limitada, NPCs, reações, efeitos e checkpoint; o GPT transforma somente fatos e deltas confirmados em narrativa. Se `requiresPlayerDecision` for verdadeiro, encerre a cena aguardando a próxima escolha livre. Não exponha ou execute manualmente as transições internas antigas.
 
 Ausência explícita significa que não há encontro ativo. Falha de integridade ou de carga interrompe o fluxo mecânico e exige a recuperação indicada pelo backend; cancelamento só pode atingir o encontro exato já carregado, nunca o primeiro registro encontrado ou uma referência inferida.
 

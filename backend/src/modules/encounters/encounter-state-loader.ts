@@ -51,6 +51,9 @@ export interface PersistedEncounterAuthority {
     readonly id: string;
     readonly code: string;
     readonly campaignId: string;
+    readonly role: string | null;
+    readonly personality: Prisma.JsonValue;
+    readonly metadata: Prisma.JsonValue;
     readonly level: number;
     readonly status: import('../../generated/prisma/client.js').ActorStatus;
     readonly mechanicsStateVersion: number;
@@ -168,8 +171,11 @@ export function assertEncounterOperationChainRows(
   for (const [index, operation] of operations.entries()) {
     const previous = operations[index - 1];
     const expectedNamespace = `encounter.${operation.operation.toLowerCase()}`;
+    const acceptedNamespaces = operation.operation === EncounterOperationKind.SUBMIT_INTENT
+      ? new Set([expectedNamespace, 'encounter.resolve_beat'])
+      : new Set([expectedNamespace]);
     const validIdentity = operation.inputHash === operation.idempotencyRecord.requestHash
-      && operation.idempotencyRecord.operation === expectedNamespace;
+      && acceptedNamespaces.has(operation.idempotencyRecord.operation);
     const validSequence = index === 0
       ? operation.operation === EncounterOperationKind.CREATE
         && operation.previousStateVersion === 0 && operation.nextStateVersion === 1
@@ -194,7 +200,8 @@ export async function loadPersistedEncounterAuthorities(
   const actors = await transaction.actor.findMany({
     where: { id: { in: [...actorIds] } },
     select: {
-      id: true, code: true, campaignId: true, level: true, status: true, mechanicsStateVersion: true,
+      id: true, code: true, campaignId: true, role: true, personality: true, metadata: true,
+      level: true, status: true, mechanicsStateVersion: true,
       inventoryStateVersion: true, effectsStateVersion: true,
     },
     orderBy: { id: 'asc' },

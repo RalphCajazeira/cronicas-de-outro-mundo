@@ -335,6 +335,9 @@ describe('official OpenAPI contract', () => {
     expect(gptInstructions).toContain('crie outro encontro enquanto `activeEncounter` existir');
     expect(continuityKnowledge).toContain('o estado completo só se torna autoritativo depois de `manageEncounter load`');
     expect(continuityKnowledge).toContain('cancelamento só pode atingir o encontro exato já carregado');
+    expect(gptInstructions).toContain('uma única operação `resolve_beat`');
+    expect(gptInstructions).toContain('Não encadeie manualmente `submit_intent`, `resolve_reaction`, `continue` ou `confirm_completion`');
+    expect(continuityKnowledge).toContain('uma única intenção `resolve_beat`');
   });
 
   it('starts creation only explicitly and handles empty discovery or missing identity without a questionnaire', () => {
@@ -377,7 +380,7 @@ describe('official OpenAPI contract', () => {
     expect(start.properties?.initialPremise?.maxLength).toBe(1000);
   });
 
-  it('publishes one closed manageEncounter Action with seven Zod-valid examples', () => {
+  it('publishes one closed manageEncounter Action with resolve_beat and Zod-valid examples', () => {
     const operation = operations().find((item) => item.operation.operationId === 'manageEncounter')?.operation;
     expect(operations().filter((item) => item.operation.operationId === 'manageEncounter')).toHaveLength(1);
     expect(operation?.tags).toEqual(['Encounters']);
@@ -388,13 +391,17 @@ describe('official OpenAPI contract', () => {
     const schema = resolveSchema(operation?.requestBody?.content?.['application/json']?.schema);
     expect(schema.additionalProperties).toBe(false);
     expect(schema.properties?.operation?.enum).toEqual([
-      'create', 'load', 'submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel',
+      'create', 'load', 'resolve_beat', 'submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel',
     ]);
-    expect(schema.allOf).toHaveLength(5);
-    expect(JSON.stringify(schema)).not.toMatch(/"oneOf"|"anyOf"/);
+    expect(schema.allOf).toHaveLength(6);
+    expect(schema.properties?.intent?.oneOf).toHaveLength(2);
     const examples = operation?.requestBody?.content?.['application/json']?.examples ?? {};
     expect(Object.keys(examples).sort()).toEqual([
-      'cancel', 'confirm_completion', 'continue', 'create', 'load', 'resolve_reaction', 'submit_intent',
+      'cancel', 'confirm_completion', 'continue', 'create', 'load',
+      'resolve_beat_after_component_limit', 'resolve_beat_after_component_rejection',
+      'resolve_beat_attack', 'resolve_beat_cast', 'resolve_beat_idempotent_replay',
+      'resolve_beat_impossible', 'resolve_beat_move_protect_prepare', 'resolve_beat_npc_limit',
+      'resolve_beat_use_item', 'resolve_beat_version_conflict', 'resolve_reaction', 'submit_intent',
     ]);
     for (const example of Object.values(examples)) expect(manageEncounterSchema.safeParse(example.value).success).toBe(true);
     const intent = contract.components.schemas.EncounterIntentInput;
@@ -412,6 +419,13 @@ describe('official OpenAPI contract', () => {
     expect(contract.components.schemas.ManageEncounterInput?.properties?.participants?.maxItems).toBe(64);
     expect(contract.components.schemas.ManageEncounterInput?.properties?.relationOverrides?.maxItems).toBe(128);
     expect(contract.components.schemas.EncounterIntentInput?.properties?.targetRefs?.maxItems).toBe(16);
+    expect(contract.components.schemas.EncounterBeatIntentInput?.properties?.components?.maxItems).toBe(3);
+    expect(contract.components.schemas.EncounterBeatIntentInput?.required).toContain('resolutionPolicy');
+    expect(contract.components.schemas.EncounterBeatIntentInput?.properties?.resolutionPolicy?.enum)
+      .toEqual(['atomic', 'allow_partial']);
+    expect(contract.components.schemas.EncounterBeatSummary?.properties?.npcActions?.maxItems).toBe(4);
+    expect(contract.components.schemas.EncounterBeatSummary?.properties?.npcResults?.maxItems).toBe(4);
+    expect(contract.components.schemas.ManageEncounterInput?.properties?.npcDirectives?.maxItems).toBe(16);
     expect(contract.components.schemas.EncounterNextRequiredAction?.properties?.actors?.minItems).toBe(1);
     expect(contract.components.schemas.EncounterResult?.properties?.participants?.minItems).toBe(1);
     expect(contract.components.schemas.EncounterTransitionSummary?.properties?.events?.minItems).toBe(1);
@@ -423,6 +437,10 @@ describe('official OpenAPI contract', () => {
     expect(contract.components.schemas.EncounterConsequencesSummary?.properties?.removedEncounterEffects?.maxItems).toBe(64);
     expect(contract.components.schemas.EncounterResult?.properties?.consequencesSummary)
       .toEqual({ '$ref': '#/components/schemas/EncounterConsequencesSummary' });
+    expect(contract.components.schemas.EncounterResult?.properties?.scene)
+      .toEqual({ '$ref': '#/components/schemas/EncounterScenePackage' });
+    expect(contract.components.schemas.EncounterResult?.properties?.beatSummary)
+      .toEqual({ '$ref': '#/components/schemas/EncounterBeatSummary' });
     expect(contract.components.schemas.EncounterActorStatusChange?.properties).not.toHaveProperty('id');
     expect(contract.components.schemas.EncounterActorStatusChange?.properties).toMatchObject({
       statusBefore: { const: 'active' }, statusAfter: { const: 'defeated' },

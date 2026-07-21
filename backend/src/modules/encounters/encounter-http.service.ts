@@ -5,7 +5,8 @@ import { mapEncounterHttpError } from './encounter-http.errors.js';
 import { toEncounterPublicDto, type EncounterPublicDto } from './encounter-http.dto.js';
 import type {
   CancelEncounterInput, ConfirmEncounterCompletionInput, ContinueEncounterInput, CreateEncounterInput,
-  EncounterDto, LoadEncounterInput, ResolveEncounterReactionInput, SubmitEncounterIntentInput,
+  EncounterBeatComponent, EncounterNpcDirective,
+  EncounterDto, LoadEncounterInput, ResolveEncounterBeatInput, ResolveEncounterReactionInput, SubmitEncounterIntentInput,
 } from './encounter.types.js';
 import type {
   CreateEncounterHttpInput,
@@ -21,6 +22,7 @@ export interface EncounterApplicationService {
   continue(input: ContinueEncounterInput): Promise<EncounterDto>;
   confirmCompletion(input: ConfirmEncounterCompletionInput): Promise<EncounterDto>;
   cancel(input: CancelEncounterInput): Promise<EncounterDto>;
+  resolveBeat(input: ResolveEncounterBeatInput): Promise<EncounterDto>;
 }
 
 export interface EncounterHttpService {
@@ -116,6 +118,23 @@ export function createEncounterHttpService(internal: EncounterApplicationService
           idempotencyKey: input.idempotencyKey,
           expectedStateVersion: input.expectedStateVersion,
         };
+        if (input.operation === 'resolve_beat') {
+          return toEncounterPublicDto(await internal.resolveBeat({
+            ...reference,
+            intent: {
+              actorRef: input.intent.actorRef,
+              objective: input.intent.objective,
+              narrative: input.intent.narrative,
+              resolutionPolicy: input.intent.resolutionPolicy,
+              components: input.intent.components.map((component) => Object.fromEntries(
+                Object.entries(component).filter(([, value]) => value !== undefined),
+              ) as unknown as EncounterBeatComponent),
+            },
+            npcDirectives: input.npcDirectives?.map((directive) => Object.fromEntries(
+              Object.entries(directive).filter(([, value]) => value !== undefined),
+            ) as unknown as EncounterNpcDirective) ?? [],
+          }));
+        }
         if (input.operation === 'submit_intent') {
           return toEncounterPublicDto(await internal.submitIntent({
             ...reference,
