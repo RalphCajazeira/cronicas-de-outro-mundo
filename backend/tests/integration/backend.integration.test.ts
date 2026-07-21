@@ -2644,6 +2644,119 @@ describe('Phase 1L-C encounter HTTP integration', () => {
     expect(campaignAfterCancel.body).toMatchObject({ activeEncounter: null });
   });
 
+  it('continues four initial actor_ready events atomically without loss or duplication', async () => {
+    const campaign = await prisma.campaign.findFirstOrThrow({
+      where: {
+        code: seedScope.campaignRef,
+        world: { code: seedScope.worldRef, player: { slug: seedScope.playerRef } },
+      },
+    });
+    const ally = await createMechanicalActor({
+      campaignId: campaign.id,
+      code: 'phase-1l-c-ready-ally',
+      name: 'Ready Ally',
+      actorType: ActorType.NPC,
+    });
+    const hunter = await createMechanicalActor({
+      campaignId: campaign.id,
+      code: 'phase-1l-c-ready-hunter',
+      name: 'Ready Hunter',
+      actorType: ActorType.CREATURE,
+    });
+    const encounterRef = 'phase-1l-c-four-ready';
+    const created = await post('/api/v1/encounters/manage', {
+      operation: 'create', encounterRef, idempotencyKey: 'phase-1l-c-four-ready-create',
+      partySideRef: 'party',
+      participants: [
+        { actorRef: 'ralph', sideRef: 'party', zone: 'near' },
+        { actorRef: ally.code, sideRef: 'party', zone: 'near' },
+        { actorRef: 'lyra', sideRef: 'hostile', zone: 'medium' },
+        { actorRef: hunter.code, sideRef: 'hostile', zone: 'medium' },
+      ],
+    });
+    expect(created.status).toBe(200);
+    expect(created.body).toMatchObject({
+      lifecycleStatus: 'processing_paused', stateVersion: 1, nextRequiredAction: { type: 'continue' },
+    });
+    const persistedBefore = await prisma.encounter.findUniqueOrThrow({
+      where: { campaignId_encounterRef: { campaignId: campaign.id, encounterRef } },
+    });
+    const stateBefore = parseCoreV1EncounterSnapshot(persistedBefore.stateSnapshot);
+    expect(stateBefore.scheduledEvents).toHaveLength(4);
+    expect(stateBefore.scheduledEvents.map((event) => event.type)).toEqual([
+      'actor_ready', 'actor_ready', 'actor_ready', 'actor_ready',
+    ]);
+    const expectedTick = stateBefore.scheduledEvents.at(-1)?.timelineEvent.tick;
+    if (expectedTick === undefined) throw new Error('Four-ready fixture requires a final scheduled tick');
+    const continueRequest = {
+      operation: 'continue', encounterRef, idempotencyKey: 'phase-1l-c-four-ready-continue',
+      expectedStateVersion: 1,
+    } as const;
+
+    const continued = await post('/api/v1/encounters/manage', continueRequest);
+
+    expect(continued.status).toBe(200);
+    expect(continued.body).toMatchObject({
+      result: 'new_intent_required', lifecycleStatus: 'awaiting_intent', stateVersion: 5,
+      currentTick: expectedTick.toString(),
+      nextRequiredAction: { type: 'submit_intent' },
+      transitionSummary: { processedEventCount: 4 },
+    });
+    const continuedBody = bodyRecord(continued);
+    const participants = continuedBody.participants;
+    if (!Array.isArray(participants)) throw new Error('Four-ready response must contain participants');
+    expect(participants.map((entry) => bodyRecord({ body: entry }).actorRef).sort()).toEqual([
+      ally.code, hunter.code, 'lyra', 'ralph',
+    ].sort());
+    const transition = bodyRecord({ body: continuedBody.transitionSummary });
+    const transitionEvents = transition.events;
+    if (!Array.isArray(transitionEvents)) throw new Error('Four-ready response must contain transition events');
+    expect(transitionEvents).toHaveLength(4);
+    expect(transitionEvents.map((event) => bodyRecord({ body: event }).category))
+      .toEqual(['participant_state_changed', 'participant_state_changed', 'participant_state_changed', 'participant_state_changed']);
+    expect(JSON.stringify(continued.body)).not.toMatch(/stateHash|stateSnapshot|adapterState|eventRef|actionRef|[0-9a-f]{8}-[0-9a-f]{4}/i);
+
+    const persistedAfter = await prisma.encounter.findUniqueOrThrow({
+      where: { campaignId_encounterRef: { campaignId: campaign.id, encounterRef } },
+      include: { operations: { orderBy: { createdAt: 'asc' } } },
+    });
+    expect(persistedAfter).toMatchObject({
+      lifecycleStatus: EncounterLifecycleStatus.AWAITING_INTENT,
+      stateVersion: 5,
+      currentTick: expectedTick,
+    });
+    expect(persistedAfter.operations.map((operation) => operation.operation)).toEqual([
+      EncounterOperationKind.CREATE, EncounterOperationKind.CONTINUE,
+    ]);
+    expect(parseCoreV1EncounterSnapshot(persistedAfter.stateSnapshot).scheduledEvents).toEqual([]);
+    await expect(prisma.campaign.findUniqueOrThrow({ where: { id: campaign.id } }))
+      .resolves.toMatchObject({ engineTick: expectedTick });
+
+    const replay = await post('/api/v1/encounters/manage', continueRequest);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(continued.body);
+    await expect(prisma.encounterOperation.count({ where: { encounterId: persistedAfter.id } })).resolves.toBe(2);
+
+    const stale = await post('/api/v1/encounters/manage', {
+      operation: 'continue', encounterRef, idempotencyKey: 'phase-1l-c-four-ready-stale', expectedStateVersion: 1,
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body).toMatchObject({ error: { code: 'STATE_VERSION_CONFLICT', recoveryAction: 'load_encounter' } });
+    const incompatible = await post('/api/v1/encounters/manage', {
+      operation: 'continue', encounterRef, idempotencyKey: 'phase-1l-c-four-ready-incompatible', expectedStateVersion: 5,
+    });
+    expect(incompatible.status).toBe(409);
+    expect(incompatible.body).toMatchObject({ error: { code: 'ENCOUNTER_LIFECYCLE_CONFLICT' } });
+    await expect(prisma.idempotencyRecord.count({ where: {
+      key: { in: ['encounter:phase-1l-c-four-ready-stale', 'encounter:phase-1l-c-four-ready-incompatible'] },
+    } })).resolves.toBe(0);
+
+    const cancelled = await post('/api/v1/encounters/manage', {
+      operation: 'cancel', encounterRef, idempotencyKey: 'phase-1l-c-four-ready-cancel', expectedStateVersion: 5,
+    });
+    expect(cancelled.status).toBe(200);
+  });
+
   it('loads a coherent legacy terminal Encounter without inventing a consequence summary', async () => {
     const encounterRef = 'phase-1m-a-legacy-terminal-http';
     await encounterService.create({

@@ -31,6 +31,7 @@ const resourceType = {
 } as const;
 
 interface ActorMutationFlags {
+  resources: boolean;
   inventory: boolean;
   effects: boolean;
 }
@@ -60,7 +61,8 @@ async function persistResources(
   authority: PersistedEncounterAuthority,
   before: CoreV1EncounterState['participants'][number],
   after: CoreV1EncounterState['participants'][number],
-): Promise<void> {
+): Promise<boolean> {
+  let persisted = false;
   for (const key of Object.keys(resourceType) as Array<keyof typeof resourceType>) {
     const beforeValue = before.resources[key].current;
     const afterValue = after.resources[key].current;
@@ -76,12 +78,14 @@ async function persistResources(
       data: { current: afterValue, stateVersion: { increment: 1 } },
     });
     if (changed.count !== 1) throw new EncounterError('ENCOUNTER_RESOURCE_DRIFT');
+    persisted = true;
     if (key === 'hp') {
       await reactivateDefeatedActorAfterHpRestoration(
         transaction, authority.actor.id, beforeValue, afterValue,
       );
     }
   }
+  return persisted;
 }
 
 async function consumeInventoryEntry(
@@ -280,11 +284,12 @@ export async function applyEncounterMutations(
   assertEncounterMutationPreflight(loaded);
   const flags = new Map<string, ActorMutationFlags>();
   for (const [actorRef, authority] of loaded.authorities) {
-    flags.set(actorRef, { inventory: false, effects: false });
+    const change = { resources: false, inventory: false, effects: false };
+    flags.set(actorRef, change);
     const before = loaded.state.participants.find((participant) => participant.actorRef === actorRef);
     const after = afterInput.participants.find((participant) => participant.actorRef === actorRef);
     if (before === undefined || after === undefined) throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
-    await persistResources(transaction, authority, before, after);
+    change.resources = await persistResources(transaction, authority, before, after);
     if (canonicalEncounterMechanicalJson(before.activeEffects) !== canonicalEncounterMechanicalJson(after.activeEffects)) {
       const origins = await effectOrigins(transaction, loaded, authority.actor.id, after.activeEffects);
       const changed = await persistActorActiveEffects(transaction, authority.actor.id, after.activeEffects, origins);
@@ -340,19 +345,26 @@ export async function applyEncounterMutations(
     });
     if (campaign.count !== 1) throw new EncounterError('ENCOUNTER_CAMPAIGN_TICK_DRIFT');
   }
-  const authorities = await loadPersistedEncounterAuthorities(
-    transaction,
-    [...loaded.authorities.values()].map((authority) => authority.actor.id),
-    afterInput.currentTick,
-  );
-  for (const [actorRef, authorityAfter] of authorities) {
-    const authorityBefore = loaded.authorities.get(actorRef);
-    const after = afterInput.participants.find((participant) => participant.actorRef === actorRef);
-    const change = flags.get(actorRef);
-    if (authorityBefore === undefined || after === undefined || change === undefined) {
-      throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
+  const authorityReloadRequired = [...flags.values()].some((change) => (
+    change.resources || change.inventory || change.effects
+  ));
+  const authorities = authorityReloadRequired
+    ? await loadPersistedEncounterAuthorities(
+      transaction,
+      [...loaded.authorities.values()].map((authority) => authority.actor.id),
+      afterInput.currentTick,
+    )
+    : loaded.authorities;
+  if (authorityReloadRequired) {
+    for (const [actorRef, authorityAfter] of authorities) {
+      const authorityBefore = loaded.authorities.get(actorRef);
+      const after = afterInput.participants.find((participant) => participant.actorRef === actorRef);
+      const change = flags.get(actorRef);
+      if (authorityBefore === undefined || after === undefined || change === undefined) {
+        throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
+      }
+      assertPostWriteAuthority(after, authorityBefore, authorityAfter, change);
     }
-    assertPostWriteAuthority(after, authorityBefore, authorityAfter, change);
   }
   const state = {
     ...afterInput,
