@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   CORE_V1_PASSIVE_MODIFIER_TARGETS,
@@ -35,6 +36,8 @@ interface Contract {
 }
 
 const contract = getOfficialContract() as unknown as Contract;
+const gptInstructions = readFileSync(new URL('../../../../gpt/instructions.md', import.meta.url), 'utf8');
+const continuityKnowledge = readFileSync(new URL('../../../../gpt/knowledge/01-narrativa-e-continuidade.md', import.meta.url), 'utf8');
 const methods = new Set(['get', 'post', 'put', 'patch', 'delete']);
 
 function operations() {
@@ -269,6 +272,12 @@ describe('official OpenAPI contract', () => {
   it('documents discovery and requires explicit scope on every public game-state read', () => {
     const byId = new Map(operations().map(({ operation }) => [operation.operationId, operation]));
     expect([...byId.keys()]).toEqual(expect.arrayContaining(['listPlayerWorlds', 'listWorldCampaigns']));
+    expect(byId.get('listPlayerWorlds')?.description).toContain('Consulta somente leitura');
+    expect(byId.get('listPlayerWorlds')?.description).toContain('lista vazia não autoriza startGame');
+    expect(byId.get('listWorldCampaigns')?.description).toContain('Consulta somente leitura');
+    expect(byId.get('listWorldCampaigns')?.description).toContain('lista vazia não autoriza startGame');
+    expect(byId.get('loadGame')?.description).toContain('NOT_FOUND não autoriza criação automática');
+    expect(byId.get('startGame')?.description).toContain('Somente após pedido explícito e confirmação');
     const expectedQueryParameters: Record<string, string[]> = {
       listCampaignActors: ['playerRef', 'worldRef'],
       getActor: ['playerRef', 'worldRef', 'campaignRef'],
@@ -290,6 +299,25 @@ describe('official OpenAPI contract', () => {
       expect(schema.required, operationId).toEqual(expect.arrayContaining(['playerRef', 'worldRef', 'campaignRef']));
     }
     expect(JSON.stringify(contract)).not.toContain('"default"');
+  });
+
+  it('routes existing-game requests before creation in Instructions and Knowledge', () => {
+    expect(gptInstructions).toContain('Listar, mostrar, consultar, localizar, carregar ou continuar algo existente usa só Actions read-only');
+    expect(gptInstructions).toContain('nunca `startGame`, criação rápida ou escrita');
+    expect(gptInstructions).toContain('Para mostrar mundos/campanhas, use `listPlayerWorlds` e depois `listWorldCampaigns`');
+    expect(gptInstructions).toContain('Para carregar, continuar ou mostrar o personagem atual');
+    expect(continuityKnowledge).toContain('“Mostre meus mundos e campanhas” lista Worlds e suas Campaigns');
+    expect(continuityKnowledge).toContain('“Quero continuar jogando” descobre o escopo e usa `loadGame`');
+  });
+
+  it('starts creation only explicitly and handles empty discovery or missing identity without a questionnaire', () => {
+    expect(gptInstructions).toContain('Criação Rápida, Guiada ou Livre exige pedido explícito de novo jogo/aventura');
+    expect(gptInstructions).toContain('Consulta vazia ou `NOT_FOUND`: informe que nada foi encontrado, ofereça criar e aguarde escolha explícita');
+    expect(gptInstructions).toContain('Se faltar numa consulta, pergunte só “Qual nome você usou para salvar suas aventuras?”');
+    expect(gptInstructions).not.toContain('- Primeiro pergunte “Como você gostaria de ser chamado nesta aventura?”');
+    expect(continuityKnowledge).toContain('“Quero começar uma nova aventura” pode iniciar a criação');
+    expect(continuityKnowledge).toContain('ofereça criar uma aventura e aguarde aceitação explícita');
+    expect(continuityKnowledge).not.toContain('trate o resultado como início de novo jogo');
   });
 
   it('uses closed request objects and lowercase public enums', () => {
