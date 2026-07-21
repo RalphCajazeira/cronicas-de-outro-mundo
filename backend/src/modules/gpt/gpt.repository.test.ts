@@ -1,5 +1,6 @@
-import { Prisma } from '../../generated/prisma/client.js';
+import { EncounterLifecycleStatus, Prisma } from '../../generated/prisma/client.js';
 import { describe, expect, it } from 'vitest';
+import { ACTIVE_ENCOUNTER_LIFECYCLES, activeEncounterSummary } from '../encounters/encounter.types.js';
 import { inspectIdempotencyRecord, isIdempotencyKeyConflict } from './gpt.prisma-errors.js';
 import { IDEMPOTENT_TRANSACTION_OPTIONS } from './gpt.start-game.js';
 
@@ -70,5 +71,49 @@ describe('GPT repository unique conflicts', () => {
     expect(inspectIdempotencyRecord({ ...complete, response: [] }, 'game.start', 'same-hash')).toEqual({ kind: 'conflict', reason: 'responsePending' });
     expect(inspectIdempotencyRecord({ ...complete, response: [null] }, 'game.start', 'same-hash')).toEqual({ kind: 'conflict', reason: 'responsePending' });
     expect(inspectIdempotencyRecord(complete, 'game.start', 'same-hash')).toEqual({ kind: 'replay', response: complete.response });
+  });
+});
+
+describe('active encounter recovery summary', () => {
+  it('returns an explicit absence when the campaign has no active encounter', () => {
+    expect(activeEncounterSummary([])).toBeNull();
+  });
+
+  it('returns only the public reference, lifecycle and optimistic version for one active encounter', () => {
+    expect(activeEncounterSummary([{
+      encounterRef: 'bridge-ambush',
+      lifecycleStatus: EncounterLifecycleStatus.AWAITING_INTENT,
+      stateVersion: 4,
+    }])).toEqual({
+      encounterRef: 'bridge-ambush',
+      lifecycleStatus: 'awaiting_intent',
+      stateVersion: 4,
+      canContinue: true,
+      canCancel: true,
+      recoveryAction: 'load_encounter',
+    });
+  });
+
+  it('keeps a paused encounter recoverable and excludes terminal lifecycles from the active query set', () => {
+    expect(activeEncounterSummary([{
+      encounterRef: 'paused-ambush',
+      lifecycleStatus: EncounterLifecycleStatus.PROCESSING_PAUSED,
+      stateVersion: 2,
+    }])).toMatchObject({ lifecycleStatus: 'processing_paused', canContinue: true, canCancel: true });
+    expect(ACTIVE_ENCOUNTER_LIFECYCLES).toContain(EncounterLifecycleStatus.PROCESSING_PAUSED);
+    expect(ACTIVE_ENCOUNTER_LIFECYCLES).not.toContain(EncounterLifecycleStatus.CANCELLED as never);
+    expect(ACTIVE_ENCOUNTER_LIFECYCLES).not.toContain(EncounterLifecycleStatus.COMPLETED as never);
+  });
+
+  it('fails closed instead of selecting silently when integrity exposes multiple active encounters', () => {
+    expect(() => activeEncounterSummary([
+      { encounterRef: 'ambush-a', lifecycleStatus: EncounterLifecycleStatus.AWAITING_INTENT, stateVersion: 1 },
+      { encounterRef: 'ambush-b', lifecycleStatus: EncounterLifecycleStatus.PROCESSING_PAUSED, stateVersion: 3 },
+    ])).toThrow(expect.objectContaining({
+      statusCode: 500,
+      code: 'ACTIVE_ENCOUNTER_INTEGRITY_ERROR',
+      retryable: false,
+      recoveryAction: 'stop_encounter_flow',
+    }));
   });
 });

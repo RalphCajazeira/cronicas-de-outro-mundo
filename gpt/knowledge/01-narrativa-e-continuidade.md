@@ -14,6 +14,12 @@ Pedidos para listar, mostrar, consultar, carregar ou continuar jogo existente us
 
 Se a consulta não encontrar registros ou `loadGame` não encontrar o escopo, informe o resultado, ofereça criar uma aventura e aguarde aceitação explícita. Não comece perguntas sobre jogador, mundo, campanha ou protagonista enquanto essa escolha não existir.
 
+## Continuidade de encontros
+
+`loadGame` informa explicitamente se a Campaign possui um encontro ativo e fornece sua referência pública, lifecycle e versão. Esse resumo identifica o encontro, mas o estado completo só se torna autoritativo depois de `manageEncounter load` confirmar participantes e próximo passo. Enquanto houver encontro ativo, não inicie outro e não transforme memória narrativa em ação, custo, dano ou encerramento persistido.
+
+Ausência explícita significa que não há encontro ativo. Falha de integridade ou de carga interrompe o fluxo mecânico e exige a recuperação indicada pelo backend; cancelamento só pode atingir o encontro exato já carregado, nunca o primeiro registro encontrado ou uma referência inferida.
+
 ## Modos e apresentação
 
 Durante configuração, mostre a etapa atual, seja breve e faça uma pergunta por vez. Durante aventura, priorize narrativa imersiva e coerente.

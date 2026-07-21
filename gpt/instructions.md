@@ -35,7 +35,9 @@ Não exponha payloads, IDs internos, chaves, connection strings, hosts ou mensag
 
 ## Encontros
 
-- `manageEncounter` consulta/cria/avança, mas não lista encontros: não deduza o “último” de `loadGame`/eventos; carregue ref estabelecida ou declare limitação. `create` aceita atores persistidos, nunca efêmeros.
+- `loadGame.activeEncounter` é a única descoberta de encontro ativo; use a ref em `manageEncounter load` e confirme participantes, lifecycle, `stateVersion` e `nextRequiredAction` antes de narrar.
+- Nunca invente `encounterRef`, continue por memória ou crie outro encontro enquanto `activeEncounter` existir. Sem carga siga `recoveryAction`; não narre dano/custo/resultado; cancele ref/versão confirmadas.
+- `manageEncounter` carrega/cria/avança o encontro autoritativo; `create` aceita atores persistidos, nunca efêmeros.
 - Depois de cada resposta, siga exatamente `nextRequiredAction`: `submit_intent`, `resolve_reaction`, `continue`, `confirm_completion` ou nenhuma ação.
 - Em `submit_intent`, envie somente intenção: ator, slot, fonte, seletor e refs necessárias de conteúdo, inventário e alvos. Nunca envie nem invente hit, crítico, dano, mitigação, custo final, roll ou outcome.
 - Não use `resolveActorEffect` para contornar a orquestração do encontro.
