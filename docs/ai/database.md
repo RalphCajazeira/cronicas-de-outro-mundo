@@ -6,6 +6,18 @@ Prisma Migrate é a única autoridade do schema Node/PostgreSQL. O runtime usa `
 
 Integração automatizada pode recriar exclusivamente `localhost:5432/game_gpt_test`. O helper recusa produção, hosts remotos, bancos administrativos/desenvolvimento e marcadores de Supabase/Render. Nenhum teste local deve acessar staging ou Supabase remoto.
 
+## Staging remoto atual
+
+O banco ativo de staging é o projeto Supabase Free `cronicas-de-outro-mundo-staging-virginia`, ref `udqwzvhlwwfnngiipacj`, em `us-east-1`. O Render de staging permanece em Virginia e usa a role dedicada `cronicas_staging_app` por Supavisor Session, porta 5432, `sslmode=verify-full` e pool máximo 5. Há uma única instância de `PrismaClient`; nenhum request faz connect/disconnect. O runtime não recebe uma variável separada de conexão direta; ela fica somente no arquivo local protegido para migrations e manutenção.
+
+As dez migrations versionadas foram aplicadas desde zero com `prisma migrate deploy`; não houve `db push`, seed ou migration nova. O schema possui 29 tabelas públicas, sendo 28 funcionais e `_prisma_migrations`. O histórico contém as dez migrations concluídas e uma linha de auditoria rolled back da primeira tentativa da migration inicial, que falhou antes do DDL funcional por falta temporária de `CREATE` no database; a tentativa foi resolvida oficialmente, o privilégio temporário foi revogado e não há migration pendente ou inválida.
+
+As tabelas funcionais têm RLS conforme as migrations e não concedem DML a `anon` ou `authenticated`; esses papéis também não executam funções privadas. `_prisma_migrations` não recebeu RLS improvisado e não possui DML público. A role da aplicação é proprietária dos objetos funcionais, não é superuser e não possui `CREATEDB`, `CREATEROLE`, replication ou bypass de RLS.
+
+O projeto anterior `cronicas-de-outro-mundo-staging`, ref `cqxabsnuvngtkpbrgson`, em `sa-east-1`, está vazio, pausado e fora do Render. Ele não foi deletado e permanece recuperável como rollback temporário até a revisão final.
+
+Depois dos benchmarks, do smoke direto e do smoke pelo GPT, as 28 tabelas funcionais do novo staging foram limpas e verificadas com zero registros. As dez migrations concluídas e a linha de auditoria rolled back foram preservadas; nenhum seed foi executado.
+
 ## Fase 1C — ruleset publicado
 
 Models:

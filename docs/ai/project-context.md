@@ -31,15 +31,19 @@ Projeto de RPG narrativo reiniciado como nova versão, com o sistema anterior ar
 - O núcleo puro `core-v1-encounter-v1` compõe participantes, relações, zonas, iniciativa, action slots, targeting, timeline, reações/cooldowns, casting/channel, movimento, combos, action plans e resolução independente de efeitos por alvo. A Fase 1L-B acrescenta o adaptador interno transacional/idempotente, snapshots validados, drift, rolls lazy e mutações atômicas. A Fase 1L-C expõe somente a facade segura `POST /api/v1/encounters/manage`, uma GPT Action multiplexada, com escopo explícito, idempotência, versão otimista, DTO reduzido e auditoria allowlisted.
 - A Fase 1M-A encerra ou cancela encontros em uma única transação com outcome derivado pelo backend, status `DEFEATED`, limpeza exclusivamente dos efeitos `ENCOUNTER` originados no encontro, recomposição, um evento terminal e um ledger append-only. XP, level-up, ouro e loot continuam adiados.
 - `loadGame` valida o único encontro não terminal e projeta se ele pode continuar/cancelar ou se há drift de autoridade recuperável. Múltiplos ativos e corrupção estrutural falham fechados. Escritas externas em ator, conteúdo vinculado, inventário ou efeitos de participantes ativos são bloqueadas sob lock de Campaign; `manageEncounter(abandon)` pode fechar somente drift confirmado como `FAILED`, sem processar ações ou recompensas.
-- A resolução por beat amplia localmente `manageEncounter` sem migration: a cena é carregada uma vez e `resolve_beat` internaliza ação composta limitada, NPCs, reações, checkpoint e conclusão. Política parcial é explícita, componentes nunca são omitidos, mais de três componentes ou quatro NPCs elegíveis rejeitam antes da escrita. O fluxo granular permanece como fallback; staging e GPT Builder continuam inalterados.
+- A resolução por beat amplia `manageEncounter` sem migration: a cena é carregada uma vez e `resolve_beat` internaliza ação composta limitada, NPCs, reações, checkpoint e conclusão. Política parcial é explícita, componentes nunca são omitidos, mais de três componentes ou quatro NPCs elegíveis rejeitam antes da escrita. O fluxo granular permanece como fallback; o backend e o GPT Builder de staging já executam esta versão.
 - Auditoria HTTP estruturada com `x-request-id`, resumos seguros de requisição/resposta e caminhos de validação, sem headers ou payloads sensíveis.
 - Blueprint Render de staging nativo Node, Free em `virginia`, branch `develop`, sem Docker, sem pre-deploy e sem deploy automático.
+- Staging ativo no Render `cronicas-de-outro-mundo-staging-api`, projeto `Game-GPT`, workspace `Ralph’s workspace`, em Virginia e no commit `9371d9ce1ddbd59fb031177cdc2b4b8cb679fbfa`.
+- PostgreSQL de staging no Supabase `cronicas-de-outro-mundo-staging-virginia`, ref `udqwzvhlwwfnngiipacj`, Free em `us-east-1`, com a role dedicada `cronicas_staging_app`, dez migrations e nenhum seed. O runtime usa Supavisor Session na porta 5432 com TLS completo; a conexão direta fica restrita ao gate local de migrations.
+- O staging anterior `cronicas-de-outro-mundo-staging`, ref `cqxabsnuvngtkpbrgson`, em `sa-east-1`, permanece vazio, pausado, desconectado do Render e não foi deletado.
+- Benchmark remoto Render Virginia → Supabase North Virginia: `startGame` mínimo 1,19/1,33/1,68 s e 215 queries; pacote completo 2,22/2,27/2,73 s e 459 queries; `loadGame` 0,32/0,55/0,87 s e 35 queries. Os três gates passaram sem elevar timeout, com readiness pronta, replay idempotente e smoke direto autoritativo.
+- O GPT Builder `Crônicas de Outro Mundo — Staging` foi publicado com Instructions, os nove arquivos de Knowledge e o OpenAPI versionados, mantendo 20 Actions únicas. O smoke em conversa nova confirmou Criação Rápida, estado salvo, conteúdos mecânicos e narrativo, encontro, erros acionáveis e ataque autoritativo; a limpeza posterior deixou o banco funcional vazio.
 
 ## Decisões pendentes
 
 - Autenticação pública, identidade e autorização por usuário.
 - Política de CORS, rate limit e retenção/exportação de logs para exposição além do GPT/admin.
-- Cadastro dos secrets e da CA no Render, preview do Blueprint publicado e primeiro deploy manual após o gate de migrations.
 
 ## Fases futuras
 

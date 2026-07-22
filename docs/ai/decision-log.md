@@ -563,3 +563,36 @@ Evidência:
 - o baseline remoto do artefato ainda implantado permaneceu em 42,25 s para o pacote mínimo, confirmando amplificação regional sem atribuir a região como causa única.
 
 Status: implementação local validada; revisão pré-commit pendente, sem commit, push ou deploy do código
+
+## 2026-07-22 — Staging co-localizado em Virginia
+
+Decisão:
+
+- pausar, sem deletar, o staging Supabase vazio de São Paulo (`cqxabsnuvngtkpbrgson`) para liberar uma vaga do plano Free;
+- criar `cronicas-de-outro-mundo-staging-virginia` (`udqwzvhlwwfnngiipacj`) na região exata `us-east-1`, sem clonar dados, Auth, Storage ou seed;
+- recriar a role mínima `cronicas_staging_app`, aplicar as dez migrations versionadas desde zero e manter `anon`/`authenticated` sem DML ou execução de funções privadas;
+- usar conexão direta somente no gate local de migrations e Supavisor Session, porta 5432, TLS completo e pool máximo 5 no backend persistente do Render, porque o endpoint direto Free é IPv6 e o Render requer conectividade IPv4;
+- manter uma única instância de Prisma e não criar uma variável separada de conexão direta no runtime do Render;
+- redeployar somente `cronicas-de-outro-mundo-staging-api`, no mesmo commit `9371d9ce1ddbd59fb031177cdc2b4b8cb679fbfa`, sem código, dependency, migration, commit ou push;
+- condicionar GPT Builder e smoke conversacional aos gates remotos de desempenho e ao smoke direto.
+
+Evidência:
+
+- deploy `live`, `/health` e `/health/ready` em HTTP 200, dez migrations concluídas, zero pendente e zero dado funcional antes dos benchmarks;
+- `startGame` mínimo, três HTTP 200: 1,19/1,33/1,68 s, 215 queries, database time acumulado 1,08/1,18/1,90 s; baseline São Paulo 25,59 s de mediana, 25,70 s de máximo e 216 queries;
+- `startGame` com arma, magia de dano, cura, poção, traje `body` e cosmético narrativo, três HTTP 200: 2,22/2,27/2,73 s, 459 queries, database time acumulado 2,37/2,51/3,20 s; baseline São Paulo 54,88 s de mediana e 55,36 s de máximo, com as mesmas 459 queries;
+- `loadGame`, três HTTP 200: 0,32/0,55/0,87 s, 35 queries, database time acumulado 0,19/0,19/0,39 s; baseline São Paulo 4,51 s de mediana, 4,53 s de máximo e 35 queries;
+- melhora de mediana de 94,8%, 95,9% e 87,8%, respectivamente, sem 500/503, escrita parcial, idempotency key presa, saturação ou aumento de timeout;
+- smoke direto confirmou readiness, seis conteúdos, equipamento `main_hand`/`body`, cosmético narrativo, ataque autoritativo, dano persistido uma única vez, bloqueio de mutação externa, replay e liberação da Campaign para novo encontro;
+- drift deliberado não foi produzido pela API pública, pois exigiria alterar autoridade por fora do contrato; a cobertura automatizada existente permanece o gate para `abandon` e reabertura após abandono.
+- o GPT Builder de staging foi atualizado e publicado com as Instructions versionadas, os nove arquivos de Knowledge sem duplicatas e o OpenAPI atual com exatamente 20 `operationId`s únicos e autenticação preservada;
+- o smoke em conversa nova cobriu Criação Rápida com cinco perguntas, confirmação explícita, readiness, os seis conteúdos, encontro e ataque autoritativo; o alvo perdeu 6 HP e o protagonista não teve custo, enquanto tentativas inválidas anteriores fizeram rollback sem dano ou custo inventado;
+- a limpeza final deixou as 28 tabelas funcionais do novo staging vazias, preservando as dez migrations concluídas.
+
+Impacto:
+
+- backend e banco de staging ficam co-localizados em Virginia, removendo a travessia Virginia → São Paulo do caminho de centenas de round-trips;
+- o projeto antigo permanece vazio, pausado, reversível e desconectado do Render;
+- produção e todos os recursos fora do staging autorizado permanecem intocados.
+
+Status: infraestrutura, benchmarks, smoke direto, GPT Builder, smoke pelo GPT e limpeza final aprovados; documentação local aguarda revisão, sem commit ou push
