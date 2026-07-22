@@ -296,26 +296,24 @@ async function readMechanicalState(client: ActorMechanicsClient, actorId: string
   const actor = await client.actor.findUnique({
     where: { id: actorId },
     select: {
-      id: true, campaignId: true, level: true, mechanicsStateVersion: true,
+      id: true, level: true, mechanicsStateVersion: true,
       inventoryStateVersion: true, effectsStateVersion: true,
+      campaign: {
+        select: {
+          rulesetVersionId: true,
+          engineTick: true,
+          rulesetVersion: {
+            select: {
+              id: true, rulesetId: true, code: true, revision: true, schemaVersion: true,
+              configHash: true, configSnapshot: true,
+              ruleset: { select: { code: true } },
+            },
+          },
+        },
+      },
     },
   });
   if (actor === null) throw new NotFoundError('Actor');
-  const campaign = await client.campaign.findUnique({
-    where: { id: actor.campaignId },
-    select: { rulesetVersionId: true, engineTick: true },
-  });
-  if (campaign === null) throw integrityError();
-  const rulesetVersion = await client.rulesetVersion.findUnique({
-    where: { id: campaign.rulesetVersionId },
-    select: {
-      id: true, rulesetId: true, code: true, revision: true, schemaVersion: true,
-      configHash: true, configSnapshot: true,
-    },
-  });
-  if (rulesetVersion === null) throw integrityError();
-  const ruleset = await client.ruleset.findUnique({ where: { id: rulesetVersion.rulesetId }, select: { code: true } });
-  if (ruleset === null) throw integrityError();
   const attributes = await client.actorAttribute.findMany({
     where: { actorId }, select: { code: true, baseValue: true, earnedValue: true, xp: true }, orderBy: { code: 'asc' },
   });
@@ -324,7 +322,7 @@ async function readMechanicalState(client: ActorMechanicsClient, actorId: string
   });
   const derivedSnapshot = await client.actorDerivedSnapshot.findUnique({ where: { actorId } });
   const inventoryInputs = await loadActorInventoryMechanicalInputs(client, actorId);
-  const activeEffectInputs = await loadActorActiveEffectMechanicalInputs(client, actorId, campaign.engineTick);
+  const activeEffectInputs = await loadActorActiveEffectMechanicalInputs(client, actorId, actor.campaign.engineTick);
   return {
     id: actor.id,
     level: actor.level,
@@ -332,9 +330,9 @@ async function readMechanicalState(client: ActorMechanicsClient, actorId: string
     inventoryStateVersion: actor.inventoryStateVersion,
     effectsStateVersion: actor.effectsStateVersion,
     campaign: {
-      rulesetVersionId: campaign.rulesetVersionId,
-      engineTick: campaign.engineTick,
-      rulesetVersion: { ...rulesetVersion, ruleset },
+      rulesetVersionId: actor.campaign.rulesetVersionId,
+      engineTick: actor.campaign.engineTick,
+      rulesetVersion: actor.campaign.rulesetVersion,
     },
     attributes,
     resources,
@@ -348,8 +346,16 @@ export async function loadActorMechanicalSheet(
   client: ActorMechanicsClient,
   actorId: string,
 ): Promise<ActorMechanicalSheet> {
+  return (await loadActorMechanicalProjection(client, actorId)).sheet;
+}
+
+export async function loadActorMechanicalProjection(client: ActorMechanicsClient, actorId: string) {
   const record = await readMechanicalState(client, actorId);
-  return projectActorMechanicalSheet(record);
+  return {
+    sheet: projectActorMechanicalSheet(record),
+    inventoryInputs: record.inventoryInputs,
+    activeEffectInputs: record.activeEffectInputs,
+  };
 }
 
 export function projectActorMechanicalSheet(record: MechanicalStateRecord): ActorMechanicalSheet {

@@ -15,6 +15,7 @@ import {
   type CoreV1ActorEffectContext,
 } from '../rules/core-v1/index.js';
 import { loadActorActiveEffectMechanicalInputs } from './active-effect-mechanical-inputs.js';
+import type { ActorActiveEffectMechanicalInputs } from './active-effect-mechanical-inputs.js';
 
 export type EffectStateClient = Pick<
   Prisma.TransactionClient,
@@ -168,6 +169,15 @@ export async function loadActorActiveEffectSummary(
     ]).has(group.kind))
       .reduce((total, group) => total + group._count._all, 0),
     reactionGrantCount: groups.find((group) => group.kind === ActiveEffectKind.REACTION_GRANT)?._count._all ?? 0,
+  };
+}
+
+export function projectActorActiveEffectSummary(inputs: ActorActiveEffectMechanicalInputs) {
+  return {
+    total: inputs.activeEffects.length,
+    statusCount: inputs.activeEffects.filter((effect) => effect.kind === 'status').length,
+    modifierCount: inputs.activeEffects.filter((effect) => ['primary_modifier', 'secondary_modifier'].includes(effect.kind)).length,
+    reactionGrantCount: inputs.activeEffects.filter((effect) => effect.kind === 'reaction_grant').length,
   };
 }
 

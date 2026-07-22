@@ -1,5 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import {
+  createOperationTelemetryContext,
+  operationTelemetrySnapshot,
+  runWithOperationTelemetry,
+  type OperationTelemetrySnapshot,
+} from '../observability/operation-observability.js';
 
 type AuditValue = boolean | number | string | null | AuditValue[] | { [key: string]: AuditValue };
 
@@ -23,6 +29,7 @@ export interface HttpAuditRecord {
   error?: AuditErrorDiagnostic;
   operationId?: string;
   encounter?: Record<string, AuditValue>;
+  performance?: OperationTelemetrySnapshot;
 }
 
 export type AuditLogWriter = (record: HttpAuditRecord) => void;
@@ -255,6 +262,7 @@ export const writeHttpAuditLog: AuditLogWriter = (record) => {
 export function createRequestAudit(writer?: AuditLogWriter): RequestHandler {
   return (request: Request, response: Response, next: NextFunction) => {
     const requestId = randomUUID();
+    const operationTelemetry = createOperationTelemetryContext();
     const requestPath = (request.originalUrl.split('?', 1)[0] ?? request.path).replace(/[\r\n]/g, '').slice(0, 500);
     const startedAt = process.hrtime.bigint();
     let responseBody: unknown;
@@ -271,6 +279,7 @@ export function createRequestAudit(writer?: AuditLogWriter): RequestHandler {
       const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
       const auditError = response.locals.auditError as AuditErrorDiagnostic | undefined;
       const encounter = summarizeEncounterAudit(response.locals.encounterAudit);
+      const performance = operationTelemetrySnapshot(operationTelemetry);
       writer({
         event: 'http_request_completed',
         timestamp: new Date().toISOString(),
@@ -283,10 +292,11 @@ export function createRequestAudit(writer?: AuditLogWriter): RequestHandler {
         request: summarizeRequest(request),
         response: summarizeResponse(responseBody),
         ...(encounter === undefined ? {} : { operationId: 'manageEncounter', encounter }),
+        ...(performance === undefined ? {} : { performance }),
         ...(auditError === undefined ? {} : { error: auditError }),
       });
     });
 
-    next();
+    runWithOperationTelemetry(operationTelemetry, next);
   };
 }

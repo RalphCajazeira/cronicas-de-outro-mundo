@@ -28,6 +28,7 @@ import {
 import type { ValidationIssue } from '../rules/core-v1/core-v1.types.js';
 import type { ManageActorInventoryInput } from '../gpt/gpt.schemas.js';
 import { loadActorInventoryMechanicalInputs } from './inventory-mechanical-inputs.js';
+import type { ActorInventoryMechanicalInputs } from './inventory-mechanical-inputs.js';
 import { InventoryOperationRejectedError, InventoryStateVersionRejectedError } from './inventory.errors.js';
 import { assertActorsMutableOutsideEncounter } from '../encounters/encounter-authority-guard.js';
 
@@ -124,7 +125,11 @@ export async function loadActorInventoryDto(client: InventoryClient, actorId: st
 export async function loadActorInventorySummary(client: InventoryClient, actorId: string) {
   const inputs = await loadActorInventoryMechanicalInputs(client, actorId);
   const sheet = await loadActorMechanicalSheet(client, actorId);
-  const encumbrance = calculateInventoryEncumbrance(inputs.totalCarriedWeight, sheet.secondaryAttributes.carryingCapacity);
+  return projectActorInventorySummary(inputs, sheet.secondaryAttributes.carryingCapacity);
+}
+
+export function projectActorInventorySummary(inputs: ActorInventoryMechanicalInputs, carryingCapacity: number) {
+  const encumbrance = calculateInventoryEncumbrance(inputs.totalCarriedWeight, carryingCapacity);
   if (!encumbrance.ok) throw operationError(encumbrance.issues);
   return {
     entryCount: inputs.inventory.entries.length,
@@ -258,6 +263,7 @@ export async function manageActorInventory(
   client: InventoryClient,
   actorRef: string,
   input: ManageActorInventoryInput,
+  options: { readonly projection?: 'full' | 'state_version' } = {},
 ) {
   const scope = await resolveActor(client, actorRef, input);
   if (input.operation === 'get') return loadActorInventoryDto(client, scope.actor.id, scope.actor.code);
@@ -360,5 +366,8 @@ export async function manageActorInventory(
   });
   if (updated.count !== 1) throw new InventoryStateVersionRejectedError();
   await recomputeActorDerivedSnapshot(client, scope.actor.id);
+  if (options.projection === 'state_version') {
+    return { inventoryStateVersion: locked.inventoryStateVersion + 1 };
+  }
   return loadActorInventoryDto(client, scope.actor.id, scope.actor.code);
 }

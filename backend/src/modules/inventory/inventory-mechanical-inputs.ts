@@ -51,7 +51,8 @@ export async function loadActorInventoryMechanicalInputs(
     include: { contentVersion: { include: { contentDefinition: true } }, equipmentSlots: true },
     orderBy: { entryRef: 'asc' },
   });
-  const slotRows = await client.actorEquipmentSlot.findMany({ where: { actorId }, orderBy: { slotRef: 'asc' } });
+  const slotRows = rows.flatMap((row) => row.equipmentSlots)
+    .sort((left, right) => left.slotRef.localeCompare(right.slotRef));
   const equippedRefs = new Set(slotRows.map((slot) => slot.inventoryEntryId));
   const entries = rows.map((row) => {
     const version = row.contentVersion;

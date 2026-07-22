@@ -31,6 +31,7 @@ import type { ActorRepository } from '../../src/modules/actors/actors.types.js';
 import { prismaContentRepository } from '../../src/modules/content/content.repository.js';
 import { publishContentVersion } from '../../src/modules/content/content-publication.service.js';
 import { prismaGptRepository } from '../../src/modules/gpt/gpt.repository.js';
+import { loadGameSchema, startGameSchema } from '../../src/modules/gpt/gpt.schemas.js';
 import { canonicalize, jsonByteSize } from '../../src/modules/gpt/gpt.start-game.js';
 import { prismaReadinessCheck } from '../../src/modules/health/health.repository.js';
 import { createEncounterService, encounterService } from '../../src/modules/encounters/encounter.service.js';
@@ -54,6 +55,12 @@ import {
 } from '../../src/modules/rules/core-v1/index.js';
 import { disconnectPrisma, prisma } from '../../src/shared/database/prisma.js';
 import { canonicalJson } from '../../src/shared/json/canonical-json.js';
+import {
+  createOperationTelemetryContext,
+  observeOperation,
+  operationTelemetrySnapshot,
+  runWithOperationTelemetry,
+} from '../../src/shared/observability/operation-observability.js';
 
 const config = parseConfig(process.env);
 const { Client } = pg;
@@ -3843,6 +3850,38 @@ describe('GPT v1 persistence with real transactions', () => {
     });
     expect(arrayOrderConflict.status).toBe(409);
     expect(responseErrorMessage(arrayOrderConflict)).toBe('Idempotency key already used');
+  });
+
+  it('keeps full startGame and loadGame within a coarse SQL round-trip budget', async () => {
+    const template = structuredStart('query-budget');
+    const narrativePackages = (['location', 'faction', 'quest_template', 'recipe', 'other'] as const).map((contentType) => ({
+      definition: {
+        mode: 'create' as const, scope: 'world' as const, contentType,
+        code: `query-budget-${contentType.replace('_', '-')}`,
+        name: `Query budget ${contentType}`,
+        description: 'Narrative content used only by the integration query budget.',
+        profile: null, presentation: {}, tags: ['query-budget'], status: 'active' as const, metadata: {},
+      },
+      protagonistLink: { state: 'known' as const, rank: 0, progress: 0, mastery: 0, metadata: {} },
+    }));
+    const input = startGameSchema.parse({
+      ...template,
+      initialContentPackages: [...template.initialContentPackages, ...narrativePackages],
+    });
+    const startContext = createOperationTelemetryContext();
+    await runWithOperationTelemetry(startContext, () => observeOperation('startGame', () => prismaGptRepository.startGame(input)));
+    const startMetrics = operationTelemetrySnapshot(startContext);
+    expect(startMetrics).toMatchObject({ outcome: 'commit', timeout: false });
+    expect(startMetrics?.queryCount).toBeLessThanOrEqual(350);
+
+    const scope = loadGameSchema.parse({
+      playerRef: input.playerRef, worldRef: input.worldRef, campaignRef: input.campaignRef,
+    });
+    const loadContext = createOperationTelemetryContext();
+    await runWithOperationTelemetry(loadContext, () => observeOperation('loadGame', () => prismaGptRepository.loadGame(scope)));
+    const loadMetrics = operationTelemetrySnapshot(loadContext);
+    expect(loadMetrics).toMatchObject({ outcome: 'commit', timeout: false });
+    expect(loadMetrics?.queryCount).toBeLessThanOrEqual(50);
   });
 
   it('carries a valid starter package through readiness, load and the first resolved beat', async () => {

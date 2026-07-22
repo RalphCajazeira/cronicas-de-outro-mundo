@@ -7,10 +7,10 @@ import { resolveBase, resolvePlayer, resolveScope, type DbClient } from '../../s
 import { ConflictError, NotFoundError } from '../../shared/errors/app-error.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import { scopedActorKey } from '../actors/actors.repository.js';
-import { createActorMechanicalState, loadActorMechanicalSheet } from '../actors/actor-mechanics.service.js';
+import { createActorMechanicalState, loadActorMechanicalProjection, loadActorMechanicalSheet } from '../actors/actor-mechanics.service.js';
 import { findScopedContent } from '../content/content.repository.js';
 import { mapInventoryHttpError } from '../inventory/inventory-http.errors.js';
-import { loadActorInventorySummary, manageActorInventory } from '../inventory/inventory.service.js';
+import { manageActorInventory, projectActorInventorySummary } from '../inventory/inventory.service.js';
 import {
   contentVersionPublicInclude,
   ContentEffectBindingResolutionError,
@@ -18,28 +18,29 @@ import {
   publicContentVersionDto,
   publishContentVersion,
   publishedContentInclude,
+  resolveContentPublicationRegistryContext,
   type PublishedContent,
   type PublicContentVersion,
 } from '../content/content-publication.service.js';
-import { ensureCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
-import { ensureCoreV1EffectRulesVersion } from '../rules/effect-rules.registry.js';
 import { getActorEffects, resolveActorEffectTransaction } from '../effects/effect-resolution.service.js';
-import { loadActorActiveEffectSummary } from '../effects/effect-state.service.js';
+import { projectActorActiveEffectSummary } from '../effects/effect-state.service.js';
 import type {
   CreateEventInput, ListCampaignActorsInput, LoadGameInput, ManageActorContentInput, ManageActorInventoryInput,
   ListPlayerWorldsInput, ListWorldCampaignsInput, PatchActorInput, ResolveActorEffectInput, StartGameInput, UpsertActorInput, UpsertContentInput,
 } from './gpt.schemas.js';
 import type { ApiResult, GptRepository } from './gpt.types.js';
 import {
-  CAMPAIGN_STARTED_EVENT_MAX_BYTES, IDEMPOTENT_TRANSACTION_OPTIONS, canonicalJsonEqual, canonicalize, jsonByteSize, resolveDifficulty,
+  CAMPAIGN_STARTED_EVENT_MAX_BYTES, IDEMPOTENT_TRANSACTION_OPTIONS, LOAD_GAME_TRANSACTION_TIMEOUT_MS,
+  canonicalJsonEqual, canonicalize, jsonByteSize, resolveDifficulty,
   type CampaignStartedPayload,
 } from './gpt.start-game.js';
 import { inspectIdempotencyRecord, isIdempotencyKeyConflict, isUniqueConflict } from './gpt.prisma-errors.js';
 import { ACTIVE_ENCOUNTER_LIFECYCLES, activeEncounterSummary } from '../encounters/encounter.types.js';
 import { assertActorsMutableOutsideEncounter } from '../encounters/encounter-authority-guard.js';
-import { loadActorReadiness } from '../actors/actor-readiness.service.js';
+import { projectActorReadiness } from '../actors/actor-readiness.service.js';
 import { EncounterError } from '../encounters/encounter.errors.js';
 import { findEncounterRecord, validateLoadedEncounter } from '../encounters/encounter-state-loader.js';
+import { observeOperationStage } from '../../shared/observability/operation-observability.js';
 
 const actorSelect = {
   id: true, code: true, name: true, actorType: true, species: true, className: true, role: true,
@@ -92,12 +93,12 @@ async function executeIdempotent(
 ): Promise<ApiResult> {
   const hash = calculateGptRequestHash(request);
   try {
-    return await prisma.$transaction(async (transaction) => {
-      await transaction.idempotencyRecord.create({ data: { key, operation, requestHash: hash } });
+    return await observeOperationStage('transaction', () => prisma.$transaction(async (transaction) => {
+      await observeOperationStage('idempotency_claim', () => transaction.idempotencyRecord.create({ data: { key, operation, requestHash: hash } }));
       const response = await work(transaction);
-      await transaction.idempotencyRecord.update({ where: { key }, data: { response: inputJson(response) } });
+      await observeOperationStage('idempotency_response', () => transaction.idempotencyRecord.update({ where: { key }, data: { response: inputJson(response) } }));
       return response;
-    }, IDEMPOTENT_TRANSACTION_OPTIONS);
+    }, IDEMPOTENT_TRANSACTION_OPTIONS));
   } catch (error) {
     if (!isUniqueConflict(error)) throw error;
     if (!isIdempotencyKeyConflict(error)) throw new ConflictError('Resource already exists');
@@ -111,17 +112,25 @@ async function executeIdempotent(
   }
 }
 
-async function actorDto(client: DbClient, actor: Record<string, unknown>) {
-  const mechanicalSheet = await loadActorMechanicalSheet(client, actor.id as string);
-  const inventorySummary = await loadActorInventorySummary(client, actor.id as string);
-  const activeEffectSummary = await loadActorActiveEffectSummary(client, actor.id as string);
-  return {
+async function loadActorDtoProjection(client: DbClient, actor: Record<string, unknown>) {
+  const projection = await observeOperationStage('actor_projection', () => loadActorMechanicalProjection(client, actor.id as string));
+  const inventorySummary = projectActorInventorySummary(
+    projection.inventoryInputs,
+    projection.sheet.secondaryAttributes.carryingCapacity,
+  );
+  const activeEffectSummary = projectActorActiveEffectSummary(projection.activeEffectInputs);
+  const dto = {
     code: actor.code, name: actor.name, actorType: normalizeEnum(actor.actorType as string), species: actor.species,
     className: actor.className, role: actor.role, description: actor.description, level: actor.level, xp: actor.xp,
     gold: actor.gold, metadata: actor.metadata, appearance: actor.appearance, personality: actor.personality,
-    status: normalizeEnum(actor.status as string), ...mechanicalSheet, inventorySummary,
+    status: normalizeEnum(actor.status as string), ...projection.sheet, inventorySummary,
     activeEffectSummary,
   };
+  return { dto, projection };
+}
+
+async function actorDto(client: DbClient, actor: Record<string, unknown>) {
+  return (await loadActorDtoProjection(client, actor)).dto;
 }
 
 function actorContentDto(link: Record<string, unknown> & {
@@ -187,23 +196,37 @@ function linkUpdateData(input: ManageActorContentInput): Prisma.ActorContentUpda
 }
 
 async function loadGameState(client: DbClient, input: LoadGameInput) {
-  const { player, world, campaign } = await resolveScope(client, input);
-  const actors = await client.actor.findMany({ where: { campaignId: campaign.id }, select: actorSelect, orderBy: [{ role: 'asc' }, { name: 'asc' }, { code: 'asc' }], take: 50 });
-  const links = await client.actorContent.findMany({ where: { actor: { campaignId: campaign.id } }, include: { ...contentInclude, actor: { select: { code: true } } }, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], take: 100 });
-  const events = await client.gameEvent.findMany({ where: { campaignId: campaign.id }, include: { actor: { select: { code: true } } }, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], take: 20 });
-  const activeEncounter = await loadActiveEncounterSummary(client, campaign.id);
+  const { player, world, campaign } = await observeOperationStage('scope_resolution', () => resolveScope(client, input));
+  const actors = await observeOperationStage('actors', () => client.actor.findMany({ where: { campaignId: campaign.id }, select: actorSelect, orderBy: [{ role: 'asc' }, { name: 'asc' }, { code: 'asc' }], take: 50 }));
+  const links = await observeOperationStage('known_content', () => client.actorContent.findMany({ where: { actor: { campaignId: campaign.id } }, include: { ...contentInclude, actor: { select: { id: true, code: true } } }, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], take: 100 }));
+  const events = await observeOperationStage('recent_events', () => client.gameEvent.findMany({ where: { campaignId: campaign.id }, include: { actor: { select: { code: true } } }, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], take: 20 }));
+  const activeEncounter = await observeOperationStage('active_encounter', () => loadActiveEncounterSummary(client, campaign.id));
   const protagonist = actors.find((actor) => actor.code === player.slug && actor.actorType === ActorType.CHARACTER) ?? null;
-  const actorDtos = new Map<string, Record<string, unknown>>();
-  for (const actor of actors) actorDtos.set(actor.id, await actorDto(client, actor));
+  const actorProjections = new Map<string, Awaited<ReturnType<typeof loadActorDtoProjection>>>();
+  for (const actor of actors) actorProjections.set(actor.id, await loadActorDtoProjection(client, actor));
+  const protagonistProjection = protagonist === null ? null : actorProjections.get(protagonist.id) ?? null;
   return {
     player: { ref: player.slug, displayName: player.displayName },
     world: { ref: world.code, name: world.name, description: world.description, metadata: world.metadata },
     campaign: { ref: campaign.code, name: campaign.name, status: normalizeEnum(campaign.status), currentTime: campaign.currentTime, metadata: campaign.metadata },
     protagonist: protagonist === null ? null : {
-      ...(actorDtos.get(protagonist.id) ?? {}),
-      readiness: await loadActorReadiness(client, protagonist.id),
+      ...(protagonistProjection?.dto ?? {}),
+      readiness: await observeOperationStage('readiness', () => Promise.resolve().then(() => {
+        if (protagonistProjection === null) throw new NotFoundError('Actor');
+        return projectActorReadiness({
+          actor: { status: protagonist.status, level: protagonist.level },
+          sheet: protagonistProjection.projection.sheet,
+          inventoryInputs: protagonistProjection.projection.inventoryInputs,
+          effectInputs: protagonistProjection.projection.activeEffectInputs,
+          linked: links.filter((link) => link.actor.id === protagonist.id).map((link) => ({
+            state: link.state,
+            definition: link.contentDefinition,
+            version: link.contentVersion,
+          })),
+        });
+      })),
     },
-    mainActors: actors.filter((actor) => actor.id !== protagonist?.id).map((actor) => actorDtos.get(actor.id) ?? {}),
+    mainActors: actors.filter((actor) => actor.id !== protagonist?.id).map((actor) => actorProjections.get(actor.id)?.dto ?? {}),
     linkedContent: links.map((link) => ({ actorRef: link.actor.code, ...actorContentDto(link) })),
     activeEncounter,
     recentEvents: events.map((event) => ({ actorRef: event.actor?.code ?? null, eventType: event.eventType, title: event.title, payload: event.payload, createdAt: event.createdAt.toISOString() })),
@@ -253,6 +276,7 @@ export const prismaGptRepository: GptRepository = {
   async loadGame(input: LoadGameInput) {
     return prisma.$transaction((transaction) => loadGameState(transaction, input), {
       isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+      timeout: LOAD_GAME_TRANSACTION_TIMEOUT_MS,
     });
   },
 
@@ -284,24 +308,24 @@ export const prismaGptRepository: GptRepository = {
 
   async startGame(input: StartGameInput) {
     return executeIdempotent(input.idempotencyKey, 'game.start', input, async (transaction) => {
-      const officialRulesetVersion = await ensureCoreV1RulesetVersion(transaction);
-      await ensureCoreV1EffectRulesVersion(transaction);
-      const existingPlayer = await transaction.player.findUnique({ where: { slug: input.playerRef } });
+      const publicationRegistry = await observeOperationStage('rules_registry', () => resolveContentPublicationRegistryContext(transaction));
+      const officialRulesetVersion = publicationRegistry.ruleset;
+      const existingPlayer = await observeOperationStage('player_resolution', () => transaction.player.findUnique({ where: { slug: input.playerRef } }));
       if (input.playerMode === 'create' && existingPlayer !== null) throw new ConflictError('Player already exists');
       if (input.playerMode === 'reuse' && existingPlayer === null) throw new NotFoundError('Player');
       if (existingPlayer !== null && input.playerDisplayName !== undefined && existingPlayer.displayName !== input.playerDisplayName) {
         throw new ConflictError('Player display name does not match');
       }
-      const player = existingPlayer ?? await transaction.player.create({
+      const player = existingPlayer ?? await observeOperationStage('player_resolution', () => transaction.player.create({
         data: { slug: input.playerRef, displayName: input.playerDisplayName ?? '' },
-      });
+      }));
 
-      const existingWorld = await transaction.world.findUnique({
+      const existingWorld = await observeOperationStage('world_resolution', () => transaction.world.findUnique({
         where: { playerId_code: { playerId: player.id, code: input.worldRef } },
         include: {
           defaultRulesetVersion: { select: { code: true, revision: true, configHash: true } },
         },
-      });
+      }));
       if (input.worldMode === 'create' && existingWorld !== null) throw new ConflictError('World already exists');
       if (input.worldMode === 'reuse' && existingWorld === null) throw new NotFoundError('World');
       if (existingWorld !== null) {
@@ -317,18 +341,18 @@ export const prismaGptRepository: GptRepository = {
           throw new ConflictError('World configuration does not match');
         }
       }
-      const world = existingWorld ?? await transaction.world.create({
+      const world = existingWorld ?? await observeOperationStage('world_resolution', () => transaction.world.create({
         data: {
           playerId: player.id, defaultRulesetVersionId: officialRulesetVersion.id,
           code: input.worldRef, name: input.worldName ?? '',
           ...(input.worldDescription === undefined ? {} : { description: input.worldDescription }),
           metadata: inputJson({ worldConfig: input.worldConfiguration }),
         },
-      });
+      }));
 
-      const existingCampaign = await transaction.campaign.findUnique({
+      const existingCampaign = await observeOperationStage('campaign_creation', () => transaction.campaign.findUnique({
         where: { worldId_code: { worldId: world.id, code: input.campaignRef } },
-      });
+      }));
       if (existingCampaign !== null) throw new ConflictError('Campaign already exists');
 
       const effectiveProfile = resolveDifficulty(input.campaignConfiguration.difficulty.preset, input.campaignConfiguration.difficulty.overrides);
@@ -336,18 +360,18 @@ export const prismaGptRepository: GptRepository = {
         ...input.campaignConfiguration,
         difficulty: { ...input.campaignConfiguration.difficulty, overrides: input.campaignConfiguration.difficulty.overrides ?? {}, effectiveProfile },
       };
-      const campaign = await transaction.campaign.create({
+      const campaign = await observeOperationStage('campaign_creation', () => transaction.campaign.create({
         data: {
           worldId: world.id, rulesetVersionId: world.defaultRulesetVersionId,
           code: input.campaignRef, name: input.campaignName,
           status: CampaignStatus.ACTIVE, metadata: inputJson({ campaignConfig }),
         },
-      });
-      const protagonist = await transaction.actor.create({ data: actorCreateData(campaign.id, input.protagonist), select: actorSelect });
-      await createActorMechanicalState(transaction, {
+      }));
+      const protagonist = await observeOperationStage('actor_creation', () => transaction.actor.create({ data: actorCreateData(campaign.id, input.protagonist), select: actorSelect }));
+      await observeOperationStage('actor_mechanics_creation', () => createActorMechanicalState(transaction, {
         actorId: protagonist.id,
         primaryAttributes: input.protagonist.primaryAttributes,
-      });
+      }));
 
       type ResolvedInitialPackage = {
         definition: PublishedContent;
@@ -368,10 +392,10 @@ export const prismaGptRepository: GptRepository = {
           const definitionInput = item.definition;
           const type = definitionInput.contentType.toUpperCase() as ContentType;
           if (definitionInput.mode === 'reuse') {
-            const definition = await transaction.contentDefinition.findFirst({
+            const definition = await observeOperationStage('content_publication', () => transaction.contentDefinition.findFirst({
               where: { worldId: world.id, campaignId: null, contentType: type, code: definitionInput.code },
               include: publishedContentInclude,
-            });
+            }));
             if (definition === null) throw new NotFoundError('Content');
             const version = definition.versions[0];
             if (definition.status !== ContentStatus.ACTIVE || version === undefined) throw new ConflictError('Reused content is not an active publication');
@@ -382,26 +406,26 @@ export const prismaGptRepository: GptRepository = {
           }
 
           const campaignId = definitionInput.scope === 'campaign' ? campaign.id : null;
-          const exact = await transaction.contentDefinition.findFirst({
+          const exact = await observeOperationStage('content_publication', () => transaction.contentDefinition.findFirst({
             where: { worldId: world.id, campaignId, contentType: type, code: definitionInput.code },
-          });
+          }));
           if (exact !== null) throw new ConflictError('Content definition already exists');
           if (definitionInput.scope === 'campaign') {
-            const global = await transaction.contentDefinition.findFirst({
+            const global = await observeOperationStage('content_publication', () => transaction.contentDefinition.findFirst({
               where: { worldId: world.id, campaignId: null, contentType: type, code: definitionInput.code },
-            });
+            }));
             if (global !== null && definitionInput.overridesWorldDefinition !== true) throw new ConflictError('Campaign content requires an explicit World override');
             if (global === null && definitionInput.overridesWorldDefinition === true) throw new ConflictError('World content to override was not found');
           }
           try {
-            const definition = await publishContentVersion(transaction, {
+            const definition = await observeOperationStage('content_publication', () => publishContentVersion(transaction, {
               worldId: world.id, campaignId, code: definitionInput.code, contentType: type,
               name: definitionInput.name ?? '', description: definitionInput.description ?? null,
               profile: definitionInput.profile, inventorySpec: definitionInput.inventorySpec,
               presentation: definitionInput.presentation ?? {},
               tags: definitionInput.tags ?? [], status: ContentStatus.ACTIVE,
               metadata: definitionInput.metadata ?? {},
-            });
+            }, publicationRegistry));
             resolvedByIndex[index] = { definition, link: item.protagonistLink, scope: definitionInput.scope };
             progress = true;
           } catch (error) {
@@ -428,19 +452,22 @@ export const prismaGptRepository: GptRepository = {
         }
       }
       const attributes = input.protagonist.primaryAttributes;
+      const actorContentRows: Prisma.ActorContentCreateManyInput[] = [];
       for (const item of resolvedPackages) {
         if (item.link === undefined) continue;
+        const link = item.link;
         const version = item.definition.versions[0];
         if (version === undefined) throw new ConflictError('Content definition has no published version');
-        assertPersistedRequirements(version, item.link, linkedKnown, attributes);
-        await transaction.actorContent.create({
-          data: {
-            actorId: protagonist.id, contentDefinitionId: item.definition.id, contentVersionId: version.id,
-            state: item.link.state.toUpperCase() as ActorContentState, rank: item.link.rank, progress: item.link.progress,
-            mastery: item.link.mastery,
-            ...(item.link.notes === undefined ? {} : { notes: item.link.notes }), metadata: inputJson(item.link.metadata ?? {}),
-          },
+        assertPersistedRequirements(version, link, linkedKnown, attributes);
+        actorContentRows.push({
+          actorId: protagonist.id, contentDefinitionId: item.definition.id, contentVersionId: version.id,
+          state: link.state.toUpperCase() as ActorContentState, rank: link.rank, progress: link.progress,
+          mastery: link.mastery,
+          ...(link.notes === undefined ? {} : { notes: link.notes }), metadata: inputJson(link.metadata ?? {}),
         });
+      }
+      if (actorContentRows.length > 0) {
+        await observeOperationStage('actor_content_links', () => transaction.actorContent.createMany({ data: actorContentRows }));
       }
 
       let expectedInventoryStateVersion = 1;
@@ -450,7 +477,7 @@ export const prismaGptRepository: GptRepository = {
           && normalizeEnum(item.definition.contentType) === inventoryItem.contentType && item.definition.code === inventoryItem.code);
         const version = resolved?.definition.versions[0];
         if (resolved === undefined || version === undefined) throw new ConflictError('Initial inventory content was not resolved');
-        const result = await manageActorInventory(transaction, protagonist.code, {
+        const result = await observeOperationStage('inventory_grants', () => manageActorInventory(transaction, protagonist.code, {
           playerRef: input.playerRef, worldRef: input.worldRef, campaignRef: input.campaignRef,
           operation: 'grant', idempotencyKey: `${input.idempotencyKey}:inventory:grant:${inventoryItem.code}`,
           expectedInventoryStateVersion,
@@ -460,19 +487,19 @@ export const prismaGptRepository: GptRepository = {
           },
           quantity: inventoryItem.quantity, entryRefs: inventoryItem.entryRefs,
           ...(inventoryItem.customName === undefined ? {} : { customName: inventoryItem.customName }),
-        });
+        }, { projection: 'state_version' }));
         expectedInventoryStateVersion = result.inventoryStateVersion;
         initialInventoryResults.push({ item: inventoryItem, versionNumber: version.versionNumber });
       }
       for (const { item } of initialInventoryResults) {
         if (item.equip === undefined) continue;
         if (item.entryRefs.length !== 1) throw new ConflictError('Initial equipped item must resolve to one entry ref');
-        const result = await manageActorInventory(transaction, protagonist.code, {
+        const result = await observeOperationStage('equipment', () => manageActorInventory(transaction, protagonist.code, {
           playerRef: input.playerRef, worldRef: input.worldRef, campaignRef: input.campaignRef,
           operation: 'equip', idempotencyKey: `${input.idempotencyKey}:inventory:equip:${item.entryRefs[0]}`,
           expectedInventoryStateVersion, entryRef: item.entryRefs[0],
           ...item.equip,
-        });
+        }, { projection: 'state_version' }));
         expectedInventoryStateVersion = result.inventoryStateVersion;
       }
 
@@ -504,13 +531,13 @@ export const prismaGptRepository: GptRepository = {
       };
       if (jsonByteSize(eventPayload) > CAMPAIGN_STARTED_EVENT_MAX_BYTES) throw new ConflictError('Campaign start event exceeds the safe size limit');
 
-      await transaction.gameEvent.create({
+      await observeOperationStage('campaign_started_event', () => transaction.gameEvent.create({
         data: {
           campaignId: campaign.id, actorId: protagonist.id, eventType: 'campaign-started', title: 'Campanha iniciada',
           payload: inputJson(eventPayload),
         },
-      });
-      return loadGameState(transaction, { playerRef: input.playerRef, worldRef: input.worldRef, campaignRef: input.campaignRef });
+      }));
+      return observeOperationStage('response_assembly', () => loadGameState(transaction, { playerRef: input.playerRef, worldRef: input.worldRef, campaignRef: input.campaignRef }));
     });
   },
 

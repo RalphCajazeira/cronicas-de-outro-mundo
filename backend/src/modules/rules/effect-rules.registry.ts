@@ -51,8 +51,9 @@ export function validateCoreV1EffectRulesVersion(
 
 export async function ensureCoreV1EffectRulesVersion(
   client: EffectRulesRegistryClient,
+  resolvedRulesetVersion?: Awaited<ReturnType<typeof ensureCoreV1RulesetVersion>>,
 ): Promise<CoreEffectRulesVersion> {
-  const rulesetVersion = await ensureCoreV1RulesetVersion(client);
+  const rulesetVersion = resolvedRulesetVersion ?? await ensureCoreV1RulesetVersion(client);
   let version = await client.effectRulesVersion.findUnique({
     where: { code: CORE_V1_EFFECT_RULES_CODE }, select: effectRulesSelect,
   });

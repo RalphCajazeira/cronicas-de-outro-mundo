@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { observeOperation } from '../../shared/observability/operation-observability.js';
 import { actorRefSchema } from '../actors/actors.schemas.js';
 import {
   createEventSchema, listCampaignActorsSchema, listPlayerWorldsSchema, listWorldCampaignsSchema, loadGameSchema, manageActorContentSchema, manageActorInventorySchema, startGameSchema,
@@ -7,16 +8,17 @@ import {
 } from './gpt.schemas.js';
 import { createGptService } from './gpt.service.js';
 import type { GptRepository } from './gpt.types.js';
+import { mapGptOperationError } from './gpt-operation.errors.js';
 
 export function createGptRouter(repository: GptRepository) {
   const router = Router();
   const service = createGptService(repository);
 
   router.post('/game/load', async (request, response, next) => {
-    try { response.json(await service.loadGame(loadGameSchema.parse(request.body))); } catch (error) { next(error); }
+    try { response.json(await observeOperation('loadGame', () => service.loadGame(loadGameSchema.parse(request.body)))); } catch (error) { next(mapGptOperationError(error, 'loadGame')); }
   });
   router.post('/game/start', async (request, response, next) => {
-    try { response.json(await service.startGame(startGameSchema.parse(request.body))); } catch (error) { next(error); }
+    try { response.json(await observeOperation('startGame', () => service.startGame(startGameSchema.parse(request.body)))); } catch (error) { next(mapGptOperationError(error, 'startGame')); }
   });
   router.get('/players/:playerRef/worlds', async (request, response, next) => {
     try { response.json(await service.listPlayerWorlds(listPlayerWorldsSchema.parse(request.params))); } catch (error) { next(error); }

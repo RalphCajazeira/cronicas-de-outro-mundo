@@ -522,3 +522,44 @@ Rollout aprovado para execução futura (não executado nesta task):
 8. observar logs e auditoria sem payloads sensíveis; rollback de aplicação volta ao artefato Render anterior, enquanto encontros já abandonados permanecem `FAILED` e auditáveis.
 
 Status: implementada localmente; nenhuma migration, reset remoto, deploy, alteração do GPT ao vivo, commit ou push executados
+
+## 2026-07-22 — Contenção de credencial de banco do staging
+
+Decisão:
+
+- tratar como comprometida uma credencial de banco exibida por um snapshot interno durante inspeção operacional;
+- rotacionar somente a senha da role dedicada da aplicação no staging, preservando credenciais administrativas e produção;
+- atualizar de forma coordenada os consumidores locais protegidos e o único serviço de staging autorizado;
+- invalidar a senha anterior, validar a nova por autenticação real e reaplicar o mesmo commit no serviço;
+- preservar evidências sanitizadas da auditoria, sem registrar valor, host, usuário, URL ou conteúdo de sessão.
+
+Impacto:
+
+- a credencial exposta deixou de autenticar e o backend voltou saudável no mesmo artefato;
+- não houve mudança de schema, dados funcionais, dependência, produção, outro projeto ou outro serviço;
+- artefatos locais de sessão que continham a credencial invalidada foram preservados para auditoria e não pertencem ao Git.
+
+Status: contenção concluída no staging; investigação de desempenho permanece separada e sem deploy de código
+
+## 2026-07-22 — Redução de round-trips em startGame e loadGame
+
+Decisão:
+
+- manter `startGame` atômico e idempotente, sem elevar o timeout de 60 segundos;
+- reutilizar a projeção mecânica já carregada para inventário, efeitos e readiness no mesmo `loadGame`;
+- carregar Actor, Campaign, RulesetVersion e Ruleset em uma consulta coerente e remover a segunda leitura de slots de equipamento;
+- resolver os registries de publicação uma vez por `startGame` e reutilizá-los nas publicações do mesmo pacote;
+- agrupar os vínculos iniciais com `createMany` somente depois de todas as validações e evitar respostas completas de inventário descartadas durante a criação;
+- instrumentar operação, etapas e métricas de queries sem SQL, argumentos, payloads ou detalhes de infraestrutura;
+- mapear timeouts conhecidos e indisponibilidade transitória para envelopes públicos fechados e retryable, preservando `INTERNAL_ERROR` para causas inesperadas;
+- depois da redução de round-trips, explicitar 15 segundos para `loadGame` no lugar do default implícito de 5 segundos do Prisma;
+- manter índices, migrations, dependências, timeout de `startGame`, infraestrutura e GPT Builder inalterados nesta implementação.
+
+Evidência:
+
+- mediana local contra o staging: `startGame` mínimo 14,15 s → 8,64 s; completo 21,18 s → 12,67 s; `loadGame` 3,85 s → 1,48 s;
+- contagem de queries: 360 → 216; 540 → 316; 97 → 35, respectivamente;
+- planos seguros confirmaram os índices esperados e tempos individuais abaixo de 3 ms nos acessos auditados;
+- o baseline remoto do artefato ainda implantado permaneceu em 42,25 s para o pacote mínimo, confirmando amplificação regional sem atribuir a região como causa única.
+
+Status: implementação local validada; revisão pré-commit pendente, sem commit, push ou deploy do código

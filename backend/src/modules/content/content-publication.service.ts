@@ -9,7 +9,7 @@ import {
 import { AppError, ConflictError, NotFoundError } from '../../shared/errors/app-error.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import { canonicalJson, canonicalizeJson, type CanonicalJsonValue } from '../../shared/json/canonical-json.js';
-import { ensureCoreV1ContentProfileVersion, type ContentProfileRegistryClient } from '../rules/content-profile.registry.js';
+import { ensureCoreV1ContentProfileVersion, type ContentProfileRegistryClient, type CoreContentProfileVersion } from '../rules/content-profile.registry.js';
 import {
   validateCoreV1InventorySpec,
   validateCoreV1InventoryState,
@@ -18,9 +18,9 @@ import {
   type CoreV1InventorySpec,
   type CoreV1ContentValidationResult,
 } from '../rules/core-v1/index.js';
-import { ensureCoreV1InventoryRulesVersion, type InventoryRulesRegistryClient } from '../rules/inventory-rules.registry.js';
-import { ensureCoreV1EffectRulesVersion, type EffectRulesRegistryClient } from '../rules/effect-rules.registry.js';
-import { ensureCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
+import { ensureCoreV1InventoryRulesVersion, type InventoryRulesRegistryClient, type CoreInventoryRulesVersion } from '../rules/inventory-rules.registry.js';
+import { ensureCoreV1EffectRulesVersion, type EffectRulesRegistryClient, type CoreEffectRulesVersion } from '../rules/effect-rules.registry.js';
+import { ensureCoreV1RulesetVersion, type CoreRulesetVersion } from '../rules/ruleset.registry.js';
 
 export const CANONICAL_CONTENT_TYPES = Object.freeze([
   'weapon', 'armor', 'shield', 'clothing', 'spell', 'skill', 'talent', 'item',
@@ -164,6 +164,23 @@ export type ContentPublicationClient = ContentProfileRegistryClient & InventoryR
   Prisma.TransactionClient,
   'world' | 'campaign' | 'contentDefinition' | 'contentVersion' | '$queryRaw'
 >;
+
+export interface ContentPublicationRegistryContext {
+  readonly ruleset: CoreRulesetVersion;
+  readonly contentProfile: CoreContentProfileVersion;
+  readonly inventoryRules: CoreInventoryRulesVersion;
+  readonly effectRules: CoreEffectRulesVersion;
+}
+
+export async function resolveContentPublicationRegistryContext(
+  client: ContentPublicationClient,
+): Promise<ContentPublicationRegistryContext> {
+  const ruleset = await ensureCoreV1RulesetVersion(client);
+  const contentProfile = await ensureCoreV1ContentProfileVersion(client, ruleset);
+  const inventoryRules = await ensureCoreV1InventoryRulesVersion(client, ruleset);
+  const effectRules = await ensureCoreV1EffectRulesVersion(client, ruleset);
+  return { ruleset, contentProfile, inventoryRules, effectRules };
+}
 
 function statusEffects(profile: CoreV1ContentProfile | null) {
   if (profile?.profileMode !== 'mechanical') return [];
@@ -329,11 +346,13 @@ function currentVersion(content: PublishedContent) {
 export async function publishContentVersion(
   client: ContentPublicationClient,
   input: ContentPublicationInput,
+  resolvedRegistry?: ContentPublicationRegistryContext,
 ): Promise<PublishedContent> {
-  const officialRuleset = await ensureCoreV1RulesetVersion(client);
-  const contentProfileVersion = await ensureCoreV1ContentProfileVersion(client);
-  const inventoryRulesVersion = await ensureCoreV1InventoryRulesVersion(client);
-  const effectRulesVersion = await ensureCoreV1EffectRulesVersion(client);
+  const registry = resolvedRegistry ?? await resolveContentPublicationRegistryContext(client);
+  const officialRuleset = registry.ruleset;
+  const contentProfileVersion = registry.contentProfile;
+  const inventoryRulesVersion = registry.inventoryRules;
+  const effectRulesVersion = registry.effectRules;
   const world = await client.world.findUnique({
     where: { id: input.worldId },
     select: { id: true, defaultRulesetVersionId: true },

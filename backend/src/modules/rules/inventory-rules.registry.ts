@@ -51,8 +51,9 @@ export function validateCoreV1InventoryRulesVersion(
 
 export async function ensureCoreV1InventoryRulesVersion(
   client: InventoryRulesRegistryClient,
+  resolvedRulesetVersion?: Awaited<ReturnType<typeof ensureCoreV1RulesetVersion>>,
 ): Promise<CoreInventoryRulesVersion> {
-  const rulesetVersion = await ensureCoreV1RulesetVersion(client);
+  const rulesetVersion = resolvedRulesetVersion ?? await ensureCoreV1RulesetVersion(client);
   let version = await client.inventoryRulesVersion.findUnique({
     where: { code: CORE_V1_INVENTORY_RULES_CODE }, select: inventoryRulesSelect,
   });

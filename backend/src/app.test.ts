@@ -141,6 +141,29 @@ describe('HTTP API', () => {
       protagonist: { code: 'ralph', actorType: 'character' },
     });
   });
+  it('returns a closed retryable envelope for a known startGame transaction timeout', async () => {
+    const records: HttpAuditRecord[] = [];
+    const repository: GptRepository = {
+      ...emptyGptRepository,
+      startGame: () => Promise.reject(Object.assign(
+        new Error('Transaction timeout postgresql://private-host/secret'),
+        { code: 'P2028' },
+      )),
+    };
+    const response = await request(appWith(undefined, undefined, repository, undefined, (record) => records.push(record)))
+      .post('/api/v1/game/start').set('x-rpg-key', 'test-key').send(startGameBody);
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({ error: {
+      code: 'OPERATION_TIMEOUT', message: 'startGame operation timed out',
+      retryable: true, recoveryAction: 'retry_same_request',
+    } });
+    expect(response.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+    expect(records[0]).toMatchObject({
+      error: { type: 'application', code: 'GPT_OPERATION_TIMEOUT' },
+      performance: { operation: 'startGame', outcome: 'error', timeout: true },
+    });
+    expect(JSON.stringify([response.body, records])).not.toMatch(/postgres|private-host|secret|SQL|payload/i);
+  });
   it('rejects a startGame payload above the domain limit before repository persistence', async () => {
     const repository = { ...emptyGptRepository, startGame: () => Promise.reject(new Error('repository must not be reached')) };
     const firstPackage = startGameBody.initialContentPackages[0]!;

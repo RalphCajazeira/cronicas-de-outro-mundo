@@ -4,8 +4,8 @@ import {
 } from '../../generated/prisma/client.js';
 import type { DbClient } from '../../shared/database/game-scope.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
-import { loadActorActiveEffectMechanicalInputs } from '../effects/active-effect-mechanical-inputs.js';
-import { loadActorInventoryMechanicalInputs } from '../inventory/inventory-mechanical-inputs.js';
+import type { ActorActiveEffectMechanicalInputs } from '../effects/active-effect-mechanical-inputs.js';
+import type { ActorInventoryMechanicalInputs } from '../inventory/inventory-mechanical-inputs.js';
 import {
   evaluateEquipmentRequirements,
   resolveCoreV1Cost,
@@ -17,7 +17,7 @@ import {
   type CoreV1MechanicalContentProfile,
   type CoreV1ResourceState,
 } from '../rules/core-v1/index.js';
-import { loadActorMechanicalSheet } from './actor-mechanics.service.js';
+import { loadActorMechanicalProjection, type ActorMechanicalSheet } from './actor-mechanics.service.js';
 
 export type ActorReadinessBlockingReason =
   | 'actor_not_active'
@@ -130,6 +130,56 @@ function costModifierSet(
     ...(spCostBps.length === 0 ? {} : { spCostBps }),
     ...(hpCostBps.length === 0 ? {} : { hpCostBps }),
   };
+}
+
+export interface ActorReadinessProjectionInput {
+  readonly actor: { readonly status: ActorStatus; readonly level: number };
+  readonly sheet: ActorMechanicalSheet;
+  readonly inventoryInputs: ActorInventoryMechanicalInputs;
+  readonly effectInputs: ActorActiveEffectMechanicalInputs;
+  readonly linked: ReadinessRow['linked'];
+}
+
+export function projectActorReadiness(input: ActorReadinessProjectionInput): ActorReadinessDto {
+  const equipped = input.inventoryInputs.inventory.entries
+    .filter((entry) => entry.entryKind === 'instance' && entry.state === 'equipped');
+  const knownContentRefs = input.linked
+    .filter((link) => link.state === ActorContentState.KNOWN || link.state === ActorContentState.MASTERED)
+    .map((link) => ({
+      contentKind: normalizeEnum(link.definition.contentType ?? '') as CoreV1EquipmentRequirementContext['knownContentRefs'][number]['contentKind'],
+      code: link.definition.code,
+    }));
+  const requirementContext: CoreV1EquipmentRequirementContext = {
+    level: input.actor.level,
+    primaryAttributes: input.sheet.primaryAttributes,
+    knownContentRefs,
+    equippedWeaponTags: equipped.flatMap((entry) => entry.contentVersion.contentType === 'weapon'
+      ? [...(entry.profile?.profileMode === 'mechanical' && entry.profile.contentKind === 'weapon'
+        ? entry.profile.weaponTags ?? []
+        : []), ...(entry.profile?.tags ?? [])]
+      : []),
+    equippedEquipmentTags: equipped.flatMap((entry) => [...(entry.profile?.tags ?? [])]),
+    rulesetCode: input.sheet.ruleset.code,
+  };
+  return classifyActorReadiness({
+    actor: { status: input.actor.status },
+    resources: {
+      hp: { current: input.sheet.resources.hp.current, maximum: input.sheet.resources.hp.max },
+      mana: { current: input.sheet.resources.mana.current, maximum: input.sheet.resources.mana.max },
+      sp: { current: input.sheet.resources.sp.current, maximum: input.sheet.resources.sp.max },
+    },
+    requirementContext,
+    costModifiers: costModifierSet([...input.inventoryInputs.modifiers, ...input.effectInputs.modifiers]),
+    linked: input.linked,
+    inventory: input.inventoryInputs.inventory.entries.map((entry) => ({
+      entryRef: entry.entryRef,
+      entryKind: entry.entryKind,
+      quantity: entry.entryKind === 'stack' ? entry.quantity : 1,
+      state: entry.entryKind === 'instance' ? entry.state : null,
+      definition: { code: entry.contentVersion.code, contentType: entry.contentVersion.contentType },
+      version: { profile: entry.profile, inventorySpec: entry.inventorySpec },
+    })),
+  });
 }
 
 /**
@@ -271,7 +321,6 @@ export async function loadActorReadiness(client: DbClient, actorId: string): Pro
     select: {
       status: true,
       level: true,
-      campaign: { select: { engineTick: true } },
       content: {
         select: {
           state: true,
@@ -281,52 +330,15 @@ export async function loadActorReadiness(client: DbClient, actorId: string): Pro
       },
     },
   });
-  const [sheet, inventoryInputs, effectInputs] = await Promise.all([
-    loadActorMechanicalSheet(client, actorId),
-    loadActorInventoryMechanicalInputs(client, actorId),
-    loadActorActiveEffectMechanicalInputs(client, actorId, actor.campaign.engineTick),
-  ]);
-  const knownContentRefs = actor.content
-    .filter((link) => link.state === ActorContentState.KNOWN || link.state === ActorContentState.MASTERED)
-    .map((link) => ({
-      contentKind: normalizeEnum(link.contentDefinition.contentType) as CoreV1EquipmentRequirementContext['knownContentRefs'][number]['contentKind'],
-      code: link.contentDefinition.code,
-    }));
-  const equipped = inventoryInputs.inventory.entries
-    .filter((entry) => entry.entryKind === 'instance' && entry.state === 'equipped');
-  const requirementContext: CoreV1EquipmentRequirementContext = {
-    level: actor.level,
-    primaryAttributes: sheet.primaryAttributes,
-    knownContentRefs,
-    equippedWeaponTags: equipped.flatMap((entry) => entry.contentVersion.contentType === 'weapon'
-      ? [...(entry.profile?.profileMode === 'mechanical' && entry.profile.contentKind === 'weapon'
-        ? entry.profile.weaponTags ?? []
-        : []), ...(entry.profile?.tags ?? [])]
-      : []),
-    equippedEquipmentTags: equipped.flatMap((entry) => [...(entry.profile?.tags ?? [])]),
-    rulesetCode: sheet.ruleset.code,
-  };
-  return classifyActorReadiness({
-    actor: { status: actor.status },
-    resources: {
-      hp: { current: sheet.resources.hp.current, maximum: sheet.resources.hp.max },
-      mana: { current: sheet.resources.mana.current, maximum: sheet.resources.mana.max },
-      sp: { current: sheet.resources.sp.current, maximum: sheet.resources.sp.max },
-    },
-    requirementContext,
-    costModifiers: costModifierSet([...inventoryInputs.modifiers, ...effectInputs.modifiers]),
+  const projection = await loadActorMechanicalProjection(client, actorId);
+  return projectActorReadiness({
+    actor,
+    ...projection,
+    effectInputs: projection.activeEffectInputs,
     linked: actor.content.map((link) => ({
       state: link.state,
       definition: link.contentDefinition,
       version: link.contentVersion,
-    })),
-    inventory: inventoryInputs.inventory.entries.map((entry) => ({
-      entryRef: entry.entryRef,
-      entryKind: entry.entryKind,
-      quantity: entry.entryKind === 'stack' ? entry.quantity : 1,
-      state: entry.entryKind === 'instance' ? entry.state : null,
-      definition: { code: entry.contentVersion.code, contentType: entry.contentVersion.contentType },
-      version: { profile: entry.profile, inventorySpec: entry.inventorySpec },
     })),
   });
 }

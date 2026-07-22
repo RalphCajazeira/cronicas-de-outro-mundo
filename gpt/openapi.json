@@ -132,6 +132,9 @@
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
+          "503": {
+            "$ref": "#/components/responses/TemporaryUnavailable"
+          },
           "500": {
             "$ref": "#/components/responses/InternalError"
           }
@@ -175,6 +178,9 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/TemporaryUnavailable"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"

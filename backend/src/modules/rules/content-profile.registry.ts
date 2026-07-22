@@ -54,8 +54,9 @@ export function validateCoreV1ContentProfileVersion(
 
 export async function ensureCoreV1ContentProfileVersion(
   client: ContentProfileRegistryClient,
+  resolvedRulesetVersion?: Awaited<ReturnType<typeof ensureCoreV1RulesetVersion>>,
 ): Promise<CoreContentProfileVersion> {
-  const rulesetVersion = await ensureCoreV1RulesetVersion(client);
+  const rulesetVersion = resolvedRulesetVersion ?? await ensureCoreV1RulesetVersion(client);
   let version = await client.contentProfileVersion.findUnique({
     where: { code: CORE_V1_CONTENT_PROFILE_CODE },
     select: contentProfileSelect,

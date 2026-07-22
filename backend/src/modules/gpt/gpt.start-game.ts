@@ -6,6 +6,7 @@ export const METADATA_TOTAL_MAX_BYTES = 20 * 1024;
 export const PROFILE_MAX_BYTES = 2 * 1024;
 export const CAMPAIGN_STARTED_EVENT_MAX_BYTES = 8 * 1024;
 export const IDEMPOTENT_TRANSACTION_OPTIONS = { maxWait: 5_000, timeout: 60_000 } as const;
+export const LOAD_GAME_TRANSACTION_TIMEOUT_MS = 15_000;
 
 export const difficultyPresets = {
   story: { errorTolerance: 5, opponentCunning: 1, resourceAvailability: 5, lethality: 1, failureSeverity: 1, narrativeSafetyNet: 5 },

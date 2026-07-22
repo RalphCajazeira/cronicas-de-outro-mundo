@@ -2,7 +2,7 @@ import { EncounterLifecycleStatus, Prisma } from '../../generated/prisma/client.
 import { describe, expect, it } from 'vitest';
 import { ACTIVE_ENCOUNTER_LIFECYCLES, activeEncounterSummary } from '../encounters/encounter.types.js';
 import { inspectIdempotencyRecord, isIdempotencyKeyConflict } from './gpt.prisma-errors.js';
-import { IDEMPOTENT_TRANSACTION_OPTIONS } from './gpt.start-game.js';
+import { IDEMPOTENT_TRANSACTION_OPTIONS, LOAD_GAME_TRANSACTION_TIMEOUT_MS } from './gpt.start-game.js';
 
 function uniqueError(modelName: string, target: string[]) {
   return new Prisma.PrismaClientKnownRequestError('unique conflict', {
@@ -43,6 +43,7 @@ function targetOnlyError(target: string[]) {
 describe('GPT repository unique conflicts', () => {
   it('allows bounded idempotent transactions to persist the complete structured game start', () => {
     expect(IDEMPOTENT_TRANSACTION_OPTIONS).toEqual({ maxWait: 5_000, timeout: 60_000 });
+    expect(LOAD_GAME_TRANSACTION_TIMEOUT_MS).toBe(15_000);
   });
 
   it('recognizes only the structured IdempotencyRecord.key target as an idempotent retry', () => {
