@@ -64,7 +64,7 @@ Na criação estruturada, Player e World usam modos explícitos `create|reuse`, 
 
 A criação de Actor envia somente os nove `primaryAttributes` mecânicos permitidos; HP/Mana/SP máximos e todos os derivados são calculados pelo backend. O GPT de staging deve permanecer privado e separado de qualquer GPT anterior.
 
-Encontros aceitam somente atores persistidos pela Action. O GPT envia intenção, nunca resultados mecânicos, e não usa `resolveActorEffect` como atalho. A conclusão não concede XP, loot, ouro, progressão, morte ou recompensa; efeitos `scope=encounter` ainda exigem cautela porque não são limpos automaticamente nesta fase.
+Encontros aceitam somente atores persistidos pela Action. O GPT envia intenção, nunca resultados mecânicos, e não usa `resolveActorEffect` como atalho. A conclusão não concede XP, loot, ouro, progressão, morte ou recompensa. Conclusão e cancelamento removem somente efeitos `scope=encounter` pertencentes ao encontro; `abandon` faz a mesma limpeza apenas quando essa propriedade é confirmada. Efeitos legados sem origem ou pertencentes a outro encontro são preservados.
 
 `gpt/openapi.json` usa um domínio de exemplo no repositório; o backend publicado injeta a origem HTTPS real. O GPT nunca acessa Supabase, Prisma ou PostgreSQL diretamente.
 

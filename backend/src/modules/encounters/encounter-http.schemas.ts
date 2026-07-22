@@ -234,10 +234,15 @@ const cancelSchema = z.strictObject({
   operation: z.literal('cancel'), ...scopeFields,
   idempotencyKey: idempotencyKeySchema, expectedStateVersion: expectedStateVersionSchema,
 });
+const abandonSchema = z.strictObject({
+  operation: z.literal('abandon'), ...scopeFields,
+  idempotencyKey: idempotencyKeySchema, expectedStateVersion: expectedStateVersionSchema,
+  confirmAuthorityDrift: z.literal(true),
+});
 
 const manageEncounterOperationSchema = z.discriminatedUnion('operation', [
   createSchema, loadSchema, submitIntentSchema, resolveReactionSchema,
-  continueSchema, confirmCompletionSchema, cancelSchema, resolveBeatSchema,
+  continueSchema, confirmCompletionSchema, cancelSchema, abandonSchema, resolveBeatSchema,
 ]);
 
 export const manageEncounterSchema = z.preprocess((value, context) => {

@@ -35,10 +35,32 @@ describe('encounter public DTO mapper', () => {
     expect(publicDto.currentTick).toBe('9007199254740993');
     expect(Object.keys(publicDto).sort()).toEqual([
       'completionCandidate', 'currentTick', 'encounterRef', 'lifecycleStatus', 'nextRequiredAction',
-      'participants', 'result', 'stateVersion', 'stopReason',
+      'operation', 'participants', 'result', 'stateVersion', 'stopReason',
     ]);
     const serialized = JSON.stringify(publicDto);
-    expect(serialized).not.toMatch(/"operation"|stateHash|inputHash|adapterState|snapshot|"rolls"|eventRef|actionRef|"id"/);
+    expect(serialized).not.toMatch(/stateHash|inputHash|adapterState|snapshot|"rolls"|eventRef|actionRef|"id"/);
+  });
+
+  it('makes technical abandonment explicit and proves that it resolves no gameplay outcome', () => {
+    const publicDto = toEncounterPublicDto(dto({
+      operation: 'abandon', lifecycleStatus: 'failed', stopReason: 'encounter_failed',
+      nextRequiredAction: { type: 'none' },
+      recoverySummary: {
+        reason: 'authority_drift', authority: 'inventory', actionResolved: false,
+        damageApplied: false, costApplied: false, rewardsGranted: false, campaignReleased: true,
+      },
+    }));
+    expect(publicDto).toMatchObject({
+      result: 'encounter_abandoned', operation: 'abandon', lifecycleStatus: 'failed',
+      stopReason: 'encounter_failed', nextRequiredAction: { type: 'none' },
+      recoverySummary: {
+        reason: 'authority_drift', authority: 'inventory', actionResolved: false,
+        damageApplied: false, costApplied: false, rewardsGranted: false, campaignReleased: true,
+      },
+    });
+    expect(publicDto).not.toHaveProperty('consequencesSummary');
+    expect(publicDto).not.toHaveProperty('transitionSummary');
+    expect(publicDto).not.toHaveProperty('beatSummary');
   });
 
   it('allowlists nested next-action and transition fields instead of cloning unknown properties', () => {

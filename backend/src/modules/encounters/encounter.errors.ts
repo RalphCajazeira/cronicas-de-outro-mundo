@@ -14,6 +14,7 @@ export type EncounterErrorCode =
   | 'ENCOUNTER_EFFECT_ORIGIN_REQUIRED'
   | 'ENCOUNTER_CAMPAIGN_TICK_DRIFT'
   | 'ENCOUNTER_PARTICIPANT_INVALID'
+  | 'ENCOUNTER_PARTICIPANT_NOT_READY'
   | 'ENCOUNTER_EPHEMERAL_MUTATION_UNSUPPORTED'
   | 'ENCOUNTER_SPATIAL_CONTEXT_UNAVAILABLE'
   | 'ENCOUNTER_IDEMPOTENCY_KEY_REUSED'
@@ -42,6 +43,7 @@ const safeMessages: Readonly<Record<EncounterErrorCode, string>> = {
   ENCOUNTER_EFFECT_ORIGIN_REQUIRED: 'Encounter effect origin failed integrity validation',
   ENCOUNTER_CAMPAIGN_TICK_DRIFT: 'Campaign engine tick drift detected',
   ENCOUNTER_PARTICIPANT_INVALID: 'Encounter participant validation failed',
+  ENCOUNTER_PARTICIPANT_NOT_READY: 'Protagonist is not ready to start an encounter',
   ENCOUNTER_EPHEMERAL_MUTATION_UNSUPPORTED: 'Ephemeral participant mutation is not persistable',
   ENCOUNTER_SPATIAL_CONTEXT_UNAVAILABLE: 'Authoritative spatial context is unavailable',
   ENCOUNTER_IDEMPOTENCY_KEY_REUSED: 'Idempotency key was reused with different input',

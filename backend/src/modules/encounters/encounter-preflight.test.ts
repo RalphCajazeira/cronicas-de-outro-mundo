@@ -108,6 +108,12 @@ describe('encounter adapter preflight', () => {
       },
     ], 3, secondHash, 'beat')).not.toThrow();
     expect(() => assertEncounterOperationChainRows([
+      rows[0]!, {
+        ...rows[1]!, id: 'abandon', operation: EncounterOperationKind.CANCEL,
+        idempotencyRecord: { ...rows[1]!.idempotencyRecord, operation: 'encounter.abandon' },
+      },
+    ], 3, secondHash, 'abandon')).not.toThrow();
+    expect(() => assertEncounterOperationChainRows([
       rows[0]!, { ...rows[1]!, beforeStateHash: 'f'.repeat(64) },
     ], 3, secondHash, 'continue')).toThrow(expect.objectContaining<Partial<EncounterError>>({
       code: 'ENCOUNTER_DENORMALIZED_DRIFT',

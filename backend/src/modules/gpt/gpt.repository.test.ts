@@ -88,9 +88,11 @@ describe('active encounter recovery summary', () => {
       encounterRef: 'bridge-ambush',
       lifecycleStatus: 'awaiting_intent',
       stateVersion: 4,
-      canContinue: true,
-      canCancel: true,
-      recoveryAction: 'load_encounter',
+      canContinue: false,
+      canCancel: false,
+      canAbandon: false,
+      integrityStatus: 'unverified',
+      recoveryAction: 'stop_encounter_flow',
     });
   });
 
@@ -99,10 +101,19 @@ describe('active encounter recovery summary', () => {
       encounterRef: 'paused-ambush',
       lifecycleStatus: EncounterLifecycleStatus.PROCESSING_PAUSED,
       stateVersion: 2,
-    }])).toMatchObject({ lifecycleStatus: 'processing_paused', canContinue: true, canCancel: true });
+    }], 'validated')).toMatchObject({ lifecycleStatus: 'processing_paused', canContinue: true, canCancel: true, canAbandon: false });
     expect(ACTIVE_ENCOUNTER_LIFECYCLES).toContain(EncounterLifecycleStatus.PROCESSING_PAUSED);
     expect(ACTIVE_ENCOUNTER_LIFECYCLES).not.toContain(EncounterLifecycleStatus.CANCELLED as never);
     expect(ACTIVE_ENCOUNTER_LIFECYCLES).not.toContain(EncounterLifecycleStatus.COMPLETED as never);
+  });
+
+  it('advertises abandon, never continue or cancel, when authority drift was verified', () => {
+    expect(activeEncounterSummary([{
+      encounterRef: 'drifted-ambush', lifecycleStatus: EncounterLifecycleStatus.AWAITING_INTENT, stateVersion: 3,
+    }], 'authority_drift')).toMatchObject({
+      canContinue: false, canCancel: false, canAbandon: true,
+      integrityStatus: 'authority_drift', recoveryAction: 'abandon_encounter',
+    });
   });
 
   it('fails closed instead of selecting silently when integrity exposes multiple active encounters', () => {

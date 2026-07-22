@@ -1,4 +1,5 @@
 import {
+  ActiveEffectDurationType,
   ActorStatus,
   EncounterEphemeralKind,
   EncounterLifecycleStatus,
@@ -12,6 +13,8 @@ import { NotFoundError } from '../../shared/errors/app-error.js';
 import { isExpectedUniqueConflict } from '../../shared/database/prisma-errors.js';
 import { prisma } from '../../shared/database/prisma.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
+import { loadActorReadiness } from '../actors/actor-readiness.service.js';
+import { recomputeActorDerivedSnapshot } from '../actors/actor-mechanics.service.js';
 import { validateCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
 import {
   applyCoreV1EncounterIntent,
@@ -94,6 +97,7 @@ import {
 } from './encounter-state-snapshot.js';
 import {
   parseEncounterDto,
+  type AbandonEncounterInput,
   type CancelEncounterInput,
   type ConfirmEncounterCompletionInput,
   type ContinueEncounterInput,
@@ -117,6 +121,7 @@ const idempotencyOperation = {
   continue: 'encounter.continue',
   confirm_completion: 'encounter.confirm_completion',
   cancel: 'encounter.cancel',
+  abandon: 'encounter.abandon',
   resolve_beat: 'encounter.resolve_beat',
 } as const;
 
@@ -127,8 +132,28 @@ const operationKind = {
   continue: EncounterOperationKind.CONTINUE,
   confirm_completion: EncounterOperationKind.CONFIRM_COMPLETION,
   cancel: EncounterOperationKind.CANCEL,
+  abandon: EncounterOperationKind.CANCEL,
   resolve_beat: EncounterOperationKind.SUBMIT_INTENT,
 } as const;
+
+const recoverableAuthorityDrift = new Set([
+  'ENCOUNTER_MECHANICS_DRIFT',
+  'ENCOUNTER_RESOURCE_DRIFT',
+  'ENCOUNTER_INVENTORY_DRIFT',
+  'ENCOUNTER_EFFECTS_DRIFT',
+  'ENCOUNTER_CAMPAIGN_TICK_DRIFT',
+]);
+
+function authorityFromDrift(code: EncounterError['code']): NonNullable<EncounterDto['recoverySummary']>['authority'] {
+  switch (code) {
+    case 'ENCOUNTER_MECHANICS_DRIFT': return 'mechanics';
+    case 'ENCOUNTER_RESOURCE_DRIFT': return 'resources';
+    case 'ENCOUNTER_INVENTORY_DRIFT': return 'inventory';
+    case 'ENCOUNTER_EFFECTS_DRIFT': return 'effects';
+    case 'ENCOUNTER_CAMPAIGN_TICK_DRIFT': return 'campaign_tick';
+    default: throw new EncounterError('ENCOUNTER_INTERNAL');
+  }
+}
 
 const refPattern = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -226,6 +251,7 @@ function dto(
   consequencesSummary?: EncounterConsequenceSummaryV1,
   scene?: EncounterDto['scene'],
   beatSummary?: EncounterBeatSummaryDto,
+  recoverySummary?: EncounterDto['recoverySummary'],
 ): EncounterDto {
   const binding = new Map(record.participants.map((participant) => [participant.actorRef, participant.bindingKind]));
   const nextRequiredAction = encounterNextRequiredAction(state, lifecycleStatus);
@@ -258,6 +284,7 @@ function dto(
     }),
     ...(scene === undefined ? {} : { scene }),
     ...(beatSummary === undefined ? {} : { beatSummary }),
+    ...(recoverySummary === undefined ? {} : { recoverySummary }),
   });
 }
 
@@ -861,6 +888,19 @@ export function createEncounterService(
             });
             if (actors.length !== persistedInputs.length) throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
             await lockActorAuthorities(transaction, actors.map((actor) => actor.id));
+            const protagonist = actors.find((actor) => actor.code === normalizedInput.playerRef);
+            if (protagonist !== undefined) {
+              const readiness = await loadActorReadiness(transaction, protagonist.id);
+              if (!readiness.canStartEncounter) {
+                throw new EncounterError('ENCOUNTER_PARTICIPANT_NOT_READY', {
+                  issues: readiness.blockingReasons.map((reason) => ({
+                    path: `participants.${protagonist.code}`,
+                    code: reason.toUpperCase(),
+                    message: `Complete protagonist setup: ${reason}`,
+                  })),
+                });
+              }
+            }
             const authorities = await loadPersistedEncounterAuthorities(
               transaction,
               actors.map((actor) => actor.id),
@@ -1254,6 +1294,110 @@ export function createEncounterService(
         state: coreValue(cancelCoreV1Encounter(loaded.state)),
         stopReason: null,
       }));
+    },
+
+    async abandon(input: AbandonEncounterInput): Promise<EncounterDto> {
+      validateMutationReference(input, ['confirmAuthorityDrift']);
+      if (input.confirmAuthorityDrift !== true) throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
+      try {
+        return await executeIdempotentEncounter(
+          database,
+          input.idempotencyKey,
+          idempotencyOperation.abandon,
+          withoutIdempotency(input),
+          async (transaction, idempotencyRecordId, requestHash) => {
+            const scope = await resolveScope(transaction, input);
+            const initial = await findEncounterRecord(transaction, scope.campaign.id, input.encounterRef);
+            await lockCampaign(transaction, scope.campaign.id);
+            await lockEncounter(transaction, initial.id);
+            const actorIds = initial.participants.flatMap((participant) => participant.actorId === null ? [] : [participant.actorId]);
+            await lockEncounterAuthorities(transaction, initial.id, actorIds);
+            const record = await findEncounterRecord(transaction, scope.campaign.id, input.encounterRef);
+            if (record.stateVersion !== input.expectedStateVersion) {
+              throw new EncounterError('ENCOUNTER_EXPECTED_VERSION_CONFLICT');
+            }
+            if (!ACTIVE_ENCOUNTER_LIFECYCLES.includes(record.lifecycleStatus as typeof ACTIVE_ENCOUNTER_LIFECYCLES[number])) {
+              throw new EncounterError('ENCOUNTER_LIFECYCLE_CONFLICT');
+            }
+            let drift: EncounterError | undefined;
+            try {
+              await validateLoadedEncounter(transaction, record);
+            } catch (error) {
+              if (!(error instanceof EncounterError) || !recoverableAuthorityDrift.has(error.code)) throw error;
+              drift = error;
+            }
+            if (drift === undefined) throw new EncounterError('ENCOUNTER_LIFECYCLE_CONFLICT');
+            const loaded = await validateLoadedEncounter(transaction, record, { skipCurrentAuthorities: true });
+            const participantIds = new Set(actorIds);
+            const ownedEffects = await transaction.activeEffect.findMany({
+              where: { originEncounterId: record.id },
+              select: { id: true, targetActorId: true, durationType: true },
+            });
+            if (ownedEffects.some((effect) => effect.durationType !== ActiveEffectDurationType.ENCOUNTER
+              || !participantIds.has(effect.targetActorId))) {
+              throw new EncounterError('ENCOUNTER_EFFECT_OWNERSHIP_CONFLICT');
+            }
+            if (ownedEffects.length > 0) {
+              await transaction.activeEffect.deleteMany({ where: { id: { in: ownedEffects.map((effect) => effect.id) } } });
+              for (const actorId of [...new Set(ownedEffects.map((effect) => effect.targetActorId))].sort()) {
+                await transaction.actor.update({
+                  where: { id: actorId },
+                  data: { effectsStateVersion: { increment: 1 }, mechanicsStateVersion: { increment: 1 } },
+                });
+                await recomputeActorDerivedSnapshot(transaction, actorId);
+              }
+            }
+            const failedState: CoreV1EncounterState = {
+              ...loaded.state,
+              status: 'failed',
+              stateVersion: loaded.state.stateVersion + 1,
+              completionCandidate: null,
+            };
+            const snapshot = serializeCoreV1EncounterState(failedState);
+            const stateHash = createCoreV1EncounterSnapshotHash(snapshot);
+            const stopReason = databaseStopReason('encounter_failed');
+            const updated = await transaction.encounter.updateMany({
+              where: { id: record.id, stateVersion: record.stateVersion, stateHash: record.stateHash },
+              data: {
+                lifecycleStatus: EncounterLifecycleStatus.FAILED,
+                stateVersion: failedState.stateVersion,
+                completionCandidate: null,
+                stopReason,
+                stateSnapshot: snapshot,
+                stateHash,
+                closedAt: new Date(),
+              },
+            });
+            if (updated.count !== 1) throw new EncounterError('ENCOUNTER_EXPECTED_VERSION_CONFLICT');
+            await createEncounterOperation(transaction, {
+              encounterId: record.id,
+              idempotencyRecordId,
+              operation: EncounterOperationKind.CANCEL,
+              previousStateVersion: loaded.state.stateVersion,
+              nextStateVersion: failedState.stateVersion,
+              inputHash: requestHash,
+              beforeStateHash: record.stateHash,
+              afterStateHash: stateHash,
+              stopReason,
+              resultSummary: { adapterState: loaded.adapterState } as unknown as Prisma.InputJsonValue,
+            });
+            return dto(
+              'abandon', record, failedState, EncounterLifecycleStatus.FAILED, 'encounter_failed',
+              undefined, undefined, undefined, undefined, {
+                reason: 'authority_drift',
+                authority: authorityFromDrift(drift.code),
+                actionResolved: false,
+                damageApplied: false,
+                costApplied: false,
+                rewardsGranted: false,
+                campaignReleased: true,
+              },
+            );
+          },
+        );
+      } catch (error) {
+        return translate(error);
+      }
     },
   };
 }

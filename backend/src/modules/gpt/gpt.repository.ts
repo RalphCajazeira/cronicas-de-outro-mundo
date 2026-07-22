@@ -36,6 +36,10 @@ import {
 } from './gpt.start-game.js';
 import { inspectIdempotencyRecord, isIdempotencyKeyConflict, isUniqueConflict } from './gpt.prisma-errors.js';
 import { ACTIVE_ENCOUNTER_LIFECYCLES, activeEncounterSummary } from '../encounters/encounter.types.js';
+import { assertActorsMutableOutsideEncounter } from '../encounters/encounter-authority-guard.js';
+import { loadActorReadiness } from '../actors/actor-readiness.service.js';
+import { EncounterError } from '../encounters/encounter.errors.js';
+import { findEncounterRecord, validateLoadedEncounter } from '../encounters/encounter-state-loader.js';
 
 const actorSelect = {
   id: true, code: true, name: true, actorType: true, species: true, className: true, role: true,
@@ -55,7 +59,21 @@ async function loadActiveEncounterSummary(client: DbClient, campaignId: string) 
     orderBy: { encounterRef: 'asc' },
     take: 2,
   });
-  return activeEncounterSummary(records);
+  const summary = activeEncounterSummary(records);
+  if (summary === null) return null;
+  try {
+    const record = await findEncounterRecord(client, campaignId, summary.encounterRef);
+    await validateLoadedEncounter(client, record);
+    return activeEncounterSummary(records, 'validated');
+  } catch (error) {
+    if (error instanceof EncounterError && [
+      'ENCOUNTER_MECHANICS_DRIFT', 'ENCOUNTER_RESOURCE_DRIFT', 'ENCOUNTER_INVENTORY_DRIFT',
+      'ENCOUNTER_EFFECTS_DRIFT', 'ENCOUNTER_CAMPAIGN_TICK_DRIFT',
+    ].includes(error.code)) {
+      return activeEncounterSummary(records, 'authority_drift');
+    }
+    return summary;
+  }
 }
 
 export function calculateGptRequestHash(value: unknown): string {
@@ -181,7 +199,10 @@ async function loadGameState(client: DbClient, input: LoadGameInput) {
     player: { ref: player.slug, displayName: player.displayName },
     world: { ref: world.code, name: world.name, description: world.description, metadata: world.metadata },
     campaign: { ref: campaign.code, name: campaign.name, status: normalizeEnum(campaign.status), currentTime: campaign.currentTime, metadata: campaign.metadata },
-    protagonist: protagonist === null ? null : actorDtos.get(protagonist.id) ?? null,
+    protagonist: protagonist === null ? null : {
+      ...(actorDtos.get(protagonist.id) ?? {}),
+      readiness: await loadActorReadiness(client, protagonist.id),
+    },
     mainActors: actors.filter((actor) => actor.id !== protagonist?.id).map((actor) => actorDtos.get(actor.id) ?? {}),
     linkedContent: links.map((link) => ({ actorRef: link.actor.code, ...actorContentDto(link) })),
     activeEncounter,
@@ -230,7 +251,9 @@ function worldConfiguration(metadata: Prisma.JsonValue): unknown {
 
 export const prismaGptRepository: GptRepository = {
   async loadGame(input: LoadGameInput) {
-    return loadGameState(prisma, input);
+    return prisma.$transaction((transaction) => loadGameState(transaction, input), {
+      isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+    });
   },
 
   async listPlayerWorlds(input: ListPlayerWorldsInput) {
@@ -509,6 +532,7 @@ export const prismaGptRepository: GptRepository = {
         await createActorMechanicalState(transaction, { actorId: actor.id, primaryAttributes: input.primaryAttributes });
         return actorDto(transaction, actor);
       }
+      await assertActorsMutableOutsideEncounter(transaction, campaign.id, [existing]);
       const existingSheet = await loadActorMechanicalSheet(transaction, existing.id);
       if (existing.actorType !== input.actorType.toUpperCase() || (input.level !== undefined && existing.level !== input.level)
         || !canonicalJsonEqual(existingSheet.primaryAttributes, input.primaryAttributes)) {
@@ -523,6 +547,7 @@ export const prismaGptRepository: GptRepository = {
     return executeIdempotent(input.idempotencyKey, 'actors.patch', { actorRef, ...input }, async (transaction) => {
       const { campaign } = await resolveScope(transaction, input);
       const actor = await findActor(transaction, campaign.id, actorRef);
+      await assertActorsMutableOutsideEncounter(transaction, campaign.id, [actor]);
       const updated = await transaction.actor.update({ where: { id: actor.id }, data: actorUpdateData(input), select: actorSelect });
       return actorDto(transaction, updated);
     });
@@ -585,7 +610,7 @@ export const prismaGptRepository: GptRepository = {
       }
       if (['update', 'remove'].includes(input.operation)) {
         if (link === null) throw new NotFoundError('Actor content');
-        return { actor, definition: link.contentDefinition, link };
+        return { actor, definition: link.contentDefinition, link, campaignId: campaign.id };
       }
       const definition = await findScopedContent(client, {
         worldId: world.id, campaignId: campaign.id, rulesetVersionId: campaign.rulesetVersionId,
@@ -594,14 +619,15 @@ export const prismaGptRepository: GptRepository = {
         where: { actorId_contentDefinitionId: { actorId: actor.id, contentDefinitionId: definition.id } },
         include: contentInclude,
       });
-      return { actor, definition, link: existingLink };
+      return { actor, definition, link: existingLink, campaignId: campaign.id };
     };
 
     if (['get', 'list'].includes(input.operation)) return read(prisma);
     return executeIdempotent(input.idempotencyKey ?? '', `actorContent.${input.operation}`, { actorRef, ...input }, async (transaction) => {
       const resolved = await read(transaction);
       if (Array.isArray(resolved) || !('actor' in resolved)) throw new ConflictError();
-      const { actor, definition, link } = resolved;
+      const { actor, definition, link, campaignId } = resolved;
+      await assertActorsMutableOutsideEncounter(transaction, campaignId, [actor]);
       if (input.operation === 'remove') {
         if (link === null) throw new NotFoundError('Actor content');
         await transaction.actorContent.delete({ where: { id: link.id } });

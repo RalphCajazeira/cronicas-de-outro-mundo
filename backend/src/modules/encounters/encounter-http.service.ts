@@ -4,7 +4,7 @@ import type { CoreV1EncounterParticipantRelation } from '../rules/core-v1/index.
 import { mapEncounterHttpError } from './encounter-http.errors.js';
 import { toEncounterPublicDto, type EncounterPublicDto } from './encounter-http.dto.js';
 import type {
-  CancelEncounterInput, ConfirmEncounterCompletionInput, ContinueEncounterInput, CreateEncounterInput,
+  AbandonEncounterInput, CancelEncounterInput, ConfirmEncounterCompletionInput, ContinueEncounterInput, CreateEncounterInput,
   EncounterBeatComponent, EncounterNpcDirective,
   EncounterDto, LoadEncounterInput, ResolveEncounterBeatInput, ResolveEncounterReactionInput, SubmitEncounterIntentInput,
 } from './encounter.types.js';
@@ -22,6 +22,7 @@ export interface EncounterApplicationService {
   continue(input: ContinueEncounterInput): Promise<EncounterDto>;
   confirmCompletion(input: ConfirmEncounterCompletionInput): Promise<EncounterDto>;
   cancel(input: CancelEncounterInput): Promise<EncounterDto>;
+  abandon(input: AbandonEncounterInput): Promise<EncounterDto>;
   resolveBeat(input: ResolveEncounterBeatInput): Promise<EncounterDto>;
 }
 
@@ -159,6 +160,9 @@ export function createEncounterHttpService(internal: EncounterApplicationService
         if (input.operation === 'continue') return toEncounterPublicDto(await internal.continue(reference));
         if (input.operation === 'confirm_completion') {
           return toEncounterPublicDto(await internal.confirmCompletion(reference));
+        }
+        if (input.operation === 'abandon') {
+          return toEncounterPublicDto(await internal.abandon({ ...reference, confirmAuthorityDrift: true }));
         }
         return toEncounterPublicDto(await internal.cancel(reference));
       } catch (error) {

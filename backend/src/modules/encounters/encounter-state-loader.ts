@@ -173,7 +173,9 @@ export function assertEncounterOperationChainRows(
     const expectedNamespace = `encounter.${operation.operation.toLowerCase()}`;
     const acceptedNamespaces = operation.operation === EncounterOperationKind.SUBMIT_INTENT
       ? new Set([expectedNamespace, 'encounter.resolve_beat'])
-      : new Set([expectedNamespace]);
+      : operation.operation === EncounterOperationKind.CANCEL
+        ? new Set([expectedNamespace, 'encounter.abandon'])
+        : new Set([expectedNamespace]);
     const validIdentity = operation.inputHash === operation.idempotencyRecord.requestHash
       && acceptedNamespaces.has(operation.idempotencyRecord.operation);
     const validSequence = index === 0
@@ -378,6 +380,7 @@ function validateClosedHistoricalVectors(
 export async function validateLoadedEncounter(
   transaction: EncounterTransaction,
   record: EncounterRecord,
+  options: { readonly skipCurrentAuthorities?: boolean } = {},
 ): Promise<LoadedEncounter> {
   let state: CoreV1EncounterState;
   try {
@@ -403,7 +406,7 @@ export async function validateLoadedEncounter(
     EncounterLifecycleStatus.CANCELLED,
     EncounterLifecycleStatus.FAILED,
   ]).has(record.lifecycleStatus);
-  if (!closed && record.currentTick !== record.campaign.engineTick) {
+  if (!closed && !options.skipCurrentAuthorities && record.currentTick !== record.campaign.engineTick) {
     throw new EncounterError('ENCOUNTER_CAMPAIGN_TICK_DRIFT');
   }
   const latest = record.operations[0];
@@ -444,6 +447,9 @@ export async function validateLoadedEncounter(
       authorities: new Map(),
       ...(consequencesSummary === undefined ? {} : { consequencesSummary }),
     };
+  }
+  if (options.skipCurrentAuthorities) {
+    return { record, state, adapterState, authorities: new Map() };
   }
   const versionRows = await transaction.actor.findMany({
     where: { id: { in: persistedActorIds } },

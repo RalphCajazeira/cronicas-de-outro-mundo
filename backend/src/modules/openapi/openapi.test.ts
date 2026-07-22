@@ -7,6 +7,7 @@ import {
 import { ACTIVE_API_ROUTES, getOfficialContract } from './openapi.routes.js';
 import { manageEncounterSchema } from '../encounters/encounter-http.schemas.js';
 import { manageActorInventorySchema } from '../gpt/gpt.schemas.js';
+import { coreV1ContentProfileSchema, inventorySpecSchema } from '../content/content.schemas.js';
 
 interface Operation { operationId?: string; security?: unknown; tags?: string[]; parameters?: Array<Schema & { name?: string; in?: string; required?: boolean }>; requestBody?: { content?: { 'application/json'?: { schema?: Schema; examples?: Record<string, { value?: unknown }> } } }; description?: string; responses?: Record<string, unknown> }
 interface Schema {
@@ -20,6 +21,7 @@ interface Schema {
   oneOf?: Schema[];
   additionalProperties?: boolean;
   enum?: unknown[];
+  const?: unknown;
   format?: string;
   minItems?: number;
   maxItems?: number;
@@ -38,6 +40,7 @@ interface Contract {
 
 const contract = getOfficialContract() as unknown as Contract;
 const gptInstructions = readFileSync(new URL('../../../../gpt/instructions.md', import.meta.url), 'utf8');
+const readinessKnowledge = readFileSync(new URL('../../../../gpt/knowledge/09-fichas-e-coerencia-mecanica.md', import.meta.url), 'utf8');
 const continuityKnowledge = readFileSync(new URL('../../../../gpt/knowledge/01-narrativa-e-continuidade.md', import.meta.url), 'utf8');
 const methods = new Set(['get', 'post', 'put', 'patch', 'delete']);
 
@@ -314,12 +317,12 @@ describe('official OpenAPI contract', () => {
     expect(summary).toMatchObject({
       type: 'object',
       additionalProperties: false,
-      required: ['encounterRef', 'lifecycleStatus', 'stateVersion', 'canContinue', 'canCancel', 'recoveryAction'],
+      required: ['encounterRef', 'lifecycleStatus', 'stateVersion', 'canContinue', 'canCancel', 'canAbandon', 'integrityStatus', 'recoveryAction'],
     });
     expect(summary?.properties?.lifecycleStatus?.enum).toEqual([
       'awaiting_intent', 'awaiting_reaction', 'processing_paused', 'completion_pending',
     ]);
-    expect(summary?.properties?.recoveryAction?.enum).toEqual(['load_encounter']);
+    expect(summary?.properties?.recoveryAction?.enum).toEqual(['load_encounter', 'abandon_encounter', 'stop_encounter_flow']);
     expect(JSON.stringify(summary)).not.toMatch(/campaignId|encounterId|rulesetVersionId|stateHash|snapshot/i);
   });
 
@@ -330,7 +333,7 @@ describe('official OpenAPI contract', () => {
     expect(gptInstructions).toContain('Para carregar, continuar ou mostrar o personagem atual');
     expect(continuityKnowledge).toContain('“Mostre meus mundos e campanhas” lista Worlds e suas Campaigns');
     expect(continuityKnowledge).toContain('“Quero continuar jogando” descobre o escopo e usa `loadGame`');
-    expect(gptInstructions).toContain('`loadGame.activeEncounter` é a única descoberta de encontro ativo');
+    expect(gptInstructions).toContain('Descubra encontro ativo só por `loadGame.activeEncounter`');
     expect(gptInstructions).toContain('Nunca invente `encounterRef`');
     expect(gptInstructions).toContain('crie outro encontro enquanto `activeEncounter` existir');
     expect(continuityKnowledge).toContain('o estado completo só se torna autoritativo depois de `manageEncounter load`');
@@ -348,6 +351,23 @@ describe('official OpenAPI contract', () => {
     expect(continuityKnowledge).toContain('“Quero começar uma nova aventura” pode iniciar a criação');
     expect(continuityKnowledge).toContain('ofereça criar uma aventura e aguarde aceitação explícita');
     expect(continuityKnowledge).not.toContain('trate o resultado como início de novo jogo');
+  });
+
+  it('keeps quick creation bounded and publishes mechanically valid starter blueprints', () => {
+    expect(gptInstructions).toContain('Criação Rápida faz 3–5 perguntas essenciais (máximo 5');
+    expect(gptInstructions).toContain('uma ação inicial utilizável');
+    const blueprints = [...readinessKnowledge.matchAll(/```json\s*([\s\S]*?)```/g)]
+      .map((match) => JSON.parse(match[1] as string) as { profile: unknown; inventorySpec?: unknown });
+    expect(blueprints).toHaveLength(5);
+    for (const blueprint of blueprints) {
+      const profile = coreV1ContentProfileSchema.safeParse(blueprint.profile);
+      expect(profile.success, profile.success ? '' : JSON.stringify(profile.error.issues)).toBe(true);
+      if (blueprint.inventorySpec !== undefined) {
+        expect(inventorySpecSchema.safeParse(blueprint.inventorySpec).success).toBe(true);
+      }
+    }
+    expect(readinessKnowledge).toContain('`body` ocupa traje/armadura de corpo inteiro');
+    expect(readinessKnowledge).toContain('`chest` é reservado a peitoral');
   });
 
   it('uses closed request objects and lowercase public enums', () => {
@@ -391,13 +411,13 @@ describe('official OpenAPI contract', () => {
     const schema = resolveSchema(operation?.requestBody?.content?.['application/json']?.schema);
     expect(schema.additionalProperties).toBe(false);
     expect(schema.properties?.operation?.enum).toEqual([
-      'create', 'load', 'resolve_beat', 'submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel',
+      'create', 'load', 'resolve_beat', 'submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel', 'abandon',
     ]);
-    expect(schema.allOf).toHaveLength(6);
+    expect(schema.allOf).toHaveLength(7);
     expect(schema.properties?.intent?.oneOf).toHaveLength(2);
     const examples = operation?.requestBody?.content?.['application/json']?.examples ?? {};
     expect(Object.keys(examples).sort()).toEqual([
-      'cancel', 'confirm_completion', 'continue', 'create', 'load',
+      'abandon', 'cancel', 'confirm_completion', 'continue', 'create', 'load',
       'resolve_beat_after_component_limit', 'resolve_beat_after_component_rejection',
       'resolve_beat_attack', 'resolve_beat_cast', 'resolve_beat_idempotent_replay',
       'resolve_beat_impossible', 'resolve_beat_move_protect_prepare', 'resolve_beat_npc_limit',
@@ -408,6 +428,41 @@ describe('official OpenAPI contract', () => {
     expect(intent?.required).toContain('targetSelector');
     expect(intent?.properties).toHaveProperty('targetSelector');
     expect(intent?.properties).not.toHaveProperty('selector');
+  });
+
+  it('keeps confirmAuthorityDrift required only for abandon in both OpenAPI and Zod', () => {
+    const operation = operations().find((item) => item.operation.operationId === 'manageEncounter')?.operation;
+    const schema = resolveSchema(operation?.requestBody?.content?.['application/json']?.schema);
+    const examples = operation?.requestBody?.content?.['application/json']?.examples ?? {};
+    const operationNames = [
+      'create', 'load', 'submit_intent', 'resolve_beat', 'resolve_reaction',
+      'continue', 'confirm_completion', 'cancel', 'abandon',
+    ] as const;
+    for (const operationName of operationNames) {
+      const rule = schema.allOf?.find((candidate) => {
+        const discriminator = candidate.if?.properties?.operation;
+        return discriminator?.const === operationName || discriminator?.enum?.includes(operationName) === true;
+      });
+      expect(rule, operationName).toBeDefined();
+      const requiresConfirmation = rule?.then?.required?.includes('confirmAuthorityDrift') === true;
+      const prohibitsConfirmation = rule?.then?.allOf?.some((candidate) => (
+        candidate.not?.required?.includes('confirmAuthorityDrift') === true
+      )) === true;
+      expect({ requiresConfirmation, prohibitsConfirmation }, operationName).toEqual(operationName === 'abandon'
+        ? { requiresConfirmation: true, prohibitsConfirmation: false }
+        : { requiresConfirmation: false, prohibitsConfirmation: true });
+
+      const example = Object.values(examples).find(({ value }) => (
+        (value as { operation?: unknown } | undefined)?.operation === operationName
+      ))?.value as Record<string, unknown> | undefined;
+      expect(example, operationName).toBeDefined();
+      if (example === undefined) continue;
+      const withConfirmation = { ...example, confirmAuthorityDrift: true };
+      const withoutConfirmation = { ...example };
+      delete withoutConfirmation.confirmAuthorityDrift;
+      expect(manageEncounterSchema.safeParse(withConfirmation).success, `${operationName}:with`).toBe(operationName === 'abandon');
+      expect(manageEncounterSchema.safeParse(withoutConfirmation).success, `${operationName}:without`).toBe(operationName !== 'abandon');
+    }
   });
 
   it('keeps encounter request and response schemas closed, bounded and free of internal fields', () => {
@@ -426,8 +481,20 @@ describe('official OpenAPI contract', () => {
     expect(contract.components.schemas.EncounterBeatSummary?.properties?.npcActions?.maxItems).toBe(4);
     expect(contract.components.schemas.EncounterBeatSummary?.properties?.npcResults?.maxItems).toBe(4);
     expect(contract.components.schemas.ManageEncounterInput?.properties?.npcDirectives?.maxItems).toBe(16);
+    expect(contract.components.schemas.ActorReadiness?.properties?.blockingReasons?.maxItems).toBe(8);
+    expect(contract.components.schemas.ActorReadiness?.properties?.blockingReasons?.items?.enum).toEqual([
+      'actor_not_active', 'hp_depleted', 'no_usable_starter_action',
+      'starter_action_resource_insufficient', 'starter_action_cost_unsupported',
+      'starter_action_requirements_unmet', 'starter_action_targeting_unsupported',
+      'mechanical_content_incomplete',
+    ]);
     expect(contract.components.schemas.EncounterNextRequiredAction?.properties?.actors?.minItems).toBe(1);
     expect(contract.components.schemas.EncounterResult?.properties?.participants?.minItems).toBe(1);
+    expect(contract.components.schemas.EncounterResult?.required).toContain('operation');
+    expect(contract.components.schemas.EncounterResult?.allOf).toHaveLength(2);
+    expect(contract.components.schemas.EncounterResult?.properties?.operation?.enum).toEqual([
+      'create', 'load', 'resolve_beat', 'submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel', 'abandon',
+    ]);
     expect(contract.components.schemas.EncounterTransitionSummary?.properties?.events?.minItems).toBe(1);
     expect(contract.components.schemas.EncounterConsequencesSummary).toMatchObject({
       type: 'object', additionalProperties: false,
@@ -437,6 +504,13 @@ describe('official OpenAPI contract', () => {
     expect(contract.components.schemas.EncounterConsequencesSummary?.properties?.removedEncounterEffects?.maxItems).toBe(64);
     expect(contract.components.schemas.EncounterResult?.properties?.consequencesSummary)
       .toEqual({ '$ref': '#/components/schemas/EncounterConsequencesSummary' });
+    expect(contract.components.schemas.EncounterResult?.properties?.recoverySummary)
+      .toEqual({ '$ref': '#/components/schemas/EncounterRecoverySummary' });
+    expect(contract.components.schemas.EncounterRecoverySummary).toMatchObject({
+      type: 'object', additionalProperties: false,
+      required: ['reason', 'authority', 'actionResolved', 'damageApplied', 'costApplied', 'rewardsGranted', 'campaignReleased'],
+    });
+    expect(JSON.stringify(contract.components.schemas.EncounterResult?.allOf)).toContain('recoverySummary');
     expect(contract.components.schemas.EncounterResult?.properties?.scene)
       .toEqual({ '$ref': '#/components/schemas/EncounterScenePackage' });
     expect(contract.components.schemas.EncounterResult?.properties?.beatSummary)

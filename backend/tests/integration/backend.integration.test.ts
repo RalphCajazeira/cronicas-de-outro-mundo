@@ -9,6 +9,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   ActorContentState,
   ActorEquipmentSlotRef,
+  ActorResourceType,
   ActorType,
   CampaignStatus,
   ContentStatus,
@@ -35,6 +36,7 @@ import { prismaReadinessCheck } from '../../src/modules/health/health.repository
 import { createEncounterService, encounterService } from '../../src/modules/encounters/encounter.service.js';
 import { RecordingEncounterRollProvider } from '../../src/modules/encounters/encounter-roll-provider.js';
 import { createEncounterHttpService } from '../../src/modules/encounters/encounter-http.service.js';
+import { ACTIVE_ENCOUNTER_LIFECYCLES } from '../../src/modules/encounters/encounter.types.js';
 import { getOfficialContract } from '../../src/modules/openapi/openapi.routes.js';
 import { lockActorAuthorities } from '../../src/modules/encounters/encounter.repository.js';
 import {
@@ -417,7 +419,18 @@ async function createEncounterFixture(
   return { rulesetVersion, player, world, campaign, actor, encounter };
 }
 
-async function createBeatNpcFixture(suffix: string, npcCount: number) {
+interface BeatFixtureSetupContext {
+  readonly world: { readonly id: string; readonly code: string };
+  readonly campaign: { readonly id: string; readonly code: string };
+  readonly hero: { readonly id: string; readonly code: string; readonly inventoryStateVersion: number };
+  readonly scope: { readonly playerRef: string; readonly worldRef: string; readonly campaignRef: string };
+}
+
+async function createBeatNpcFixture(
+  suffix: string,
+  npcCount: number,
+  beforeEncounter?: (context: BeatFixtureSetupContext) => Promise<void>,
+) {
   const rulesetVersion = await prisma.$transaction((transaction) => ensureCoreV1RulesetVersion(transaction));
   const player = await prisma.player.create({
     data: { slug: `beat-${suffix}-player`, displayName: `Beat ${suffix} Player` },
@@ -435,7 +448,7 @@ async function createBeatNpcFixture(suffix: string, npcCount: number) {
     },
   });
   const heroRef = `beat-${suffix}-hero`;
-  await createMechanicalActor({
+  const hero = await createMechanicalActor({
     campaignId: campaign.id, code: heroRef, name: `Beat ${suffix} Hero`, actorType: ActorType.CHARACTER,
   });
   const npcRefs: string[] = [];
@@ -449,6 +462,7 @@ async function createBeatNpcFixture(suffix: string, npcCount: number) {
     npcRefs.push(actorRef);
   }
   const scope = { playerRef: player.slug, worldRef: world.code, campaignRef: campaign.code };
+  await beforeEncounter?.({ world, campaign, hero, scope });
   const encounterRef = `beat-${suffix}-encounter`;
   const participants = [
     { bindingKind: 'persisted_actor' as const, actorRef: heroRef, sideRef: 'party', zone: 'near' as const },
@@ -469,7 +483,7 @@ async function createBeatNpcFixture(suffix: string, npcCount: number) {
     ...scope, encounterRef, idempotencyKey: `beat-${suffix}-create`, partySideRef: 'party',
     participants, relations,
   });
-  return { scope, encounterRef, heroRef, npcRefs, created };
+  return { scope, encounterRef, heroRef, npcRefs, created, world, campaign, hero };
 }
 
 afterAll(async () => {
@@ -1879,6 +1893,139 @@ describe('Phase 1L-B transactional encounter adapter', () => {
     ])).resolves.toHaveLength(2);
   });
 
+  it('blocks external authority writes and abandons confirmed drift without resolution or rewards', async () => {
+    const encounterRef = 'phase-authority-drift-recovery';
+    const created = await encounterService.create({
+      ...seedScope, encounterRef, idempotencyKey: 'phase-authority-drift-create', partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'near' },
+        { bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'hostile', zone: 'near' },
+      ],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+      ],
+    });
+    const actor = await prisma.actor.findFirstOrThrow({
+      where: { code: 'ralph', campaign: { code: seedScope.campaignRef } },
+      include: { resources: { orderBy: { type: 'asc' } } },
+    });
+    const before = { xp: actor.xp, gold: actor.gold, resources: actor.resources.map((resource) => ({ type: resource.type, current: resource.current })) };
+    const campaign = await prisma.campaign.findFirstOrThrow({ where: { code: seedScope.campaignRef, world: { code: seedScope.worldRef } } });
+    const eventCount = await prisma.gameEvent.count({ where: { campaignId: campaign.id } });
+    await prisma.campaign.update({ where: { id: campaign.id }, data: { engineTick: { increment: 1n } } });
+    try {
+      await expect(prismaGptRepository.patchActor('ralph', {
+        ...seedScope, idempotencyKey: 'phase-authority-drift-patch', description: 'must-not-persist',
+      })).rejects.toMatchObject({ code: 'ACTOR_ENCOUNTER_LOCKED', recoveryAction: 'finish_or_abandon_encounter' });
+      const game = await prismaGptRepository.loadGame(seedScope);
+      expect((game as Record<string, unknown>).activeEncounter).toMatchObject({
+        encounterRef, canContinue: false, canCancel: false, canAbandon: true,
+        integrityStatus: 'authority_drift', recoveryAction: 'abandon_encounter',
+      });
+      await expect(encounterService.cancel({
+        ...seedScope, encounterRef, idempotencyKey: 'phase-authority-drift-cancel', expectedStateVersion: created.stateVersion,
+      })).rejects.toMatchObject({ code: 'ENCOUNTER_CAMPAIGN_TICK_DRIFT' });
+      const input = {
+        operation: 'abandon' as const, ...seedScope, encounterRef, idempotencyKey: 'phase-authority-drift-abandon',
+        expectedStateVersion: created.stateVersion, confirmAuthorityDrift: true as const,
+      };
+      const beatInput = {
+        operation: 'resolve_beat' as const, ...seedScope, encounterRef,
+        idempotencyKey: 'phase-authority-drift-beat-race', expectedStateVersion: created.stateVersion,
+        intent: {
+          actorRef: 'ralph', objective: 'hold_position', narrative: 'Ralph mantém posição.',
+          resolutionPolicy: 'atomic' as const, components: [{ type: 'move' as const, destination: 'medium' as const }],
+        },
+        npcDirectives: [{ actorRef: 'lyra', strategy: 'aggressive' as const }],
+      };
+      const race = await Promise.allSettled([
+        dependencies.encounterHttpService.manage(beatInput),
+        dependencies.encounterHttpService.manage(input),
+      ]);
+      expect(race.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+      expect(race[0]).toMatchObject({ status: 'rejected' });
+      if (race[0]?.status !== 'rejected') throw new Error('resolve_beat must lose the abandon race');
+      const rejectedReason: unknown = race[0].reason;
+      if (rejectedReason === null || typeof rejectedReason !== 'object') throw new Error('Race rejection must expose a safe code');
+      expect(['ENCOUNTER_AUTHORITY_DRIFT', 'STATE_VERSION_CONFLICT'])
+        .toContain((rejectedReason as { code?: unknown }).code);
+      expect(race[1]).toMatchObject({ status: 'fulfilled' });
+      const winner = race.find((attempt) => attempt.status === 'fulfilled');
+      if (winner?.status !== 'fulfilled') throw new Error('Abandon race winner is required');
+      const abandoned = winner.value;
+      expect(abandoned).toEqual({
+        result: 'encounter_abandoned', operation: 'abandon', lifecycleStatus: 'failed', stopReason: 'encounter_failed',
+        encounterRef, stateVersion: created.stateVersion + 1, currentTick: created.currentTick,
+        completionCandidate: null, participants: created.participants, nextRequiredAction: { type: 'none' },
+        recoverySummary: {
+          reason: 'authority_drift', authority: 'campaign_tick', actionResolved: false,
+          damageApplied: false, costApplied: false, rewardsGranted: false, campaignReleased: true,
+        },
+      });
+      expect(abandoned).not.toHaveProperty('consequencesSummary');
+      expect(abandoned).not.toHaveProperty('transitionSummary');
+      expect(abandoned).not.toHaveProperty('beatSummary');
+      await expect(dependencies.encounterHttpService.manage(input)).resolves.toEqual(abandoned);
+      await expect(prisma.idempotencyRecord.count({ where: { key: `encounter:${input.idempotencyKey}` } })).resolves.toBe(1);
+      await expect(prisma.idempotencyRecord.count({ where: { key: `encounter:${beatInput.idempotencyKey}` } })).resolves.toBe(0);
+      await expect(prismaGptRepository.loadGame(seedScope)).resolves.toMatchObject({ activeEncounter: null });
+      const persisted = await prisma.encounter.findFirstOrThrow({
+        where: { campaignId: campaign.id, encounterRef },
+        include: { consequence: true, operations: { orderBy: { nextStateVersion: 'desc' }, take: 1, include: { idempotencyRecord: true } } },
+      });
+      expect(persisted).toMatchObject({ lifecycleStatus: EncounterLifecycleStatus.FAILED, consequence: null });
+      expect(persisted.operations[0]).toMatchObject({
+        operation: EncounterOperationKind.CANCEL,
+        idempotencyRecord: { operation: 'encounter.abandon' },
+      });
+      await expect(prisma.encounterOperation.count({
+        where: {
+          encounterId: persisted.id,
+          operation: EncounterOperationKind.CANCEL,
+          idempotencyRecord: { operation: 'encounter.abandon' },
+        },
+      })).resolves.toBe(1);
+      const after = await prisma.actor.findUniqueOrThrow({
+        where: { id: actor.id }, include: { resources: { orderBy: { type: 'asc' } } },
+      });
+      expect({ xp: after.xp, gold: after.gold, resources: after.resources.map((resource) => ({ type: resource.type, current: resource.current })) })
+        .toEqual(before);
+      await expect(prisma.gameEvent.count({ where: { campaignId: campaign.id } })).resolves.toBe(eventCount);
+
+      const reopened = await encounterService.create({
+        ...seedScope, encounterRef: 'phase-authority-drift-reopened', idempotencyKey: 'phase-authority-drift-reopened-create',
+        partySideRef: 'party',
+        participants: [
+          { bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'near' },
+          { bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'hostile', zone: 'near' },
+        ],
+        relations: [
+          { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' },
+          { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+          { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+        ],
+      });
+      await expect(encounterService.cancel({
+        ...seedScope, encounterRef: reopened.encounterRef, idempotencyKey: 'phase-authority-drift-reopened-cancel',
+        expectedStateVersion: reopened.stateVersion,
+      })).resolves.toMatchObject({ lifecycleStatus: 'cancelled' });
+    } finally {
+      await prisma.campaign.update({ where: { id: campaign.id }, data: { engineTick: campaign.engineTick } });
+      const open = await prisma.encounter.findFirst({
+        where: { campaignId: campaign.id, encounterRef, lifecycleStatus: { in: [...ACTIVE_ENCOUNTER_LIFECYCLES] } },
+        select: { stateVersion: true },
+      });
+      if (open !== null) {
+        await encounterService.cancel({
+          ...seedScope, encounterRef, idempotencyKey: 'phase-authority-drift-emergency-cancel',
+          expectedStateVersion: open.stateVersion,
+        });
+      }
+    }
+  });
+
   it('confirms a valid completion with an auditable consequence while preserving a legacy unowned effect', async () => {
     const encounterScopedEffect = await prisma.activeEffect.findFirstOrThrow({
       where: {
@@ -2258,6 +2405,65 @@ describe('Phase 1L-B transactional encounter adapter', () => {
     await expect(prisma.activeEffect.findUnique({ where: { id: protectedLegacyEffect.id } })).resolves.not.toBeNull();
     await expect(prisma.effectResolution.count({ where: { idempotencyKey: 'phase-1m-a-outside-remove-effect' } }))
       .resolves.toBe(0);
+
+    const recoveryRef = 'phase-1m-a-owned-effect-recovery';
+    const recoveryCreated = await encounterService.create({
+      ...seedScope, encounterRef: recoveryRef, idempotencyKey: 'phase-1m-a-owned-effect-recovery-create',
+      partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'near' },
+        { bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'hostile', zone: 'near' },
+      ],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+      ],
+    });
+    const recoveryReady = await encounterService.continue({
+      ...seedScope, encounterRef: recoveryRef, idempotencyKey: 'phase-1m-a-owned-effect-recovery-ready',
+      expectedStateVersion: recoveryCreated.stateVersion,
+    });
+    const recoverySubmitted = await encounterService.submitIntent({
+      ...seedScope, encounterRef: recoveryRef, idempotencyKey: 'phase-1m-a-owned-effect-recovery-submit',
+      expectedStateVersion: recoveryReady.stateVersion,
+      intent: {
+        intentRef: 'phase-1m-a-owned-effect-recovery-intent', sourceActorRef: 'ralph', slotRef: 'primary',
+        actionSource: 'content', targetSelector: 'explicit', requestedTargetRefs: ['ralph'],
+        contentRef: { scope: 'campaign', contentType: 'spell', code: spell.code, versionNumber: spellVersion.versionNumber },
+      },
+    });
+    const recoveryResolved = await encounterService.continue({
+      ...seedScope, encounterRef: recoveryRef, idempotencyKey: 'phase-1m-a-owned-effect-recovery-resolve',
+      expectedStateVersion: recoverySubmitted.stateVersion,
+    });
+    const recoveryEncounter = await prisma.encounter.findFirstOrThrow({ where: { encounterRef: recoveryRef } });
+    const recoveryEffect = await prisma.activeEffect.findFirstOrThrow({
+      where: { targetActorId: actor.id, originEncounterId: recoveryEncounter.id },
+    });
+    const beforeRecovery = await prisma.actor.findUniqueOrThrow({
+      where: { id: actor.id }, include: { resources: { orderBy: { type: 'asc' } } },
+    });
+    const recoveryCampaign = await prisma.campaign.findUniqueOrThrow({ where: { id: actor.campaignId } });
+    await prisma.campaign.update({ where: { id: recoveryCampaign.id }, data: { engineTick: { increment: 1n } } });
+    try {
+      const abandoned = await encounterService.abandon({
+        ...seedScope, encounterRef: recoveryRef, idempotencyKey: 'phase-1m-a-owned-effect-recovery-abandon',
+        expectedStateVersion: recoveryResolved.stateVersion, confirmAuthorityDrift: true,
+      });
+      expect(abandoned).toMatchObject({ operation: 'abandon', lifecycleStatus: 'failed', stopReason: 'encounter_failed' });
+    } finally {
+      await prisma.campaign.update({ where: { id: recoveryCampaign.id }, data: { engineTick: recoveryCampaign.engineTick } });
+    }
+    await expect(prisma.activeEffect.findUnique({ where: { id: recoveryEffect.id } })).resolves.toBeNull();
+    await expect(prisma.encounterConsequence.count({ where: { encounterId: recoveryEncounter.id } })).resolves.toBe(0);
+    await expect(prisma.gameEvent.count({ where: { idempotencyKey: `encounter-outcome:${recoveryEncounter.id}:v1` } })).resolves.toBe(0);
+    const afterRecovery = await prisma.actor.findUniqueOrThrow({
+      where: { id: actor.id }, include: { resources: { orderBy: { type: 'asc' } } },
+    });
+    expect(afterRecovery.effectsStateVersion).toBe(beforeRecovery.effectsStateVersion + 1);
+    expect(afterRecovery.resources.map((resource) => ({ type: resource.type, current: resource.current })))
+      .toEqual(beforeRecovery.resources.map((resource) => ({ type: resource.type, current: resource.current })));
   });
 
   it('blocks partial legacy closure, rejects ineligible entrants and serializes competing terminal writes', async () => {
@@ -3639,6 +3845,200 @@ describe('GPT v1 persistence with real transactions', () => {
     expect(responseErrorMessage(arrayOrderConflict)).toBe('Idempotency key already used');
   });
 
+  it('carries a valid starter package through readiness, load and the first resolved beat', async () => {
+    const template = structuredStart('readiness-vertical-valid');
+    const cosmetic = {
+      definition: {
+        mode: 'create', scope: 'world', contentType: 'clothing', code: 'travel-cloak', name: 'Manto de Viagem',
+        description: 'Cosmético narrativo sem autoridade mecânica.',
+        profile: canonicalProfile('clothing', 'travel-cloak', 'Manto de Viagem'),
+        inventorySpec: uniqueInventorySpec(1),
+        presentation: {}, tags: ['cosmetic'], status: 'active', metadata: {},
+      },
+      protagonistLink: { state: 'known', rank: 0, progress: 0, mastery: 0, metadata: {} },
+    };
+    const body = { ...template, initialContentPackages: [...template.initialContentPackages, cosmetic] };
+    const started = await post('/api/v1/game/start', body);
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    expect(started.body).toMatchObject({
+      protagonist: {
+        readiness: {
+          status: 'ready', canStartEncounter: true, blockingReasons: [], narrativeContentCount: 1,
+          usableActions: [{ source: 'equipped_weapon', ref: 'longbow-1', action: 'attack' }],
+        },
+      },
+    });
+
+    const scope = { playerRef: body.playerRef, worldRef: body.worldRef, campaignRef: body.campaignRef };
+    const loaded = await post('/api/v1/game/load', scope);
+    expect(loaded.status).toBe(200);
+    const startedProtagonist = bodyRecord({ body: bodyRecord(started).protagonist });
+    expect(loaded.body).toMatchObject({ protagonist: { readiness: startedProtagonist.readiness } });
+
+    const enemyRef = 'readiness-vertical-valid-enemy';
+    const enemy = await post('/api/v1/actors/upsert', {
+      ...scope, idempotencyKey: 'readiness-vertical-valid-enemy-upsert', code: enemyRef,
+      name: 'Sentinela de Treino', actorType: 'creature', level: 1, primaryAttributes: balancedPrimaryAttributes,
+    });
+    expect(enemy.status).toBe(200);
+    const encounterRef = 'readiness-vertical-valid-encounter';
+    const created = await post('/api/v1/encounters/manage', {
+      ...scope, operation: 'create', encounterRef, idempotencyKey: 'readiness-vertical-valid-create', partySideRef: 'party',
+      participants: [
+        { actorRef: body.playerRef, sideRef: 'party', zone: 'near' },
+        { actorRef: enemyRef, sideRef: 'hostile', zone: 'near' },
+      ],
+    });
+    expect(created.status).toBe(200);
+    expect(created.body).toMatchObject({ operation: 'create', result: 'encounter_created' });
+    const createdStateVersion = bodyRecord(created).stateVersion;
+    if (typeof createdStateVersion !== 'number') throw new Error('Vertical encounter stateVersion must be numeric');
+    let cleanupStateVersion = createdStateVersion;
+    try {
+      const resolved = await post('/api/v1/encounters/manage', {
+        ...scope, operation: 'resolve_beat', encounterRef, idempotencyKey: 'readiness-vertical-valid-resolve',
+        expectedStateVersion: createdStateVersion,
+        intent: {
+          actorRef: body.playerRef, objective: 'test_the_starter_weapon', narrative: 'O herói testa seu arco contra a sentinela.',
+          resolutionPolicy: 'atomic',
+          components: [{ type: 'attack', inventoryEntryRef: 'longbow-1', targetRefs: [enemyRef] }],
+        },
+        npcDirectives: [{ actorRef: enemyRef, strategy: 'defensive' }],
+      });
+      expect(resolved.status).toBe(200);
+      expect(resolved.body).toMatchObject({
+        operation: 'resolve_beat', result: 'beat_resolved',
+        beatSummary: { componentResults: [{ index: 0, type: 'attack', status: 'accepted' }] },
+      });
+      const resolvedStateVersion = bodyRecord(resolved).stateVersion;
+      if (typeof resolvedStateVersion !== 'number') throw new Error('Resolved vertical stateVersion must be numeric');
+      cleanupStateVersion = resolvedStateVersion;
+    } finally {
+      const cancelled = await post('/api/v1/encounters/manage', {
+        ...scope, operation: 'cancel', encounterRef, idempotencyKey: 'readiness-vertical-valid-cleanup',
+        expectedStateVersion: cleanupStateVersion,
+      });
+      expect(cancelled.status).toBe(200);
+    }
+  });
+
+  it('blocks encounter creation when the protagonist has only narrative cosmetics', async () => {
+    const template = structuredStart('readiness-vertical-narrative');
+    const cosmetic = {
+      definition: {
+        mode: 'create', scope: 'world', contentType: 'clothing', code: 'ceremonial-scarf', name: 'Faixa Cerimonial',
+        description: 'Cosmético narrativo.', profile: canonicalProfile('clothing', 'ceremonial-scarf', 'Faixa Cerimonial'),
+        inventorySpec: uniqueInventorySpec(1),
+        presentation: {}, tags: ['cosmetic'], status: 'active', metadata: {},
+      },
+      protagonistLink: { state: 'known', rank: 0, progress: 0, mastery: 0, metadata: {} },
+    };
+    const body = { ...template, initialContentPackages: [cosmetic], initialInventory: [] };
+    const started = await post('/api/v1/game/start', body);
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    expect(started.body).toMatchObject({
+      protagonist: { readiness: {
+        status: 'narrative_only', canStartEncounter: false,
+        blockingReasons: ['no_usable_starter_action'], narrativeContentCount: 1, usableActions: [],
+      } },
+    });
+    const scope = { playerRef: body.playerRef, worldRef: body.worldRef, campaignRef: body.campaignRef };
+    const enemyRef = 'readiness-vertical-narrative-enemy';
+    await post('/api/v1/actors/upsert', {
+      ...scope, idempotencyKey: 'readiness-vertical-narrative-enemy-upsert', code: enemyRef,
+      name: 'Oponente Narrativo', actorType: 'creature', level: 1, primaryAttributes: balancedPrimaryAttributes,
+    });
+    const encounterRef = 'readiness-vertical-narrative-encounter';
+    const rejected = await post('/api/v1/encounters/manage', {
+      ...scope, operation: 'create', encounterRef, idempotencyKey: 'readiness-vertical-narrative-create', partySideRef: 'party',
+      participants: [
+        { actorRef: body.playerRef, sideRef: 'party', zone: 'near' },
+        { actorRef: enemyRef, sideRef: 'hostile', zone: 'near' },
+      ],
+    });
+    expect(rejected.status).toBe(422);
+    expect(rejected.body).toMatchObject({ error: {
+      code: 'CHARACTER_NOT_READY', retryable: false, recoveryAction: 'complete_character_setup',
+      issues: [expect.objectContaining({ code: 'NO_USABLE_STARTER_ACTION' })],
+    } });
+    expect(JSON.stringify(rejected.body)).not.toMatch(/actorId|campaignId|contentVersionId|stateHash/i);
+    await expect(prisma.encounter.count({ where: { encounterRef } })).resolves.toBe(0);
+    await expect(prisma.idempotencyRecord.count({ where: { key: 'encounter:readiness-vertical-narrative-create' } })).resolves.toBe(0);
+  });
+
+  it('uses current Mana to block a mechanically valid sole starter spell', async () => {
+    const template = structuredStart('readiness-vertical-mana');
+    const spellCode = 'starter-firebolt';
+    const spellProfile = {
+      ...activeProfile('spell', spellCode, 'Seta de Fogo'),
+      cost: { type: 'mana' as const, amount: 8 },
+      effects: [{
+        type: 'damage' as const,
+        targeting: { type: 'single_target' as const, rangeBand: 'near' as const, maxTargets: 1 },
+        damageComponents: [{
+          id: 'starter-firebolt-fire', channel: 'magical' as const, element: 'fire', baseDamage: 6,
+          scaling: 'full' as const, canCrit: true,
+        }],
+      }],
+    };
+    const spell = {
+      definition: {
+        mode: 'create', scope: 'world', contentType: 'spell', code: spellCode, name: 'Seta de Fogo',
+        description: 'Magia inicial válida com custo de Mana.', profile: spellProfile,
+        presentation: {}, tags: ['starter'], status: 'active', metadata: {},
+      },
+      protagonistLink: { state: 'known', rank: 0, progress: 0, mastery: 0, metadata: {} },
+    };
+    const body = { ...template, initialContentPackages: [spell], initialInventory: [] };
+    const started = await post('/api/v1/game/start', body);
+    expect(started.status).toBe(200);
+    expect(started.body).toMatchObject({ protagonist: { readiness: {
+      status: 'ready', canStartEncounter: true,
+      usableActions: [{ source: 'known_content', ref: spellCode, action: 'cast' }],
+    } } });
+    const actor = await prisma.actor.findFirstOrThrow({
+      where: { code: body.playerRef, campaign: { code: body.campaignRef, world: { code: body.worldRef } } },
+    });
+    await prisma.$transaction([
+      prisma.actorResource.update({
+        where: { actorId_type: { actorId: actor.id, type: ActorResourceType.MANA } },
+        data: { current: 7, stateVersion: { increment: 1 } },
+      }),
+    ]);
+    const scope = { playerRef: body.playerRef, worldRef: body.worldRef, campaignRef: body.campaignRef };
+    const loaded = await post('/api/v1/game/load', scope);
+    expect(loaded.status, JSON.stringify(loaded.body)).toBe(200);
+    expect(loaded.body).toMatchObject({ protagonist: { readiness: {
+      status: 'blocked', canStartEncounter: false, usableActions: [], incompleteContentRefs: [],
+      blockingReasons: ['no_usable_starter_action', 'starter_action_resource_insufficient'],
+    } } });
+    const enemyRef = 'readiness-vertical-mana-enemy';
+    await post('/api/v1/actors/upsert', {
+      ...scope, idempotencyKey: 'readiness-vertical-mana-enemy-upsert', code: enemyRef,
+      name: 'Alvo da Magia', actorType: 'creature', level: 1, primaryAttributes: balancedPrimaryAttributes,
+    });
+    const encounterRef = 'readiness-vertical-mana-encounter';
+    const rejected = await post('/api/v1/encounters/manage', {
+      ...scope, operation: 'create', encounterRef, idempotencyKey: 'readiness-vertical-mana-create', partySideRef: 'party',
+      participants: [
+        { actorRef: body.playerRef, sideRef: 'party', zone: 'near' },
+        { actorRef: enemyRef, sideRef: 'hostile', zone: 'near' },
+      ],
+    });
+    expect(rejected.status).toBe(422);
+    const publicError = bodyRecord({ body: bodyRecord(rejected).error });
+    expect(publicError).toMatchObject({
+      code: 'CHARACTER_NOT_READY', retryable: false, recoveryAction: 'complete_character_setup',
+    });
+    expect(publicError.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'NO_USABLE_STARTER_ACTION' }),
+      expect.objectContaining({ code: 'STARTER_ACTION_RESOURCE_INSUFFICIENT' }),
+    ]));
+    expect(JSON.stringify(rejected.body)).not.toMatch(/actorId|campaignId|contentVersionId|stateHash|current.*7/i);
+    await expect(prisma.encounter.count({ where: { encounterRef } })).resolves.toBe(0);
+    await expect(prisma.idempotencyRecord.count({ where: { key: 'encounter:readiness-vertical-mana-create' } })).resolves.toBe(0);
+  });
+
   it('starts with one-handed weapon, shield and potion stacks without creating ActorContent ownership', async () => {
     const body = structuredStart('inventory-start');
     const dagger = {
@@ -4865,6 +5265,204 @@ describe('authoritative effect persistence', () => {
     expect(replay.status).toBe(200);
     expect(replay.body).toEqual(first.body);
     await expect(prisma.effectResolution.count({ where: { idempotencyKey: body.idempotencyKey } })).resolves.toBe(1);
+  });
+});
+
+describe('PostgreSQL encounter authority races with resolve_beat', () => {
+  it('serializes inventory equip against resolve_beat without deadlock or partial authority changes', async () => {
+    const entryRef = 'race-body-armor-1';
+    const fixture = await createBeatNpcFixture('inventory-race', 1, async ({ world, hero, scope }) => {
+      const armor = await publishTestContent({
+        worldId: world.id, contentType: ContentType.ARMOR, code: 'race-body-armor', name: 'Race Body Armor',
+        profile: {
+          schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical', contentKind: 'armor',
+          code: 'race-body-armor', name: 'Race Body Armor', tier: 1, rarity: 'common',
+          activation: { type: 'passive' }, cost: { type: 'none' },
+          defense: { physicalFlatDefense: 5 }, equipmentSlots: ['body'],
+        },
+        inventorySpec: uniqueInventorySpec(3, { equipmentSlots: ['body'] }),
+      });
+      const version = armor.versions[0];
+      if (version === undefined) throw new Error('Race armor version is required');
+      await prismaGptRepository.manageActorInventory(hero.code, {
+        ...scope, operation: 'grant', idempotencyKey: 'inventory-race-grant',
+        expectedInventoryStateVersion: hero.inventoryStateVersion,
+        contentRef: { scope: 'world', contentType: 'armor', code: armor.code, versionNumber: version.versionNumber },
+        quantity: 1, entryRefs: [entryRef],
+      });
+    });
+    const before = await prisma.actor.findUniqueOrThrow({
+      where: { id: fixture.hero.id },
+      select: {
+        inventoryStateVersion: true, mechanicsStateVersion: true, effectsStateVersion: true,
+        resources: { orderBy: { type: 'asc' }, select: { type: true, current: true, stateVersion: true } },
+      },
+    });
+    const equipInput = {
+      ...fixture.scope, operation: 'equip' as const, idempotencyKey: 'inventory-race-equip',
+      expectedInventoryStateVersion: before.inventoryStateVersion, entryRef, targetSlotRef: 'body' as const,
+    };
+    const beatInput = {
+      ...fixture.scope, encounterRef: fixture.encounterRef, idempotencyKey: 'inventory-race-beat',
+      expectedStateVersion: fixture.created.stateVersion,
+      intent: {
+        actorRef: fixture.heroRef, objective: 'hold_position', narrative: 'O herói mantém posição.',
+        resolutionPolicy: 'atomic' as const, components: [{ type: 'move' as const, destination: 'medium' as const }],
+      },
+      npcDirectives: [{ actorRef: fixture.npcRefs[0]!, strategy: 'aggressive' as const }],
+    };
+    let closed = false;
+    try {
+      const race = await Promise.allSettled([
+        prismaGptRepository.manageActorInventory(fixture.heroRef, equipInput),
+        encounterService.resolveBeat(beatInput),
+      ]);
+      expect(race.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+      expect(race.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
+      const equipWon = race[0]?.status === 'fulfilled';
+      const winner = race.find((attempt) => attempt.status === 'fulfilled');
+      const loser = race.find((attempt) => attempt.status === 'rejected');
+      if (winner?.status !== 'fulfilled' || loser?.status !== 'rejected') throw new Error('One race winner and loser are required');
+      expect(loser.reason).toMatchObject({
+        code: equipWon ? 'ENCOUNTER_INVENTORY_DRIFT' : 'ACTOR_ENCOUNTER_LOCKED',
+      });
+
+      const [after, entry, activeEffects] = await Promise.all([
+        prisma.actor.findUniqueOrThrow({
+          where: { id: fixture.hero.id },
+          select: {
+            inventoryStateVersion: true, mechanicsStateVersion: true, effectsStateVersion: true,
+            resources: { orderBy: { type: 'asc' }, select: { type: true, current: true, stateVersion: true } },
+          },
+        }),
+        prisma.inventoryEntry.findUniqueOrThrow({
+          where: { actorId_entryRef: { actorId: fixture.hero.id, entryRef } }, include: { equipmentSlots: true },
+        }),
+        prisma.activeEffect.count({ where: { targetActorId: fixture.hero.id } }),
+      ]);
+      expect(after.resources).toEqual(before.resources);
+      expect(after.effectsStateVersion).toBe(before.effectsStateVersion);
+      expect(activeEffects).toBe(0);
+      expect(entry.equipmentSlots.map((slot) => slot.slotRef)).toEqual(equipWon ? [ActorEquipmentSlotRef.BODY] : []);
+      expect(after.inventoryStateVersion).toBe(before.inventoryStateVersion + (equipWon ? 1 : 0));
+      expect(after.mechanicsStateVersion).toBe(before.mechanicsStateVersion + (equipWon ? 1 : 0));
+      await expect(prisma.idempotencyRecord.count({ where: {
+        key: equipWon ? equipInput.idempotencyKey : `encounter:${beatInput.idempotencyKey}`,
+      } })).resolves.toBe(1);
+      await expect(prisma.idempotencyRecord.count({ where: {
+        key: equipWon ? `encounter:${beatInput.idempotencyKey}` : equipInput.idempotencyKey,
+      } })).resolves.toBe(0);
+      if (equipWon) {
+        await expect(prismaGptRepository.manageActorInventory(fixture.heroRef, equipInput)).resolves.toEqual(winner.value);
+        const persisted = await prisma.encounter.findFirstOrThrow({ where: { encounterRef: fixture.encounterRef } });
+        await encounterService.abandon({
+          ...fixture.scope, encounterRef: fixture.encounterRef, idempotencyKey: 'inventory-race-cleanup-abandon',
+          expectedStateVersion: persisted.stateVersion, confirmAuthorityDrift: true,
+        });
+      } else {
+        await expect(encounterService.resolveBeat(beatInput)).resolves.toEqual(winner.value);
+        const resolved = winner.value as Awaited<ReturnType<typeof encounterService.resolveBeat>>;
+        await encounterService.cancel({
+          ...fixture.scope, encounterRef: fixture.encounterRef, idempotencyKey: 'inventory-race-cleanup-cancel',
+          expectedStateVersion: resolved.stateVersion,
+        });
+      }
+      closed = true;
+      await expect(prismaGptRepository.loadGame(fixture.scope)).resolves.toMatchObject({ activeEncounter: null });
+    } finally {
+      if (!closed) {
+        const persisted = await prisma.encounter.findFirst({
+          where: { campaignId: fixture.campaign.id, encounterRef: fixture.encounterRef },
+        });
+        if (persisted !== null && !(new Set<EncounterLifecycleStatus>([
+          EncounterLifecycleStatus.COMPLETED, EncounterLifecycleStatus.FAILED, EncounterLifecycleStatus.CANCELLED,
+        ])).has(persisted.lifecycleStatus)) {
+          try {
+            await encounterService.cancel({
+              ...fixture.scope, encounterRef: fixture.encounterRef, idempotencyKey: 'inventory-race-emergency-cancel',
+              expectedStateVersion: persisted.stateVersion,
+            });
+          } catch {
+            await encounterService.abandon({
+              ...fixture.scope, encounterRef: fixture.encounterRef, idempotencyKey: 'inventory-race-emergency-abandon',
+              expectedStateVersion: persisted.stateVersion, confirmAuthorityDrift: true,
+            });
+          }
+        }
+      }
+    }
+  });
+
+  it('serializes ActorContent mutation against resolve_beat and rolls the blocked write back completely', async () => {
+    const contentCode = 'race-known-skill';
+    const fixture = await createBeatNpcFixture('content-race', 1, async ({ world }) => {
+      await publishTestContent({
+        worldId: world.id, contentType: ContentType.SKILL, code: contentCode, name: 'Race Known Skill',
+        profile: activeProfile('skill', contentCode, 'Race Known Skill'),
+      });
+    });
+    const contentInput = {
+      ...fixture.scope, operation: 'grant' as const, contentRef: contentCode, contentType: 'skill' as const,
+      idempotencyKey: 'content-race-grant', changes: { state: 'known' as const, rank: 1 },
+    };
+    const beatInput = {
+      ...fixture.scope, encounterRef: fixture.encounterRef, idempotencyKey: 'content-race-beat',
+      expectedStateVersion: fixture.created.stateVersion,
+      intent: {
+        actorRef: fixture.heroRef, objective: 'hold_position', narrative: 'O herói mantém posição.',
+        resolutionPolicy: 'atomic' as const, components: [{ type: 'move' as const, destination: 'medium' as const }],
+      },
+      npcDirectives: [{ actorRef: fixture.npcRefs[0]!, strategy: 'aggressive' as const }],
+    };
+    const before = await prisma.actor.findUniqueOrThrow({
+      where: { id: fixture.hero.id },
+      select: {
+        mechanicsStateVersion: true, inventoryStateVersion: true, effectsStateVersion: true,
+        resources: { orderBy: { type: 'asc' }, select: { type: true, current: true, stateVersion: true } },
+      },
+    });
+    let closed = false;
+    try {
+      const race = await Promise.allSettled([
+        prismaGptRepository.manageActorContent(fixture.heroRef, contentInput),
+        encounterService.resolveBeat(beatInput),
+      ]);
+      expect(race[0]).toMatchObject({ status: 'rejected', reason: { code: 'ACTOR_ENCOUNTER_LOCKED' } });
+      expect(race[1]).toMatchObject({ status: 'fulfilled' });
+      if (race[1]?.status !== 'fulfilled') throw new Error('resolve_beat must win the ActorContent race');
+      await expect(prisma.actorContent.count({
+        where: { actorId: fixture.hero.id, contentDefinition: { code: contentCode } },
+      })).resolves.toBe(0);
+      await expect(prisma.actor.findUniqueOrThrow({
+        where: { id: fixture.hero.id },
+        select: {
+          mechanicsStateVersion: true, inventoryStateVersion: true, effectsStateVersion: true,
+          resources: { orderBy: { type: 'asc' }, select: { type: true, current: true, stateVersion: true } },
+        },
+      })).resolves.toEqual(before);
+      await expect(prisma.activeEffect.count({ where: { targetActorId: fixture.hero.id } })).resolves.toBe(0);
+      await expect(prisma.contentDefinition.count({ where: { worldId: fixture.world.id, code: contentCode } })).resolves.toBe(1);
+      await expect(prisma.idempotencyRecord.count({ where: { key: contentInput.idempotencyKey } })).resolves.toBe(0);
+      await expect(prisma.idempotencyRecord.count({ where: { key: `encounter:${beatInput.idempotencyKey}` } })).resolves.toBe(1);
+      await expect(encounterService.resolveBeat(beatInput)).resolves.toEqual(race[1].value);
+      await encounterService.cancel({
+        ...fixture.scope, encounterRef: fixture.encounterRef, idempotencyKey: 'content-race-cleanup-cancel',
+        expectedStateVersion: race[1].value.stateVersion,
+      });
+      closed = true;
+    } finally {
+      if (!closed) {
+        const persisted = await prisma.encounter.findFirst({ where: { encounterRef: fixture.encounterRef } });
+        if (persisted !== null && !(new Set<EncounterLifecycleStatus>([
+          EncounterLifecycleStatus.COMPLETED, EncounterLifecycleStatus.FAILED, EncounterLifecycleStatus.CANCELLED,
+        ])).has(persisted.lifecycleStatus)) {
+          await encounterService.cancel({
+            ...fixture.scope, encounterRef: fixture.encounterRef, idempotencyKey: 'content-race-emergency-cancel',
+            expectedStateVersion: persisted.stateVersion,
+          });
+        }
+      }
+    }
   });
 });
 

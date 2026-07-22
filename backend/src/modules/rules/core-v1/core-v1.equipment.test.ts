@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   aggregateEquippedModifiers,
+  calculateInventoryEncumbrance,
   collectEquippedModifiers,
   createCoreV1EmptyEquipmentLoadout,
   equipItem,
@@ -8,6 +9,8 @@ import {
   getInitialAttributePreset,
   planEquipItem,
   unequipItem,
+  validateCoreV1ContentProfile,
+  validateCoreV1InventorySpec,
   validateEquipmentLoadout,
 } from './index.js';
 import type {
@@ -246,6 +249,66 @@ describe('core-v1 equipment loadout and hand rules', () => {
 });
 
 describe('core-v1 body, accessory and multslot equipment', () => {
+  it('validates the starter body armor blueprint within common rarity and weight budgets', () => {
+    const profile = {
+      schemaVersion: 1,
+      rulesetCode: 'core-v1',
+      profileMode: 'mechanical',
+      contentKind: 'armor',
+      code: 'starter-body-armor',
+      name: 'Armadura de corpo inteiro',
+      tier: 1,
+      rarity: 'common',
+      activation: { type: 'passive' },
+      cost: { type: 'none' },
+      defense: { physicalFlatDefense: 5 },
+      equipmentSlots: ['body'],
+    } as const satisfies CoreV1ContentProfile;
+    const inventorySpec = {
+      schemaVersion: 1,
+      rulesetCode: 'core-v1',
+      inventoryRulesCode: 'core-v1-inventory-v1',
+      unitWeight: 3,
+      stacking: { mode: 'unique' },
+      equipmentSlots: ['body'],
+    } as const satisfies CoreV1InventorySpec;
+
+    expect(validateCoreV1ContentProfile(profile)).toMatchObject({ ok: true });
+    expect(validateCoreV1InventorySpec(inventorySpec)).toMatchObject({ ok: true });
+    const equipped = equip(
+      { entries: [instance('starter-body-armor-1', 'armor', profile, inventorySpec)] },
+      createCoreV1EmptyEquipmentLoadout(),
+      'starter-body-armor-1',
+    );
+    expect(equipped.loadout.slots.find((slot) => slot.slotRef === 'body')?.entryRef).toBe('starter-body-armor-1');
+    expect(equipped.loadout.slots.find((slot) => slot.slotRef === 'chest')?.entryRef).toBeNull();
+    expect(calculateInventoryEncumbrance(3, 100)).toMatchObject({
+      ok: true, value: { carriedWeight: 3, carryingCapacity: 100, state: 'normal', penaltyBps: 0 },
+    });
+
+    const overBudget = validateCoreV1ContentProfile({
+      ...profile,
+      defense: { physicalFlatDefense: 5, magicalFlatDefense: 1 },
+    });
+    expect(overBudget).toMatchObject({ ok: false });
+    if (overBudget.ok) throw new Error('fixture');
+    expect(overBudget.issues).toContainEqual(expect.objectContaining({ rule: 'RARITY_PROPERTY_LIMIT' }));
+  });
+
+  it('keeps body and chest semantically distinct without slot substitution', () => {
+    const bodyArmor = instance('body-armor', 'armor', {
+      ...fullArmorProfile, code: 'body_armor', name: 'Traje completo', equipmentSlots: ['body'],
+    }, uniqueSpec(['body']));
+    const plan = expectOk(planEquipItem(
+      { entries: [bodyArmor] }, createCoreV1EmptyEquipmentLoadout(),
+      { entryRef: 'body-armor', targetSlotRef: 'chest' }, requirementContext(),
+    ));
+    expect(plan.canEquip).toBe(false);
+    expect(plan.issues).toEqual(expect.arrayContaining([expect.objectContaining({
+      rule: 'INCOMPATIBLE_SLOT', received: 'chest', expected: ['body'],
+    })]));
+  });
+
   it('equips full armor atomically across every declared body slot', () => {
     const armor = instance('armor', 'armor', fullArmorProfile);
     const result = equip({ entries: [armor] }, createCoreV1EmptyEquipmentLoadout(), 'armor');

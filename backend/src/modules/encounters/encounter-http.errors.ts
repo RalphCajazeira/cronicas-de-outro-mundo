@@ -17,6 +17,7 @@ const definitions: Readonly<Record<EncounterErrorCode, PublicErrorDefinition>> =
   ENCOUNTER_IDEMPOTENCY_KEY_REUSED: { status: 409, code: 'IDEMPOTENCY_KEY_REUSED', message: 'Idempotency key was reused with different input', retryable: false, recoveryAction: 'use_new_idempotency_key' },
   ENCOUNTER_CONSTRAINT_CONFLICT: { status: 409, code: 'PERSISTENCE_CONFLICT', message: 'Encounter persistence conflicts with current state', retryable: false, recoveryAction: 'load_encounter' },
   ENCOUNTER_PARTICIPANT_INVALID: { status: 422, code: 'PARTICIPANT_INVALID', message: 'One or more encounter participants are invalid for this campaign', retryable: false, recoveryAction: 'correct_request' },
+  ENCOUNTER_PARTICIPANT_NOT_READY: { status: 422, code: 'CHARACTER_NOT_READY', message: 'Protagonist setup is incomplete or has no usable starter action', retryable: false, recoveryAction: 'complete_character_setup' },
   ENCOUNTER_EPHEMERAL_MUTATION_UNSUPPORTED: { status: 422, code: 'ACTION_REJECTED', message: 'Encounter action cannot mutate an ephemeral participant', retryable: false, recoveryAction: 'choose_new_intent' },
   ENCOUNTER_SPATIAL_CONTEXT_UNAVAILABLE: { status: 422, code: 'SPATIAL_CONTEXT_UNAVAILABLE', message: 'Authoritative spatial context is unavailable for this action', retryable: false, recoveryAction: 'choose_new_intent' },
   ENCOUNTER_CORE_REJECTED: { status: 422, code: 'ACTION_REJECTED', message: 'Encounter action was rejected by the authoritative rules', retryable: false, recoveryAction: 'load_encounter' },
@@ -26,13 +27,13 @@ const definitions: Readonly<Record<EncounterErrorCode, PublicErrorDefinition>> =
   ENCOUNTER_SNAPSHOT_HASH_INVALID: integrity(),
   ENCOUNTER_SNAPSHOT_INVALID: integrity(),
   ENCOUNTER_DENORMALIZED_DRIFT: integrity(),
-  ENCOUNTER_MECHANICS_DRIFT: integrity(),
-  ENCOUNTER_RESOURCE_DRIFT: integrity(),
-  ENCOUNTER_INVENTORY_DRIFT: integrity(),
-  ENCOUNTER_EFFECTS_DRIFT: integrity(),
+  ENCOUNTER_MECHANICS_DRIFT: authorityDrift(),
+  ENCOUNTER_RESOURCE_DRIFT: authorityDrift(),
+  ENCOUNTER_INVENTORY_DRIFT: authorityDrift(),
+  ENCOUNTER_EFFECTS_DRIFT: authorityDrift(),
   ENCOUNTER_EFFECT_OWNERSHIP_CONFLICT: integrity(),
   ENCOUNTER_EFFECT_ORIGIN_REQUIRED: integrity(),
-  ENCOUNTER_CAMPAIGN_TICK_DRIFT: integrity(),
+  ENCOUNTER_CAMPAIGN_TICK_DRIFT: authorityDrift(),
   ENCOUNTER_IDEMPOTENCY_RESPONSE_PENDING: integrity(),
   ENCOUNTER_ROLL_INVALID: integrity(),
   ENCOUNTER_INTERNAL: { status: 500, code: 'INTERNAL_ERROR', message: 'Internal server error', retryable: false, recoveryAction: 'stop_encounter_flow' },
@@ -45,6 +46,16 @@ function integrity(): PublicErrorDefinition {
     message: 'Encounter integrity validation failed',
     retryable: false,
     recoveryAction: 'stop_encounter_flow',
+  };
+}
+
+function authorityDrift(): PublicErrorDefinition {
+  return {
+    status: 409,
+    code: 'ENCOUNTER_AUTHORITY_DRIFT',
+    message: 'Encounter authority changed outside its validated snapshot',
+    retryable: false,
+    recoveryAction: 'abandon_encounter',
   };
 }
 

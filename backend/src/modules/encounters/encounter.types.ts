@@ -26,7 +26,10 @@ export interface ActiveEncounterRecord {
   readonly stateVersion: number;
 }
 
-export function activeEncounterSummary(records: readonly ActiveEncounterRecord[]) {
+export function activeEncounterSummary(
+  records: readonly ActiveEncounterRecord[],
+  integrityStatus: 'validated' | 'authority_drift' | 'unverified' = 'unverified',
+) {
   if (records.length === 0) return null;
   if (records.length > 1) {
     throw new AppError(500, 'ACTIVE_ENCOUNTER_INTEGRITY_ERROR', 'Campaign has multiple active encounters', {
@@ -46,15 +49,18 @@ export function activeEncounterSummary(records: readonly ActiveEncounterRecord[]
     encounterRef: encounter.encounterRef,
     lifecycleStatus: normalizeEnum(encounter.lifecycleStatus),
     stateVersion: encounter.stateVersion,
-    canContinue: true,
-    canCancel: true,
-    recoveryAction: 'load_encounter',
+    canContinue: integrityStatus === 'validated',
+    canCancel: integrityStatus === 'validated',
+    canAbandon: integrityStatus === 'authority_drift',
+    integrityStatus,
+    recoveryAction: integrityStatus === 'validated' ? 'load_encounter'
+      : integrityStatus === 'authority_drift' ? 'abandon_encounter' : 'stop_encounter_flow',
   };
 }
 
 export type EncounterOperationName =
   | 'create' | 'submit_intent' | 'resolve_reaction' | 'continue'
-  | 'confirm_completion' | 'cancel' | 'resolve_beat';
+  | 'confirm_completion' | 'cancel' | 'abandon' | 'resolve_beat';
 
 export interface EncounterPersistedParticipantInput {
   readonly bindingKind: 'persisted_actor';
@@ -132,6 +138,9 @@ export interface ResolveEncounterBeatInput extends EncounterMutationReference {
 export type ContinueEncounterInput = EncounterMutationReference;
 export type ConfirmEncounterCompletionInput = EncounterMutationReference;
 export type CancelEncounterInput = EncounterMutationReference;
+export interface AbandonEncounterInput extends EncounterMutationReference {
+  readonly confirmAuthorityDrift: true;
+}
 export type LoadEncounterInput = EncounterReference;
 
 export interface EncounterParticipantDto {
@@ -236,6 +245,16 @@ export interface EncounterTransitionSummaryDto {
   }[];
 }
 
+export interface EncounterRecoverySummaryDto {
+  readonly reason: 'authority_drift';
+  readonly authority: 'mechanics' | 'resources' | 'inventory' | 'effects' | 'campaign_tick';
+  readonly actionResolved: false;
+  readonly damageApplied: false;
+  readonly costApplied: false;
+  readonly rewardsGranted: false;
+  readonly campaignReleased: true;
+}
+
 export interface EncounterDto {
   readonly operation: EncounterOperationName | 'load';
   readonly encounterRef: string;
@@ -247,6 +266,7 @@ export interface EncounterDto {
   readonly participants: readonly EncounterParticipantDto[];
   readonly nextRequiredAction: EncounterNextRequiredActionDto;
   readonly transitionSummary?: EncounterTransitionSummaryDto;
+  readonly recoverySummary?: EncounterRecoverySummaryDto;
   readonly consequencesSummary?: EncounterPublicConsequencesSummaryV1;
   readonly scene?: EncounterScenePackageDto;
   readonly beatSummary?: EncounterBeatSummaryDto;
@@ -529,8 +549,8 @@ export function parseEncounterDto(value: unknown): EncounterDto {
   const root = closedOptionalRecord(value, [
     'operation', 'encounterRef', 'lifecycleStatus', 'stateVersion', 'currentTick',
     'stopReason', 'completionCandidate', 'participants', 'nextRequiredAction',
-  ], ['transitionSummary', 'consequencesSummary', 'scene', 'beatSummary'], '$');
-  if (!['create', 'submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel', 'resolve_beat', 'load']
+  ], ['transitionSummary', 'recoverySummary', 'consequencesSummary', 'scene', 'beatSummary'], '$');
+  if (!['create', 'submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel', 'abandon', 'resolve_beat', 'load']
     .includes(root.operation as string)
     || !isPublicRef(root.encounterRef) || !lifecycleStatuses.has(root.lifecycleStatus as string)
     || !Number.isSafeInteger(root.stateVersion) || (root.stateVersion as number) < 1
@@ -577,6 +597,21 @@ export function parseEncounterDto(value: unknown): EncounterDto {
       throw new TypeError('Encounter transition summary does not match operation');
     }
     parseTransitionSummary(root.transitionSummary, participantRefs);
+  }
+  if (root.recoverySummary !== undefined) {
+    const recovery = closedRecord(root.recoverySummary, [
+      'reason', 'authority', 'actionResolved', 'damageApplied', 'costApplied', 'rewardsGranted', 'campaignReleased',
+    ], '$.recoverySummary');
+    if (root.operation !== 'abandon' || root.lifecycleStatus !== 'failed' || root.stopReason !== 'encounter_failed'
+      || recovery.reason !== 'authority_drift'
+      || !['mechanics', 'resources', 'inventory', 'effects', 'campaign_tick'].includes(recovery.authority as string)
+      || recovery.actionResolved !== false || recovery.damageApplied !== false || recovery.costApplied !== false
+      || recovery.rewardsGranted !== false || recovery.campaignReleased !== true) {
+      throw new TypeError('Encounter recovery summary does not match operation');
+    }
+  }
+  if (root.operation === 'abandon' && root.recoverySummary === undefined) {
+    throw new TypeError('Encounter abandon requires a recovery summary');
   }
   if (root.scene !== undefined) parseScenePackage(root.scene, participantRefs, root.stateVersion as number);
   if (root.beatSummary !== undefined) {

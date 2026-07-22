@@ -1010,7 +1010,8 @@
                 "resolve_reaction": { "value": { "operation": "resolve_reaction", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-reaction-001", "expectedStateVersion": 2, "reactorRef": "ralph", "reactionKind": "block" } },
                 "continue": { "value": { "operation": "continue", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-continue-001", "expectedStateVersion": 3 } },
                 "confirm_completion": { "value": { "operation": "confirm_completion", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-complete-001", "expectedStateVersion": 4 } },
-                "cancel": { "value": { "operation": "cancel", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-cancel-001", "expectedStateVersion": 4 } }
+                "cancel": { "value": { "operation": "cancel", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-cancel-001", "expectedStateVersion": 4 } },
+                "abandon": { "summary": "Recuperação explícita após loadGame indicar authority_drift", "value": { "operation": "abandon", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-abandon-001", "expectedStateVersion": 4, "confirmAuthorityDrift": true } }
               }
             }
           }
@@ -1310,7 +1311,7 @@
         "additionalProperties": false,
         "required": ["operation", "playerRef", "worldRef", "campaignRef", "encounterRef"],
         "properties": {
-          "operation": { "type": "string", "enum": ["create", "load", "resolve_beat", "submit_intent", "resolve_reaction", "continue", "confirm_completion", "cancel"] },
+          "operation": { "type": "string", "enum": ["create", "load", "resolve_beat", "submit_intent", "resolve_reaction", "continue", "confirm_completion", "cancel", "abandon"] },
           "playerRef": { "$ref": "#/components/schemas/Code" },
           "worldRef": { "$ref": "#/components/schemas/Code" },
           "campaignRef": { "$ref": "#/components/schemas/Code" },
@@ -1323,15 +1324,17 @@
           "intent": { "oneOf": [{ "$ref": "#/components/schemas/EncounterIntentInput" }, { "$ref": "#/components/schemas/EncounterBeatIntentInput" }] },
           "npcDirectives": { "type": "array", "maxItems": 16, "items": { "$ref": "#/components/schemas/EncounterNpcDirective" } },
           "reactorRef": { "$ref": "#/components/schemas/Code" },
-          "reactionKind": { "type": "string", "enum": ["block", "active_dodge", "interrupt", "counter_attack"] }
+          "reactionKind": { "type": "string", "enum": ["block", "active_dodge", "interrupt", "counter_attack"] },
+          "confirmAuthorityDrift": { "type": "boolean", "const": true, "description": "Confirma explicitamente a recuperação sem resolver ações nem conceder recompensas." }
         },
         "allOf": [
-          { "if": { "properties": { "operation": { "const": "create" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "participants"], "allOf": [{ "not": { "required": ["expectedStateVersion"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } },
-          { "if": { "properties": { "operation": { "const": "load" } }, "required": ["operation"] }, "then": { "allOf": [{ "not": { "required": ["idempotencyKey"] } }, { "not": { "required": ["expectedStateVersion"] } }, { "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } },
-          { "if": { "properties": { "operation": { "const": "submit_intent" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion", "intent"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } },
-          { "if": { "properties": { "operation": { "const": "resolve_beat" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion", "intent"], "properties": { "intent": { "$ref": "#/components/schemas/EncounterBeatIntentInput" } }, "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } },
-          { "if": { "properties": { "operation": { "const": "resolve_reaction" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion", "reactorRef", "reactionKind"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }] } },
-          { "if": { "properties": { "operation": { "enum": ["continue", "confirm_completion", "cancel"] } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } }
+          { "if": { "properties": { "operation": { "const": "create" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "participants"], "allOf": [{ "not": { "required": ["expectedStateVersion"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }, { "not": { "required": ["confirmAuthorityDrift"] } }] } },
+          { "if": { "properties": { "operation": { "const": "load" } }, "required": ["operation"] }, "then": { "allOf": [{ "not": { "required": ["idempotencyKey"] } }, { "not": { "required": ["expectedStateVersion"] } }, { "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }, { "not": { "required": ["confirmAuthorityDrift"] } }] } },
+          { "if": { "properties": { "operation": { "const": "submit_intent" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion", "intent"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }, { "not": { "required": ["confirmAuthorityDrift"] } }] } },
+          { "if": { "properties": { "operation": { "const": "resolve_beat" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion", "intent"], "properties": { "intent": { "$ref": "#/components/schemas/EncounterBeatIntentInput" } }, "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }, { "not": { "required": ["confirmAuthorityDrift"] } }] } },
+          { "if": { "properties": { "operation": { "const": "resolve_reaction" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion", "reactorRef", "reactionKind"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["confirmAuthorityDrift"] } }] } },
+          { "if": { "properties": { "operation": { "enum": ["continue", "confirm_completion", "cancel"] } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }, { "not": { "required": ["confirmAuthorityDrift"] } }] } },
+          { "if": { "properties": { "operation": { "const": "abandon" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion", "confirmAuthorityDrift"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } }
         ],
         "description": "Objeto multiplexado fechado. Cada operação possui campos obrigatórios e proibidos próprios. create aceita somente participantes persistidos. O pior payload válido (64 participantes, 128 overrides e refs no máximo) mede 51.295 bytes e permanece abaixo dos 102.400 bytes globais."
       },
@@ -1500,11 +1503,29 @@
           "requiresPlayerDecision": { "type": "boolean" }
         }
       },
+      "EncounterRecoverySummary": {
+        "type": "object", "additionalProperties": false,
+        "required": ["reason", "authority", "actionResolved", "damageApplied", "costApplied", "rewardsGranted", "campaignReleased"],
+        "properties": {
+          "reason": { "type": "string", "const": "authority_drift" },
+          "authority": { "type": "string", "enum": ["mechanics", "resources", "inventory", "effects", "campaign_tick"] },
+          "actionResolved": { "type": "boolean", "const": false },
+          "damageApplied": { "type": "boolean", "const": false },
+          "costApplied": { "type": "boolean", "const": false },
+          "rewardsGranted": { "type": "boolean", "const": false },
+          "campaignReleased": { "type": "boolean", "const": true }
+        }
+      },
       "EncounterResult": {
         "type": "object", "additionalProperties": false,
-        "required": ["result", "encounterRef", "lifecycleStatus", "stateVersion", "currentTick", "stopReason", "completionCandidate", "participants", "nextRequiredAction"],
+        "required": ["result", "operation", "encounterRef", "lifecycleStatus", "stateVersion", "currentTick", "stopReason", "completionCandidate", "participants", "nextRequiredAction"],
+        "allOf": [
+          { "if": { "properties": { "operation": { "const": "abandon" } }, "required": ["operation"] }, "then": { "required": ["recoverySummary"] } },
+          { "if": { "required": ["recoverySummary"] }, "then": { "properties": { "operation": { "const": "abandon" } } } }
+        ],
         "properties": {
-          "result": { "type": "string", "enum": ["encounter_created", "encounter_loaded", "beat_resolved", "intent_accepted", "reaction_required", "reaction_resolved", "processing_paused", "new_intent_required", "completion_confirmation_required", "encounter_completed", "encounter_cancelled", "encounter_failed"] },
+          "result": { "type": "string", "enum": ["encounter_created", "encounter_loaded", "beat_resolved", "intent_accepted", "reaction_required", "reaction_resolved", "processing_paused", "new_intent_required", "completion_confirmation_required", "encounter_completed", "encounter_cancelled", "encounter_failed", "encounter_abandoned"] },
+          "operation": { "type": "string", "enum": ["create", "load", "resolve_beat", "submit_intent", "resolve_reaction", "continue", "confirm_completion", "cancel", "abandon"] },
           "encounterRef": { "$ref": "#/components/schemas/Code" },
           "lifecycleStatus": { "type": "string", "enum": ["awaiting_intent", "awaiting_reaction", "processing_paused", "completion_pending", "completed", "failed", "cancelled"] },
           "stateVersion": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
@@ -1514,6 +1535,7 @@
           "participants": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/components/schemas/EncounterParticipant" } },
           "nextRequiredAction": { "$ref": "#/components/schemas/EncounterNextRequiredAction" },
           "transitionSummary": { "$ref": "#/components/schemas/EncounterTransitionSummary" },
+          "recoverySummary": { "$ref": "#/components/schemas/EncounterRecoverySummary" },
           "consequencesSummary": { "$ref": "#/components/schemas/EncounterConsequencesSummary" },
           "scene": { "$ref": "#/components/schemas/EncounterScenePackage" },
           "beatSummary": { "$ref": "#/components/schemas/EncounterBeatSummary" }
@@ -1803,7 +1825,7 @@
           "requirements": { "$ref": "#/components/schemas/ContentRequirements" },
           "handedness": { "type": "string", "enum": ["one_handed", "two_handed", "versatile"] },
           "weaponTags": { "type": "array", "minItems": 1, "maxItems": 24, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
-          "equipmentSlots": { "type": "array", "minItems": 1, "maxItems": 9, "uniqueItems": true, "items": { "type": "string", "enum": ["main_hand", "off_hand", "head", "chest", "hands", "legs", "feet", "body", "accessory"] } },
+          "equipmentSlots": { "type": "array", "minItems": 1, "maxItems": 9, "uniqueItems": true, "items": { "type": "string", "enum": ["main_hand", "off_hand", "head", "chest", "hands", "legs", "feet", "body", "accessory"] }, "description": "Slots declarados: chest é proteção peitoral; body é traje/armadura de corpo inteiro. Nunca substitua um pelo outro." },
           "consumable": { "type": "boolean" },
           "duration": { "$ref": "#/components/schemas/ContentDuration" },
           "stacking": { "$ref": "#/components/schemas/ContentStacking" },
@@ -1835,7 +1857,7 @@
             "type": "object", "additionalProperties": false, "required": ["mode"],
             "properties": { "mode": { "type": "string", "enum": ["unique", "stackable"] }, "maxStack": { "type": "integer", "minimum": 2, "maximum": 999 } }
           },
-          "equipmentSlots": { "type": "array", "uniqueItems": true, "maxItems": 9, "items": { "type": "string", "enum": ["main_hand", "off_hand", "head", "chest", "hands", "legs", "feet", "body", "accessory"] } },
+          "equipmentSlots": { "type": "array", "uniqueItems": true, "maxItems": 9, "items": { "type": "string", "enum": ["main_hand", "off_hand", "head", "chest", "hands", "legs", "feet", "body", "accessory"] }, "description": "chest equipa apenas peça peitoral; body equipa apenas traje de corpo inteiro." },
           "handedness": { "type": "string", "enum": ["one_handed", "two_handed", "versatile"] }
         }
       },
@@ -2222,6 +2244,20 @@
           "reactionGrantCount": { "type": "integer", "minimum": 0 }
         }
       },
+      "ActorReadiness": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "canStartEncounter", "usableActions", "blockingReasons", "narrativeContentCount", "incompleteContentRefs"],
+        "properties": {
+          "status": { "type": "string", "enum": ["ready", "narrative_only", "incomplete", "blocked"] },
+          "canStartEncounter": { "type": "boolean" },
+          "usableActions": { "type": "array", "maxItems": 128, "items": { "type": "object", "additionalProperties": false, "required": ["source", "ref", "action"], "properties": { "source": { "type": "string", "enum": ["known_content", "equipped_weapon", "consumable"] }, "ref": { "$ref": "#/components/schemas/Code" }, "action": { "type": "string", "enum": ["cast", "attack", "use_item"] } } } },
+          "blockingReasons": { "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "type": "string", "enum": ["actor_not_active", "hp_depleted", "no_usable_starter_action", "starter_action_resource_insufficient", "starter_action_cost_unsupported", "starter_action_requirements_unmet", "starter_action_targeting_unsupported", "mechanical_content_incomplete"] } },
+          "narrativeContentCount": { "type": "integer", "minimum": 0 },
+          "incompleteContentRefs": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } }
+        },
+        "description": "Diagnóstico autoritativo do protagonista. Conteúdo narrativo/cosmético não é erro, mas também não conta como ação mecânica inicial."
+      },
       "Actor": {
         "type": "object",
         "additionalProperties": false,
@@ -2306,6 +2342,7 @@
           "effectsStateVersion": { "type": "integer", "minimum": 1 },
           "inventorySummary": { "$ref": "#/components/schemas/InventorySummary" },
           "activeEffectSummary": { "$ref": "#/components/schemas/ActiveEffectSummary" },
+          "readiness": { "$ref": "#/components/schemas/ActorReadiness" },
           "ruleset": {
             "type": "object", "additionalProperties": false, "required": ["code", "revision"],
             "properties": { "code": { "type": "string" }, "revision": { "type": "string" } }
@@ -3253,6 +3290,8 @@
           "stateVersion",
           "canContinue",
           "canCancel",
+          "canAbandon",
+          "integrityStatus",
           "recoveryAction"
         ],
         "properties": {
@@ -3279,10 +3318,20 @@
           "canCancel": {
             "type": "boolean"
           },
+          "canAbandon": {
+            "type": "boolean",
+            "description": "Verdadeiro somente quando loadGame detecta drift de autoridade recuperável."
+          },
+          "integrityStatus": {
+            "type": "string",
+            "enum": ["validated", "authority_drift", "unverified"]
+          },
           "recoveryAction": {
             "type": "string",
             "enum": [
-              "load_encounter"
+              "load_encounter",
+              "abandon_encounter",
+              "stop_encounter_flow"
             ]
           }
         }

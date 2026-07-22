@@ -32,6 +32,13 @@ function fakeInternal() {
     }),
     confirmCompletion: vi.fn<EncounterApplicationService['confirmCompletion']>().mockResolvedValue({ ...internalDto('confirm_completion'), lifecycleStatus: 'completed', nextRequiredAction: { type: 'none' as const } }),
     cancel: vi.fn<EncounterApplicationService['cancel']>().mockResolvedValue({ ...internalDto('cancel'), lifecycleStatus: 'cancelled', nextRequiredAction: { type: 'none' as const } }),
+    abandon: vi.fn<EncounterApplicationService['abandon']>().mockResolvedValue({
+      ...internalDto('abandon'), lifecycleStatus: 'failed', stopReason: 'encounter_failed', nextRequiredAction: { type: 'none' as const },
+      recoverySummary: {
+        reason: 'authority_drift', authority: 'inventory', actionResolved: false,
+        damageApplied: false, costApplied: false, rewardsGranted: false, campaignReleased: true,
+      },
+    }),
     resolveBeat: vi.fn<EncounterApplicationService['resolveBeat']>().mockResolvedValue({
       ...internalDto('resolve_beat'),
       beatSummary: {
@@ -157,7 +164,7 @@ describe('encounter HTTP facade', () => {
     expect(internal.resolveReaction).not.toHaveBeenCalled();
   });
 
-  it.each(['load', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel'] as const)('dispatches %s only to its matching method', async (operation) => {
+  it.each(['load', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel', 'abandon'] as const)('dispatches %s only to its matching method', async (operation) => {
     const internal = fakeInternal();
     const values = {
       load: { operation, ...scope },
@@ -165,12 +172,30 @@ describe('encounter HTTP facade', () => {
       continue: { operation, ...scope, idempotencyKey: 'continue-key-001', expectedStateVersion: 1 },
       confirm_completion: { operation, ...scope, idempotencyKey: 'complete-key-001', expectedStateVersion: 1 },
       cancel: { operation, ...scope, idempotencyKey: 'cancel-key-001', expectedStateVersion: 1 },
+      abandon: { operation, ...scope, idempotencyKey: 'abandon-key-001', expectedStateVersion: 1, confirmAuthorityDrift: true },
     };
     await createEncounterHttpService(internal).manage(manageEncounterSchema.parse(values[operation]));
-    const method = { load: 'load', resolve_reaction: 'resolveReaction', continue: 'continue', confirm_completion: 'confirmCompletion', cancel: 'cancel' }[operation] as keyof EncounterApplicationService;
+    const method = { load: 'load', resolve_reaction: 'resolveReaction', continue: 'continue', confirm_completion: 'confirmCompletion', cancel: 'cancel', abandon: 'abandon' }[operation] as keyof EncounterApplicationService;
     expect(internal[method]).toHaveBeenCalledOnce();
     expect(internal[method]).toHaveBeenCalledWith(expect.objectContaining(scope));
     expect(Object.values(internal).filter((fn) => fn.mock.calls.length > 0)).toHaveLength(1);
+  });
+
+  it('returns the exact public abandon contract through the HTTP facade', async () => {
+    const internal = fakeInternal();
+    const result = await createEncounterHttpService(internal).manage(manageEncounterSchema.parse({
+      operation: 'abandon', ...scope, idempotencyKey: 'abandon-public-contract-001',
+      expectedStateVersion: 1, confirmAuthorityDrift: true,
+    }));
+    expect(result).toMatchObject({
+      result: 'encounter_abandoned', operation: 'abandon', encounterRef: 'encounter',
+      lifecycleStatus: 'failed', stopReason: 'encounter_failed', nextRequiredAction: { type: 'none' },
+      recoverySummary: {
+        reason: 'authority_drift', authority: 'inventory', actionResolved: false,
+        damageApplied: false, costApplied: false, rewardsGranted: false, campaignReleased: true,
+      },
+    });
+    expect(result).not.toHaveProperty('consequencesSummary');
   });
 
   it('collapses scope-resolution failures without revealing the missing hierarchy level', async () => {

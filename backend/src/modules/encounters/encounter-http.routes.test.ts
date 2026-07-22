@@ -10,7 +10,7 @@ import type { EncounterHttpService } from './encounter-http.service.js';
 const config: AppConfig = { NODE_ENV: 'test', HOST: '0.0.0.0', PORT: 3000, DATABASE_URL: 'postgresql://test:test@localhost:5432/test', DIRECT_URL: 'postgresql://test:test@localhost:5432/test', RPG_API_KEY: 'test-key' };
 const scope = { playerRef: 'player', worldRef: 'world', campaignRef: 'campaign', encounterRef: 'encounter' };
 const result: EncounterPublicDto = {
-  result: 'encounter_loaded', encounterRef: 'encounter', lifecycleStatus: 'awaiting_intent', stateVersion: 1,
+  result: 'encounter_loaded', operation: 'load', encounterRef: 'encounter', lifecycleStatus: 'awaiting_intent', stateVersion: 1,
   currentTick: '0', stopReason: null, completionCandidate: null,
   participants: [{ actorRef: 'hero', bindingKind: 'persisted_actor', sideRef: 'party', combatState: 'ready', zone: 'near', resources: { hp: { current: 10, maximum: 10 }, mana: { current: 5, maximum: 5 }, sp: { current: 4, maximum: 4 } } }],
   nextRequiredAction: { type: 'submit_intent', actors: [{ actorRef: 'hero', readySlotRefs: ['primary'] }] },

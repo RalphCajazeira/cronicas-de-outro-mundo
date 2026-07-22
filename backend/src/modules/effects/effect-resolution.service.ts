@@ -43,6 +43,7 @@ import {
 } from './effect-state.service.js';
 import { cryptographicRollProvider, type RollProvider } from './roll-provider.js';
 import { calculateEffectResolutionResultHash, createDeterministicEffectRef } from './effect-resolution.primitives.js';
+import { assertActorsMutableOutsideEncounter } from '../encounters/encounter-authority-guard.js';
 
 type Transaction = Prisma.TransactionClient;
 type WriteInput = Exclude<ResolveActorEffectInput, { operation: 'get' }>;
@@ -408,6 +409,7 @@ export async function resolveActorEffectTransaction(
   await client.$queryRaw(Prisma.sql`SELECT 1 FROM "Campaign" WHERE id = ${scope.campaign.id}::uuid FOR UPDATE`);
   const targetRef = input.targetActorRef as string;
   let actors = await resolveActors(client, scope.campaign.id, input.sourceActorRef, targetRef);
+  await assertActorsMutableOutsideEncounter(client, scope.campaign.id, [actors.source, actors.target]);
   await assertExpectedState(client, actors.source, input.expectedSourceState as ExpectedState);
   if (actors.target.id !== actors.source.id) await assertExpectedState(client, actors.target, input.expectedTargetState as ExpectedState);
   await expireDueActorEffects(client, actors.source.id, scope.campaign.engineTick);

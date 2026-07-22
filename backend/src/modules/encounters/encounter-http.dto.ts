@@ -2,6 +2,7 @@ import type {
   EncounterBeatSummaryDto,
   EncounterDto,
   EncounterNextRequiredActionDto,
+  EncounterRecoverySummaryDto,
   EncounterScenePackageDto,
   EncounterTransitionSummaryDto,
 } from './encounter.types.js';
@@ -11,10 +12,11 @@ export type EncounterPublicResult =
   | 'encounter_created' | 'encounter_loaded' | 'intent_accepted' | 'reaction_required'
   | 'reaction_resolved' | 'processing_paused' | 'new_intent_required'
   | 'completion_confirmation_required' | 'encounter_completed' | 'encounter_cancelled'
-  | 'encounter_failed' | 'beat_resolved';
+  | 'encounter_failed' | 'encounter_abandoned' | 'beat_resolved';
 
 export interface EncounterPublicDto {
   readonly result: EncounterPublicResult;
+  readonly operation: EncounterDto['operation'];
   readonly encounterRef: string;
   readonly lifecycleStatus: string;
   readonly stateVersion: number;
@@ -35,12 +37,14 @@ export interface EncounterPublicDto {
   }[];
   readonly nextRequiredAction: EncounterNextRequiredActionDto;
   readonly transitionSummary?: EncounterTransitionSummaryDto;
+  readonly recoverySummary?: EncounterRecoverySummaryDto;
   readonly consequencesSummary?: EncounterPublicConsequencesSummaryV1;
   readonly scene?: EncounterScenePackageDto;
   readonly beatSummary?: EncounterBeatSummaryDto;
 }
 
 export function encounterPublicResult(dto: EncounterDto): EncounterPublicResult {
+  if (dto.operation === 'abandon' && dto.lifecycleStatus === 'failed') return 'encounter_abandoned';
   if (dto.lifecycleStatus === 'cancelled') return 'encounter_cancelled';
   if (dto.lifecycleStatus === 'completed') return 'encounter_completed';
   if (dto.lifecycleStatus === 'failed') return 'encounter_failed';
@@ -106,6 +110,7 @@ function toPublicTransitionSummary(value: EncounterTransitionSummaryDto): Encoun
 export function toEncounterPublicDto(dto: EncounterDto): EncounterPublicDto {
   return {
     result: encounterPublicResult(dto),
+    operation: dto.operation,
     encounterRef: dto.encounterRef,
     lifecycleStatus: dto.lifecycleStatus,
     stateVersion: dto.stateVersion,
@@ -128,6 +133,7 @@ export function toEncounterPublicDto(dto: EncounterDto): EncounterPublicDto {
     ...(dto.transitionSummary === undefined ? {} : {
       transitionSummary: toPublicTransitionSummary(dto.transitionSummary),
     }),
+    ...(dto.recoverySummary === undefined ? {} : { recoverySummary: { ...dto.recoverySummary } }),
     ...(dto.consequencesSummary === undefined ? {} : {
       consequencesSummary: {
         schemaVersion: 1 as const,

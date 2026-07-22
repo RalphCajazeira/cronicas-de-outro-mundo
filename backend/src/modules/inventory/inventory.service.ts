@@ -29,6 +29,7 @@ import type { ValidationIssue } from '../rules/core-v1/core-v1.types.js';
 import type { ManageActorInventoryInput } from '../gpt/gpt.schemas.js';
 import { loadActorInventoryMechanicalInputs } from './inventory-mechanical-inputs.js';
 import { InventoryOperationRejectedError, InventoryStateVersionRejectedError } from './inventory.errors.js';
+import { assertActorsMutableOutsideEncounter } from '../encounters/encounter-authority-guard.js';
 
 type InventoryClient = DbClient;
 
@@ -260,6 +261,7 @@ export async function manageActorInventory(
 ) {
   const scope = await resolveActor(client, actorRef, input);
   if (input.operation === 'get') return loadActorInventoryDto(client, scope.actor.id, scope.actor.code);
+  await assertActorsMutableOutsideEncounter(client, scope.campaign.id, [scope.actor]);
   await client.$queryRaw(Prisma.sql`SELECT "id" FROM "Actor" WHERE "id" = ${scope.actor.id}::uuid FOR UPDATE`);
   const locked = await client.actor.findUnique({ where: { id: scope.actor.id }, select: { inventoryStateVersion: true } });
   if (locked === null) throw new NotFoundError('Actor');

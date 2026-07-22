@@ -16,6 +16,7 @@ const valid = {
   continue: { operation: 'continue', ...mutation },
   confirm_completion: { operation: 'confirm_completion', ...mutation },
   cancel: { operation: 'cancel', ...mutation },
+  abandon: { operation: 'abandon', ...mutation, confirmAuthorityDrift: true },
   resolve_beat: {
     operation: 'resolve_beat', ...mutation,
     intent: {
@@ -54,7 +55,7 @@ describe('manageEncounter public schemas', () => {
   });
 
   it('enforces idempotency and expectedStateVersion on every mutation', () => {
-    for (const operation of ['submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel', 'resolve_beat'] as const) {
+    for (const operation of ['submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel', 'abandon', 'resolve_beat'] as const) {
       const withoutKey = { ...valid[operation] } as Record<string, unknown>;
       delete withoutKey.idempotencyKey;
       const withoutVersion = { ...valid[operation] } as Record<string, unknown>;

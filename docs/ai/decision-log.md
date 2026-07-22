@@ -495,3 +495,30 @@ Consequências:
 - origem de transporte (GPT/frontend) não é inventada: será registrada futuramente somente quando existir campo autorizado no contrato.
 
 Status: implementada e validada localmente; commit e rollout pendentes de autorização
+
+## 2026-07-21 — Prontidão inicial e recuperação de drift de autoridade
+
+Decisão:
+
+- manter `startGame` como única transação de criação e devolver `protagonist.readiness`, distinguindo conteúdo mecânico utilizável, narrativo e persistência mecânica incompleta;
+- impedir `manageEncounter(create)` para o protagonista sem arma mecânica equipada, conteúdo ativo conhecido/dominado ou consumível mecânico utilizável;
+- serializar pela Campaign e bloquear mutações externas de Actor, ActorContent, inventário e efeitos quando qualquer ator afetado participa de encontro ativo;
+- ampliar a Action multiplexada existente com `operation=abandon`, preservando exatamente 20 `operationIds` e sem migration;
+- persistir abandono como `EncounterOperationKind.CANCEL` com namespace auditável `encounter.abandon`, lifecycle `FAILED` e stop reason `ENCOUNTER_FAILED`;
+- expor `operation=abandon` e `recoverySummary` fechado, comprovando que não houve ação, dano, custo ou recompensa e que a Campaign foi liberada;
+- permitir abandono somente após drift de versão/autoridade confirmado e validação estrutural histórica; limpar apenas efeitos `ENCOUNTER` cujo `originEncounterId` é exatamente o encontro e cujo alvo é participante;
+- não processar filas, intents, HP/recursos, status, consequência, evento terminal, XP, ouro, loot ou recompensa durante a recuperação;
+- tratar `chest` como peitoral e `body` como traje de corpo inteiro em contrato e conhecimento, sem substituição silenciosa.
+
+Rollout aprovado para execução futura (não executado nesta task):
+
+1. revisar diff e executar lint, typecheck, unit, integration, OpenAPI e build locais;
+2. obter autorização separada para commit/push em `develop`;
+3. confirmar no Supabase staging o histórico Prisma sem reset, dump ou alteração de produção;
+4. executar `npm run prisma:migrate:deploy --prefix backend` contra staging apenas se houver migration pendente (esta mudança não cria migration);
+5. no Render staging Free, manter auto-deploy desligado e realizar deploy manual somente após o gate de migrations; o plano Free não oferece pre-deploy command, portanto o gate manual é o mecanismo obrigatório;
+6. fazer smoke de `/health/ready`, `loadGame`, criação rápida, prontidão, bloqueio de mutação, drift/abandon e replay idempotente;
+7. importar/testar o OpenAPI e atualizar Instructions/Knowledge no GPT Builder somente após o smoke, confirmando 20 Actions e limite do editor;
+8. observar logs e auditoria sem payloads sensíveis; rollback de aplicação volta ao artefato Render anterior, enquanto encontros já abandonados permanecem `FAILED` e auditáveis.
+
+Status: implementada localmente; nenhuma migration, reset remoto, deploy, alteração do GPT ao vivo, commit ou push executados
