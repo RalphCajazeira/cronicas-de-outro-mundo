@@ -8,6 +8,7 @@ export class AppError extends Error {
   readonly retryable: boolean | undefined;
   readonly recoveryAction: string | undefined;
   readonly auditCode: string | undefined;
+  readonly auditCategories: readonly string[] | undefined;
   readonly issues: readonly PublicErrorIssue[] | undefined;
 
   constructor(
@@ -18,6 +19,7 @@ export class AppError extends Error {
       readonly retryable?: boolean;
       readonly recoveryAction?: string;
       readonly auditCode?: string;
+      readonly auditCategories?: readonly string[];
       readonly issues?: readonly PublicErrorIssue[];
     },
   ) {
@@ -25,6 +27,7 @@ export class AppError extends Error {
     this.retryable = options?.retryable;
     this.recoveryAction = options?.recoveryAction;
     this.auditCode = options?.auditCode;
+    this.auditCategories = options?.auditCategories;
     this.issues = options?.issues;
   }
 }

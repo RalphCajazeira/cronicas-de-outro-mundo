@@ -83,26 +83,40 @@ export async function executeIdempotentEncounter(
   const persistedKey = `encounter:${key}`;
   try {
     return await observeOperationStage('encounter_transaction', () => database.$transaction(async (transaction) => {
-      const record = await transaction.idempotencyRecord.create({
+      const record = await observeOperationStage('encounter_idempotency_claim', () => transaction.idempotencyRecord.create({
         data: { key: persistedKey, operation, requestHash },
         select: { id: true },
-      });
+      }));
       const response = await work(transaction, record.id, requestHash);
-      await transaction.idempotencyRecord.update({
+      const persisted = await observeOperationStage(
+        'encounter_idempotency_response',
+        () => transaction.idempotencyRecord.update({
         where: { id: record.id },
         data: { response: json(response) },
-      });
-      return response;
+        select: { response: true },
+        }),
+      );
+      try {
+        return parseEncounterDto(persisted.response);
+      } catch (error) {
+        throw new EncounterError('ENCOUNTER_IDEMPOTENCY_RESPONSE_PENDING', {
+          cause: error,
+          mismatchCategories: ['idempotencyResponse'],
+        });
+      }
     }, ENCOUNTER_TRANSACTION_OPTIONS));
   } catch (error) {
     if (isRetryableEncounterTransactionError(error)) {
       throw new EncounterError('ENCOUNTER_TRANSACTION_RETRYABLE', { retryable: true, cause: error });
     }
     if (!isIdempotencyKeyConflict(error)) throw error;
-    const persisted = await database.idempotencyRecord.findUnique({
-      where: { key: persistedKey },
-      select: { operation: true, requestHash: true, response: true },
-    });
+    const persisted = await observeOperationStage(
+      'encounter_idempotency_replay',
+      () => database.idempotencyRecord.findUnique({
+        where: { key: persistedKey },
+        select: { operation: true, requestHash: true, response: true },
+      }),
+    );
     const inspection = inspectIdempotencyRecord(persisted, operation, requestHash);
     if (inspection.kind === 'replay' && !Array.isArray(inspection.response)) {
       try {

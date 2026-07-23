@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { EncounterLifecycleStatus, EncounterOperationKind } from '../../generated/prisma/client.js';
+import {
+  EncounterCompletionCandidate,
+  EncounterLifecycleStatus,
+  EncounterOperationKind,
+  EncounterStopReason,
+} from '../../generated/prisma/client.js';
 import type { CoreV1EncounterState, CoreV1MechanicalContentProfile } from '../rules/core-v1/index.js';
 import { createAuthoritativeTargetingContext } from './encounter-action-loader.js';
 import {
@@ -9,9 +14,12 @@ import {
 import { applyEncounterTerminalConsequences } from './encounter-terminal-finalizer.js';
 import { EncounterError } from './encounter.errors.js';
 import {
+  assertEncounterDenormalized,
   assertEncounterOperationChainRows,
   deriveEncounterLifecycle,
+  encounterDenormalizedMismatchCategories,
   loadPersistedEncounterAuthorities,
+  type EncounterRecord,
   type LoadedEncounter,
   type PersistedEncounterAuthority,
 } from './encounter-state-loader.js';
@@ -109,6 +117,12 @@ describe('encounter adapter preflight', () => {
     ], 3, secondHash, 'beat')).not.toThrow();
     expect(() => assertEncounterOperationChainRows([
       rows[0]!, {
+        ...rows[1]!, id: 'terminal-beat', operation: EncounterOperationKind.CONFIRM_COMPLETION,
+        idempotencyRecord: { ...rows[1]!.idempotencyRecord, operation: 'encounter.resolve_beat' },
+      },
+    ], 3, secondHash, 'terminal-beat')).not.toThrow();
+    expect(() => assertEncounterOperationChainRows([
+      rows[0]!, {
         ...rows[1]!, id: 'abandon', operation: EncounterOperationKind.CANCEL,
         idempotencyRecord: { ...rows[1]!.idempotencyRecord, operation: 'encounter.abandon' },
       },
@@ -121,6 +135,44 @@ describe('encounter adapter preflight', () => {
     expect(() => assertEncounterOperationChainRows([
       rows[0]!, { ...rows[1]!, idempotencyRecord: { ...rows[1]!.idempotencyRecord, requestHash: 'c'.repeat(64) } },
     ], 3, secondHash, 'continue')).toThrow();
+  });
+
+  it('reports only the first bounded denormalized mismatch categories without public values', () => {
+    const state = {
+      status: 'active',
+      stateVersion: 8,
+      currentTick: 42n,
+      completionCandidate: null,
+      scheduledEvents: [],
+    } as unknown as CoreV1EncounterState;
+    const record = {
+      snapshotSchemaVersion: 2,
+      stateVersion: 7,
+      currentTick: 41n,
+      completionCandidate: EncounterCompletionCandidate.PARTY_VICTORY_CANDIDATE,
+      lifecycleStatus: EncounterLifecycleStatus.COMPLETED,
+      stopReason: EncounterStopReason.ENCOUNTER_COMPLETED,
+      closedAt: null,
+    } as unknown as EncounterRecord;
+    expect(encounterDenormalizedMismatchCategories(record, state)).toEqual([
+      'snapshotSchemaVersion',
+      'stateVersion',
+      'currentTick',
+      'completionCandidate',
+      'lifecycle',
+      'closedAt',
+    ]);
+    expect(() => assertEncounterDenormalized(record, state)).toThrow(expect.objectContaining<Partial<EncounterError>>({
+      code: 'ENCOUNTER_DENORMALIZED_DRIFT',
+      mismatchCategories: [
+        'snapshotSchemaVersion',
+        'stateVersion',
+        'currentTick',
+        'completionCandidate',
+        'lifecycle',
+        'closedAt',
+      ],
+    }));
   });
 
   it('does not reload four unchanged authorities after actor_ready events and movement-only state changes', async () => {

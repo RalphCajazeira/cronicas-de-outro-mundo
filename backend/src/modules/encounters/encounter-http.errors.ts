@@ -63,11 +63,13 @@ function publicAppError(
   definition: PublicErrorDefinition,
   auditCode?: EncounterErrorCode,
   issues?: EncounterError['issues'],
+  auditCategories?: EncounterError['mismatchCategories'],
 ): AppError {
   return new AppError(definition.status, definition.code, definition.message, {
     retryable: definition.retryable,
     ...(definition.recoveryAction === undefined ? {} : { recoveryAction: definition.recoveryAction }),
     ...(auditCode === undefined ? {} : { auditCode }),
+    ...(auditCategories === undefined ? {} : { auditCategories }),
     ...(issues === undefined ? {} : { issues }),
   });
 }
@@ -88,6 +90,7 @@ export function mapEncounterHttpError(error: unknown): AppError {
       },
       error.code,
       error.issues,
+      error.mismatchCategories,
     );
   }
   if (error instanceof NotFoundError) {

@@ -12,6 +12,7 @@ type AuditValue = boolean | number | string | null | AuditValue[] | { [key: stri
 export interface AuditErrorDiagnostic {
   type: 'application' | 'internal' | 'validation';
   code?: string;
+  mismatchCategories?: string[];
   issues?: Array<{ code: string; message?: string; path: string }>;
 }
 

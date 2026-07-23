@@ -51,4 +51,18 @@ describe('encounter HTTP error mapper', () => {
     expect(mapEncounterHttpError(new EncounterError('ENCOUNTER_IDEMPOTENCY_KEY_REUSED')))
       .toMatchObject({ recoveryAction: 'use_new_idempotency_key' });
   });
+
+  it('keeps bounded mismatch categories on the audit channel only', () => {
+    const mapped = mapEncounterHttpError(new EncounterError('ENCOUNTER_DENORMALIZED_DRIFT', {
+      mismatchCategories: [
+        'stateVersion', 'currentTick', 'lifecycle', 'stopReason',
+        'completionCandidate', 'operation', 'adapterState', 'snapshotHash', 'ignored-extra',
+      ],
+    }));
+    expect(mapped.auditCategories).toEqual([
+      'stateVersion', 'currentTick', 'lifecycle', 'stopReason',
+      'completionCandidate', 'operation', 'adapterState', 'snapshotHash',
+    ]);
+    expect(mapped.issues).toBeUndefined();
+  });
 });

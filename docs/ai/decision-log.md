@@ -676,3 +676,24 @@ Impacto:
 - mudanças locais exigem gates completos e revisão antes de qualquer commit, push, deploy ou atualização do GPT Builder.
 
 Status: implementação local em validação; nenhum commit, push, deploy, migration, banco remoto ou GPT Builder alterado
+
+## 2026-07-23 — Integridade terminal e replay canônico do auto-resolve
+
+Decisão:
+
+- preservar o mesmo pipeline de `resolve_beat`, mutation applier, finalizador terminal, snapshot, loader e idempotência;
+- registrar um `resolve_beat` que termina o encontro como `EncounterOperationKind.CONFIRM_COMPLETION`, mantendo o namespace idempotente público `encounter.resolve_beat`;
+- continuar registrando checkpoints não terminais de `resolve_beat` como `SUBMIT_INTENT`;
+- validar e devolver a resposta inicial a partir do mesmo JSON retornado pela atualização do `IdempotencyRecord.response`, eliminando diferenças de representação entre resposta original e replay;
+- limitar o diagnóstico interno de drift a até oito categorias sanitizadas e mantê-las somente na auditoria, sem caminhos, valores, rolls, UUIDs ou payloads no erro público;
+- manter a constraint terminal PostgreSQL, hashes, hard max 12, timeout, regras de dano/custo e contrato OpenAPI inalterados.
+
+Evidência:
+
+- a constraint `encounter_consequence_validate` exige `CONFIRM_COMPLETION` para todo encontro `COMPLETED`; o auto-resolve persistia `SUBMIT_INTENT`, por isso o commit falhava somente quando algum beat alcançava um candidato terminal;
+- lotes 1, 2, 4, 6, 8, 10, 11 e 12 sem término persistem e recarregam sem drift, mostrando que o número 12 não é a causa;
+- o teste terminal PostgreSQL confirma operação `CONFIRM_COMPLETION`, namespace `encounter.resolve_beat`, consequência, reload e replay sem reroll ou escrita duplicada;
+- a idempotência cria, valida, persiste resposta e confirma tudo na mesma transação; uma falha antes/durante o commit reverte também o registro, portanto um sucesso recuperável pela mesma chave comprova commit concluído e perda/falha posterior da resposta, não recuperação de rollback;
+- auto-12 permanece em 118 queries e 8.567 bytes no fixture de budget, com uma carga de catálogo e uma cápsula final.
+
+Status: correção local validada com PostgreSQL real; sem migration, commit, push, deploy, limpeza remota ou alteração do GPT Builder

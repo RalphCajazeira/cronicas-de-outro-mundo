@@ -48,6 +48,9 @@ export const errorHandler: ErrorRequestHandler = (error: unknown, _request, resp
     setAuditError(response, {
       type: 'application',
       code: error.auditCode ?? error.code,
+      ...(error.auditCategories === undefined
+        ? {}
+        : { mismatchCategories: [...error.auditCategories].slice(0, 8) }),
       ...(issues === undefined ? {} : { issues }),
     });
     response.status(error.statusCode).json({ error: {

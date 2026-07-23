@@ -147,6 +147,16 @@ const operationKind = {
   resolve_beat: EncounterOperationKind.SUBMIT_INTENT,
 } as const;
 
+function persistedOperationKind(
+  operation: Exclude<EncounterOperationName, 'create'>,
+  lifecycleStatus: EncounterLifecycleStatus,
+): EncounterOperationKind {
+  if (operation === 'resolve_beat' && lifecycleStatus === EncounterLifecycleStatus.COMPLETED) {
+    return EncounterOperationKind.CONFIRM_COMPLETION;
+  }
+  return operationKind[operation];
+}
+
 const recoverableAuthorityDrift = new Set([
   'ENCOUNTER_MECHANICS_DRIFT',
   'ENCOUNTER_RESOURCE_DRIFT',
@@ -398,7 +408,7 @@ async function persistTransition(
   const persistedOperation = await createEncounterOperation(transaction, {
     encounterId: loaded.record.id,
     idempotencyRecordId,
-    operation: operationKind[operation],
+    operation: persistedOperationKind(operation, lifecycleStatus),
     previousStateVersion: loaded.state.stateVersion,
     nextStateVersion: persistedState.stateVersion,
     inputHash: requestHash,
@@ -1160,7 +1170,10 @@ function translate(error: unknown): never {
   }
   if (postgresMessage.includes('Terminal Encounter requires an EncounterConsequence')
     || postgresMessage.includes('Encounter consequence')) {
-    throw new EncounterError('ENCOUNTER_DENORMALIZED_DRIFT', { cause: error });
+    throw new EncounterError('ENCOUNTER_DENORMALIZED_DRIFT', {
+      cause: error,
+      mismatchCategories: ['lifecycle', 'completionCandidate', 'operation'],
+    });
   }
   if (isRetryableEncounterTransactionError(error)) {
     throw new EncounterError('ENCOUNTER_TRANSACTION_RETRYABLE', { retryable: true, cause: error });

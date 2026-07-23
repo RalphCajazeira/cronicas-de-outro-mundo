@@ -228,4 +228,31 @@ describe('manageEncounter HTTP route', () => {
     }
   });
 
+  it('audits integrity mismatch categories without exposing them in the public error', async () => {
+    const records: HttpAuditRecord[] = [];
+    const failure = new AppError(500, 'ENCOUNTER_INTEGRITY_ERROR', 'Integrity', {
+      retryable: false,
+      recoveryAction: 'stop_encounter_flow',
+      auditCode: 'ENCOUNTER_DENORMALIZED_DRIFT',
+      auditCategories: ['stateVersion', 'operation'],
+    });
+    const service: EncounterHttpService = { manage: () => Promise.reject(failure) };
+    const response = await request(app(service, (auditRecord) => records.push(auditRecord)))
+      .post('/api/v1/encounters/manage')
+      .set('x-rpg-key', config.RPG_API_KEY)
+      .send({
+        operation: 'continue',
+        ...scope,
+        idempotencyKey: 'integrity-audit-categories',
+        expectedStateVersion: 7,
+      });
+    expect(response.status).toBe(500);
+    expect(response.body).not.toHaveProperty('error.mismatchCategories');
+    expect(records[0]?.error).toEqual({
+      type: 'application',
+      code: 'ENCOUNTER_DENORMALIZED_DRIFT',
+      mismatchCategories: ['stateVersion', 'operation'],
+    });
+  });
+
 });

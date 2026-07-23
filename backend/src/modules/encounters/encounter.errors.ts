@@ -61,17 +61,22 @@ export class EncounterError extends Error {
   readonly code: EncounterErrorCode;
   readonly retryable: boolean;
   readonly issues: readonly EncounterErrorIssue[] | undefined;
+  readonly mismatchCategories: readonly string[] | undefined;
 
   constructor(code: EncounterErrorCode, options?: {
     readonly retryable?: boolean;
     readonly cause?: unknown;
     readonly issues?: readonly EncounterErrorIssue[];
+    readonly mismatchCategories?: readonly string[];
   }) {
     super(safeMessages[code], options?.cause === undefined ? undefined : { cause: options.cause });
     this.name = 'EncounterError';
     this.code = code;
     this.retryable = options?.retryable ?? code === 'ENCOUNTER_TRANSACTION_RETRYABLE';
     this.issues = options?.issues;
+    this.mismatchCategories = options?.mismatchCategories === undefined
+      ? undefined
+      : [...new Set(options.mismatchCategories)].slice(0, 8);
   }
 }
 

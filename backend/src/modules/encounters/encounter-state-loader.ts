@@ -111,20 +111,20 @@ export function deriveEncounterLifecycle(
   return EncounterLifecycleStatus.PROCESSING_PAUSED;
 }
 
-export function assertEncounterDenormalized(record: EncounterRecord, state: CoreV1EncounterState): void {
-  if (record.snapshotSchemaVersion !== 1
-    || record.stateVersion !== state.stateVersion
-    || record.currentTick !== state.currentTick
-    || record.completionCandidate !== databaseCompletionCandidate(state.completionCandidate)) {
-    throw new EncounterError('ENCOUNTER_DENORMALIZED_DRIFT');
+export function encounterDenormalizedMismatchCategories(
+  record: EncounterRecord,
+  state: CoreV1EncounterState,
+): readonly string[] {
+  const mismatches: string[] = [];
+  if (record.snapshotSchemaVersion !== 1) mismatches.push('snapshotSchemaVersion');
+  if (record.stateVersion !== state.stateVersion) mismatches.push('stateVersion');
+  if (record.currentTick !== state.currentTick) mismatches.push('currentTick');
+  if (record.completionCandidate !== databaseCompletionCandidate(state.completionCandidate)) {
+    mismatches.push('completionCandidate');
   }
   const normalizedStopReason = record.stopReason === null ? null : record.stopReason.toLowerCase();
   const expectedLifecycle = deriveEncounterLifecycle(state, normalizedStopReason);
-  const closed = new Set<EncounterLifecycleStatus>([
-    EncounterLifecycleStatus.COMPLETED,
-    EncounterLifecycleStatus.CANCELLED,
-    EncounterLifecycleStatus.FAILED,
-  ]).has(record.lifecycleStatus);
+  if (record.lifecycleStatus !== expectedLifecycle) mismatches.push('lifecycle');
   const stopMatchesStatus = state.status === 'completed'
     ? normalizedStopReason === 'encounter_completed'
     : state.status === 'failed'
@@ -132,9 +132,22 @@ export function assertEncounterDenormalized(record: EncounterRecord, state: Core
       : state.status === 'cancelled'
         ? normalizedStopReason === null && state.completionCandidate === 'cancelled'
         : true;
-  if (record.lifecycleStatus !== expectedLifecycle || !stopMatchesStatus
-    || (closed ? record.closedAt === null : record.closedAt !== null)) {
-    throw new EncounterError('ENCOUNTER_DENORMALIZED_DRIFT');
+  if (!stopMatchesStatus) mismatches.push('stopReason');
+  const closed = new Set<EncounterLifecycleStatus>([
+    EncounterLifecycleStatus.COMPLETED,
+    EncounterLifecycleStatus.CANCELLED,
+    EncounterLifecycleStatus.FAILED,
+  ]).has(record.lifecycleStatus);
+  if ((closed && record.closedAt === null) || (!closed && record.closedAt !== null)) {
+    mismatches.push('closedAt');
+  }
+  return mismatches.slice(0, 8);
+}
+
+export function assertEncounterDenormalized(record: EncounterRecord, state: CoreV1EncounterState): void {
+  const mismatchCategories = encounterDenormalizedMismatchCategories(record, state);
+  if (mismatchCategories.length > 0) {
+    throw new EncounterError('ENCOUNTER_DENORMALIZED_DRIFT', { mismatchCategories });
   }
 }
 
@@ -175,6 +188,8 @@ export function assertEncounterOperationChainRows(
     const expectedNamespace = `encounter.${operation.operation.toLowerCase()}`;
     const acceptedNamespaces = operation.operation === EncounterOperationKind.SUBMIT_INTENT
       ? new Set([expectedNamespace, 'encounter.resolve_beat'])
+      : operation.operation === EncounterOperationKind.CONFIRM_COMPLETION
+        ? new Set([expectedNamespace, 'encounter.resolve_beat'])
       : operation.operation === EncounterOperationKind.CANCEL
         ? new Set([expectedNamespace, 'encounter.abandon'])
         : new Set([expectedNamespace]);

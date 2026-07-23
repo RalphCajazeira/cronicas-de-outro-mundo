@@ -1593,6 +1593,7 @@ describe('Phase 1L-B transactional encounter adapter', () => {
       await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } })).resolves.toBe(2);
       const replay = await encounterService.resolveBeat(input);
       expect(replay).toEqual(resolved);
+      expect(JSON.stringify(replay)).toBe(JSON.stringify(resolved));
       await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } })).resolves.toBe(2);
       await encounterService.cancel({
         ...seedScope,
@@ -1621,6 +1622,302 @@ describe('Phase 1L-B transactional encounter adapter', () => {
           });
         }
       }
+    }
+  });
+
+  it('keeps the 1-12 automatic matrix integral with canonical replay at every checkpoint', async () => {
+    const fixture = await createBeatNpcFixture('automatic-matrix', 1, async ({ world, campaign, hero }) => {
+      const code = 'automatic-matrix-sustain';
+      const sustain = await publishTestContent({
+        worldId: world.id,
+        campaignId: campaign.id,
+        contentType: ContentType.SPELL,
+        code,
+        name: 'Automatic Matrix Sustain',
+        profile: {
+          ...activeProfile('spell', code, 'Automatic Matrix Sustain'),
+          cost: { type: 'none' as const },
+          effects: [{
+            type: 'restore_resource' as const,
+            resource: 'hp' as const,
+            amount: 1,
+            targeting: { type: 'self' as const, rangeBand: 'self' as const },
+          }],
+        },
+      });
+      await prisma.actorContent.create({
+        data: {
+          actorId: hero.id,
+          contentDefinitionId: sustain.id,
+          contentVersionId: sustain.versions[0]!.id,
+          state: ActorContentState.MASTERED,
+        },
+      });
+    });
+    await encounterService.cancel({
+      ...fixture.scope,
+      encounterRef: fixture.encounterRef,
+      idempotencyKey: 'automatic-matrix-initial-cancel',
+      expectedStateVersion: fixture.created.stateVersion,
+    });
+    const maximumBeatsMatrix = [1, 2, 4, 6, 8, 10, 11, 12] as const;
+    const matrix: Array<{
+      maximumBeats: number;
+      beatsProcessed: number;
+      lifecycleStatus: EncounterDto['lifecycleStatus'];
+    }> = [];
+    for (const maximumBeats of maximumBeatsMatrix) {
+      const encounterRef = `automatic-matrix-${String(maximumBeats)}`;
+      const created = await encounterService.create({
+        ...fixture.scope,
+        encounterRef,
+        idempotencyKey: `automatic-matrix-${String(maximumBeats)}-create`,
+        partySideRef: 'party',
+        participants: [
+          { bindingKind: 'persisted_actor', actorRef: fixture.heroRef, sideRef: 'party', zone: 'near' },
+          { bindingKind: 'persisted_actor', actorRef: fixture.npcRefs[0]!, sideRef: 'hostile', zone: 'near' },
+        ],
+        relations: [
+          { leftActorRef: fixture.heroRef, rightActorRef: fixture.heroRef, relation: 'self' },
+          { leftActorRef: fixture.heroRef, rightActorRef: fixture.npcRefs[0]!, relation: 'hostile' },
+          { leftActorRef: fixture.npcRefs[0]!, rightActorRef: fixture.npcRefs[0]!, relation: 'self' },
+        ],
+      });
+      const input = {
+        ...fixture.scope,
+        encounterRef,
+        idempotencyKey: `automatic-matrix-${String(maximumBeats)}-resolve`,
+        expectedStateVersion: created.stateVersion,
+        policy: {
+          actorRef: fixture.heroRef,
+          mode: 'bounded' as const,
+          strategy: 'defensive' as const,
+          objective: 'Resolve the deterministic automatic integrity matrix.',
+          targetPriority: 'nearest_hostile' as const,
+          protectedActorRefs: [],
+          maximumBeats,
+          resourcePolicy: {
+            allowCommonConsumables: false,
+            allowRareConsumables: false,
+            allowLimitedAbilities: false,
+            preserveManaPercent: 50,
+            preserveSpPercent: 50,
+            stopBelowHpPercent: 0,
+            stopIfProtectedActorBelowHpPercent: 0,
+            allowFlee: false,
+            allowTargetSwitch: true,
+            allowEnvironmentalInteraction: false,
+          },
+        },
+      };
+      const resolved = await encounterService.resolveBeat(input);
+      const replay = await encounterService.resolveBeat(input);
+      expect(replay).toEqual(resolved);
+      expect(JSON.stringify(replay)).toBe(JSON.stringify(resolved));
+      expect(resolved.batchSummary?.beatsProcessed).toBe(maximumBeats);
+      await expect(encounterService.load({ ...fixture.scope, encounterRef })).resolves.toMatchObject({
+        stateVersion: resolved.stateVersion,
+        lifecycleStatus: resolved.lifecycleStatus,
+      });
+      const operation = await prisma.encounterOperation.findFirstOrThrow({
+        where: { encounter: { encounterRef } },
+        orderBy: { nextStateVersion: 'desc' },
+        select: { operation: true, idempotencyRecord: { select: { operation: true } } },
+      });
+      expect(operation.idempotencyRecord.operation).toBe('encounter.resolve_beat');
+      expect(operation.operation).toBe(EncounterOperationKind.SUBMIT_INTENT);
+      matrix.push({
+        maximumBeats,
+        beatsProcessed: resolved.batchSummary?.beatsProcessed ?? 0,
+        lifecycleStatus: resolved.lifecycleStatus,
+      });
+      await encounterService.cancel({
+        ...fixture.scope,
+        encounterRef,
+        idempotencyKey: `automatic-matrix-${String(maximumBeats)}-cancel`,
+        expectedStateVersion: resolved.stateVersion,
+      });
+    }
+    expect(matrix.map((entry) => entry.maximumBeats)).toEqual(maximumBeatsMatrix);
+    expect(matrix).toEqual(maximumBeatsMatrix.map((maximumBeats) => ({
+      maximumBeats,
+      beatsProcessed: maximumBeats,
+      lifecycleStatus: 'awaiting_intent',
+    })));
+    if (process.env.REPORT_ENCOUNTER_BUDGETS === '1') {
+      console.info(`ENCOUNTER_AUTOMATIC_MATRIX=${JSON.stringify(matrix)}`);
+    }
+  });
+
+  it('commits terminal resolve_beat with the canonical terminal operation and replay', async () => {
+    const beatService = createEncounterService(
+      prisma,
+      (executionRef) => new RecordingEncounterRollProvider({ nextBps: () => 1 }, executionRef),
+    );
+    const fixture = await createBeatNpcFixture('terminal-resolve', 1, async ({ world, campaign }) => {
+      await publishTestContent({
+        worldId: world.id,
+        campaignId: campaign.id,
+        contentType: ContentType.WEAPON,
+        code: 'terminal-resolve-sword',
+        name: 'Terminal Resolve Sword',
+        description: 'Arma terminal do teste.',
+        profile: {
+          ...weaponProfile('terminal-resolve-sword', 'Terminal Resolve Sword', 'Arma terminal do teste.'),
+          handedness: 'one_handed' as const,
+          weaponTags: ['sword'],
+        },
+        inventorySpec: uniqueInventorySpec(2, {
+          equipmentSlots: ['main_hand'],
+          handedness: 'one_handed',
+        }),
+        tags: ['weapon'],
+      });
+    });
+    await beatService.cancel({
+      ...fixture.scope,
+      encounterRef: fixture.encounterRef,
+      idempotencyKey: 'terminal-resolve-initial-cancel',
+      expectedStateVersion: fixture.created.stateVersion,
+    });
+    const inventory = await post(`/api/v1/actors/${fixture.heroRef}/inventory/manage`, {
+      ...fixture.scope,
+      operation: 'get',
+    });
+    const granted = await post(`/api/v1/actors/${fixture.heroRef}/inventory/manage`, {
+      ...fixture.scope,
+      operation: 'grant',
+      idempotencyKey: 'terminal-resolve-grant',
+      expectedInventoryStateVersion: Number(bodyRecord(inventory).inventoryStateVersion),
+      contentRef: {
+        scope: 'campaign',
+        contentType: 'weapon',
+        code: 'terminal-resolve-sword',
+        versionNumber: 1,
+      },
+      quantity: 1,
+      entryRefs: ['terminal-resolve-sword-1'],
+    });
+    const equipped = await post(`/api/v1/actors/${fixture.heroRef}/inventory/manage`, {
+      ...fixture.scope,
+      operation: 'equip',
+      idempotencyKey: 'terminal-resolve-equip',
+      expectedInventoryStateVersion: Number(bodyRecord(granted).inventoryStateVersion),
+      entryRef: 'terminal-resolve-sword-1',
+      targetSlotRef: 'main_hand',
+    });
+    expect(equipped.status).toBe(200);
+    const targetRef = fixture.npcRefs[0];
+    if (targetRef === undefined) throw new Error('Terminal beat target is required');
+    const target = await prisma.actor.findFirstOrThrow({
+      where: { code: targetRef, campaignId: fixture.campaign.id },
+      include: { derivedSnapshot: true },
+    });
+    if (target.derivedSnapshot === null) {
+      throw new Error('Terminal beat actors require derived snapshots');
+    }
+    await prisma.$transaction([
+      prisma.actorResource.update({
+        where: { actorId_type: { actorId: target.id, type: 'HP' } },
+        data: { current: 1, stateVersion: { increment: 1 } },
+      }),
+      prisma.actor.update({ where: { id: target.id }, data: { status: 'ACTIVE' } }),
+    ]);
+    const encounterRef = 'terminal-resolve-beat';
+    const created = await beatService.create({
+      ...fixture.scope,
+      encounterRef,
+      idempotencyKey: 'phase-terminal-resolve-beat-create',
+      partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: fixture.heroRef, sideRef: 'party', zone: 'engaged' },
+        { bindingKind: 'persisted_actor', actorRef: targetRef, sideRef: 'hostile', zone: 'engaged' },
+      ],
+      relations: [
+        { leftActorRef: fixture.heroRef, rightActorRef: fixture.heroRef, relation: 'self' },
+        { leftActorRef: fixture.heroRef, rightActorRef: targetRef, relation: 'hostile' },
+        { leftActorRef: targetRef, rightActorRef: targetRef, relation: 'self' },
+      ],
+    });
+    const input = {
+      ...fixture.scope,
+      encounterRef,
+      idempotencyKey: 'phase-terminal-resolve-beat-resolve',
+      expectedStateVersion: created.stateVersion,
+      policy: {
+        actorRef: fixture.heroRef,
+        mode: 'until_terminal' as const,
+        strategy: 'balanced' as const,
+        objective: 'Confirm the terminal automatic ledger path.',
+        targetPriority: 'nearest_hostile' as const,
+        protectedActorRefs: [],
+        maximumBeats: 12,
+        resourcePolicy: {
+          allowCommonConsumables: false,
+          allowRareConsumables: false,
+          allowLimitedAbilities: false,
+          preserveManaPercent: 50,
+          preserveSpPercent: 50,
+          stopBelowHpPercent: 0,
+          stopIfProtectedActorBelowHpPercent: 0,
+          allowFlee: false,
+          allowTargetSwitch: true,
+          allowEnvironmentalInteraction: false,
+        },
+      },
+    };
+    let resolved: EncounterDto | undefined;
+    try {
+      resolved = await beatService.resolveBeat(input);
+      expect(resolved).toMatchObject({
+        operation: 'resolve_beat',
+        lifecycleStatus: 'completed',
+        nextRequiredAction: { type: 'none' },
+        batchSummary: {
+          mode: 'automatic',
+          beatsProcessed: 1,
+          stopCategory: 'terminal',
+        },
+      });
+      const replay = await beatService.resolveBeat(input);
+      expect(replay).toEqual(resolved);
+      expect(JSON.stringify(replay)).toBe(JSON.stringify(resolved));
+      await expect(beatService.load({ ...fixture.scope, encounterRef })).resolves.toMatchObject({
+        stateVersion: resolved.stateVersion,
+        lifecycleStatus: 'completed',
+      });
+      await expect(prisma.encounterOperation.findFirstOrThrow({
+        where: { encounter: { encounterRef } },
+        orderBy: { nextStateVersion: 'desc' },
+        select: { operation: true, idempotencyRecord: { select: { operation: true } } },
+      })).resolves.toEqual({
+        operation: EncounterOperationKind.CONFIRM_COMPLETION,
+        idempotencyRecord: { operation: 'encounter.resolve_beat' },
+      });
+    } finally {
+      if (resolved === undefined) {
+        const open = await prisma.encounter.findFirst({
+          where: { encounterRef },
+          select: { lifecycleStatus: true, stateVersion: true },
+        });
+        if (open !== null && ACTIVE_ENCOUNTER_LIFECYCLES.includes(
+          open.lifecycleStatus as typeof ACTIVE_ENCOUNTER_LIFECYCLES[number],
+        )) {
+          await beatService.cancel({
+            ...fixture.scope,
+            encounterRef,
+            idempotencyKey: 'phase-terminal-resolve-beat-cleanup',
+            expectedStateVersion: open.stateVersion,
+          });
+        }
+      }
+      await prisma.$transaction([
+        prisma.actorResource.update({
+          where: { actorId_type: { actorId: target.id, type: 'HP' } },
+          data: { current: target.derivedSnapshot.maxHp, stateVersion: { increment: 1 } },
+        }),
+        prisma.actor.update({ where: { id: target.id }, data: { status: 'ACTIVE' } }),
+      ]);
     }
   });
 
