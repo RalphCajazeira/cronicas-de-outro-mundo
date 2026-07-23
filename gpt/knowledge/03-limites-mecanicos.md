@@ -42,4 +42,4 @@ Quando a história precisar preservar um fato compatível com o contrato, use a 
 
 O evento técnico `campaign-started` registra apenas um resumo funcional allowlisted da criação confirmada, com payload limitado. Ele não é checkpoint, snapshot narrativo, inventário ou memória especializada, e sua idempotência não é uma segunda chave pública separada da operação `startGame`.
 
-Estado deste artefato: a resolução por beat está implementada localmente, sem migration; staging e GPT Builder permanecem inalterados até revisão e rollout.
+Estado deste artefato: a resolução por beat está operacional no staging. As mudanças locais de autonomia e classificação das Actions desta task ainda dependem de revisão e publicação manual no GPT Builder.

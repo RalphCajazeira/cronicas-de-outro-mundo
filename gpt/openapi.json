@@ -20,6 +20,7 @@
     "/health": {
       "get": {
         "operationId": "checkHealth",
+        "x-openai-isConsequential": false,
         "summary": "Verificar se o processo está ativo",
         "security": [],
         "responses": {
@@ -42,6 +43,7 @@
     "/health/ready": {
       "get": {
         "operationId": "checkReadiness",
+        "x-openai-isConsequential": false,
         "summary": "Verificar prontidão segura do banco",
         "security": [],
         "responses": {
@@ -74,6 +76,7 @@
     "/openapi.json": {
       "get": {
         "operationId": "getOpenApiContract",
+        "x-openai-isConsequential": false,
         "summary": "Obter o contrato OpenAPI ativo",
         "security": [],
         "responses": {
@@ -97,6 +100,7 @@
     "/api/v1/game/load": {
       "post": {
         "operationId": "loadGame",
+        "x-openai-isConsequential": false,
         "summary": "Carregar o estado normalizado da campanha",
         "description": "Consulta somente leitura para carregar ou continuar uma campanha existente. Se activeEncounter não for nulo, use a ref devolvida em manageEncounter load antes de narrar ou agir. NOT_FOUND não autoriza criação automática.",
         "requestBody": {
@@ -144,6 +148,7 @@
     "/api/v1/game/start": {
       "post": {
         "operationId": "startGame",
+        "x-openai-isConsequential": false,
         "summary": "Criar um jogo estruturado em uma transação",
         "description": "Somente após pedido explícito e confirmação, cria/reutiliza Player e World sem atualizá-los e cria Campaign, protagonista, conteúdos, vínculos e campaign-started. Reuse envia apenas mode, scope, code e contentType.",
         "requestBody": {
@@ -191,6 +196,7 @@
     "/api/v1/players/{playerRef}/worlds": {
       "get": {
         "operationId": "listPlayerWorlds",
+        "x-openai-isConsequential": false,
         "summary": "Listar os mundos pertencentes ao jogador",
         "description": "Consulta somente leitura para listar/mostrar mundos ou localizar jogo existente. Use antes de criação; lista vazia não autoriza startGame.",
         "parameters": [
@@ -238,6 +244,7 @@
     "/api/v1/players/{playerRef}/worlds/{worldRef}/campaigns": {
       "get": {
         "operationId": "listWorldCampaigns",
+        "x-openai-isConsequential": false,
         "summary": "Listar as campanhas do mundo pertencente ao jogador",
         "description": "Consulta somente leitura para listar/mostrar campanhas após obter playerRef e worldRef. Use antes de criação; lista vazia não autoriza startGame.",
         "parameters": [
@@ -293,6 +300,7 @@
     "/api/v1/campaigns/{campaignRef}/actors": {
       "get": {
         "operationId": "listCampaignActors",
+        "x-openai-isConsequential": false,
         "summary": "Listar atores da campanha",
         "parameters": [
           {
@@ -355,6 +363,7 @@
     "/api/v1/characters/{characterRef}": {
       "get": {
         "operationId": "getCharacter",
+        "x-openai-isConsequential": false,
         "summary": "Consultar personagem preservado da API inicial",
         "parameters": [
           {
@@ -422,6 +431,7 @@
     "/api/v1/characters/{characterRef}/content": {
       "get": {
         "operationId": "listCharacterContent",
+        "x-openai-isConsequential": false,
         "summary": "Listar conteúdo do personagem preservado da API inicial",
         "parameters": [
           {
@@ -492,6 +502,7 @@
     "/api/v1/actors/{actorRef}": {
       "get": {
         "operationId": "getActor",
+        "x-openai-isConsequential": false,
         "summary": "Consultar ator preservado da API inicial",
         "parameters": [
           {
@@ -557,6 +568,7 @@
       },
       "patch": {
         "operationId": "updateActor",
+        "x-openai-isConsequential": false,
         "summary": "Atualizar somente campos aprovados do ator",
         "parameters": [
           {
@@ -610,6 +622,7 @@
     "/api/v1/actors/upsert": {
       "post": {
         "operationId": "upsertActor",
+        "x-openai-isConsequential": false,
         "summary": "Criar ou atualizar ator por campanha e code",
         "requestBody": {
           "required": true,
@@ -653,6 +666,7 @@
     "/api/v1/actors/{actorRef}/content/manage": {
       "post": {
         "operationId": "manageActorContent",
+        "x-openai-isConsequential": false,
         "summary": "Consultar, vincular ou evoluir conteúdo do ator",
         "description": "get/list são leituras. learn, grant, update e remove exigem idempotencyKey.",
         "parameters": [
@@ -720,6 +734,7 @@
     "/api/v1/actors/{actorRef}/inventory/manage": {
       "post": {
         "operationId": "manageActorInventory",
+        "x-openai-isConsequential": false,
         "summary": "Consultar e alterar o inventário físico autoritativo do ator",
         "description": "get é leitura. Escritas exigem idempotencyKey e expectedInventoryStateVersion; equip exige entryRef. Armas de uma mão exigem a mão; versáteis exigem versatileMode. Itens não acessórios podem omitir targetSlotRef; acessórios usam accessory_1 ou accessory_2.",
         "parameters": [{ "name": "actorRef", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/Code" } }],
@@ -799,6 +814,7 @@
     "/api/v1/content/{contentRef}": {
       "get": {
         "operationId": "getContent",
+        "x-openai-isConsequential": false,
         "summary": "Consultar definição de conteúdo no escopo e tipo explícitos",
         "description": "Prioriza a definição específica da campanha; se ela não existir, usa somente a definição global do mesmo World e contentType.",
         "parameters": [
@@ -875,6 +891,7 @@
     "/api/v1/content/upsert": {
       "post": {
         "operationId": "upsertContent",
+        "x-openai-isConsequential": false,
         "summary": "Criar ou atualizar definição por escopo, tipo e code",
         "requestBody": {
           "required": true,
@@ -918,6 +935,7 @@
     "/api/v1/actors/effects/resolve": {
       "post": {
         "operationId": "resolveActorEffect",
+        "x-openai-isConsequential": false,
         "summary": "Consultar ou resolver efeitos autoritativos de um ator",
         "description": "get somente lê. execute_content e use_consumable validam tokens otimistas, geram rolls no backend e persistem custo, dano, recursos, inventário, efeitos e auditoria atomicamente. Multi-target retorna REQUIRES_ACTION_ORCHESTRATOR.",
         "requestBody": {
@@ -948,6 +966,7 @@
     "/api/v1/events": {
       "post": {
         "operationId": "createGameEvent",
+        "x-openai-isConsequential": false,
         "summary": "Registrar evento narrativo idempotente",
         "requestBody": {
           "required": true,
@@ -991,6 +1010,7 @@
     "/api/v1/encounters/manage": {
       "post": {
         "operationId": "manageEncounter",
+        "x-openai-isConsequential": false,
         "tags": ["Encounters"],
         "summary": "Criar, carregar ou resolver um beat autoritativo de encontro",
         "description": "Prefira load uma vez e resolve_beat por decisão; o backend internaliza avanço, reações, NPCs e conclusão. O fluxo antigo é fallback. Mutações usam idempotencyKey e expectedStateVersion após create. Em conflito, use load. Nunca envie rolls, resultados, snapshots ou IDs internos.",

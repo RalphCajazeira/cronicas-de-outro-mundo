@@ -9,7 +9,7 @@ import { manageEncounterSchema } from '../encounters/encounter-http.schemas.js';
 import { manageActorInventorySchema } from '../gpt/gpt.schemas.js';
 import { coreV1ContentProfileSchema, inventorySpecSchema } from '../content/content.schemas.js';
 
-interface Operation { operationId?: string; security?: unknown; tags?: string[]; parameters?: Array<Schema & { name?: string; in?: string; required?: boolean }>; requestBody?: { content?: { 'application/json'?: { schema?: Schema; examples?: Record<string, { value?: unknown }> } } }; description?: string; responses?: Record<string, unknown> }
+interface Operation { operationId?: string; security?: unknown; tags?: string[]; parameters?: Array<Schema & { name?: string; in?: string; required?: boolean }>; requestBody?: { content?: { 'application/json'?: { schema?: Schema; examples?: Record<string, { value?: unknown }> } } }; description?: string; responses?: Record<string, unknown>; 'x-openai-isConsequential'?: unknown }
 interface Schema {
   type?: string;
   $ref?: string;
@@ -43,6 +43,29 @@ const gptInstructions = readFileSync(new URL('../../../../gpt/instructions.md', 
 const readinessKnowledge = readFileSync(new URL('../../../../gpt/knowledge/09-fichas-e-coerencia-mecanica.md', import.meta.url), 'utf8');
 const continuityKnowledge = readFileSync(new URL('../../../../gpt/knowledge/01-narrativa-e-continuidade.md', import.meta.url), 'utf8');
 const methods = new Set(['get', 'post', 'put', 'patch', 'delete']);
+const EXPECTED_CONSEQUENTIAL_BY_OPERATION_ID = {
+  checkHealth: false,
+  checkReadiness: false,
+  getOpenApiContract: false,
+  loadGame: false,
+  startGame: false,
+  listPlayerWorlds: false,
+  listWorldCampaigns: false,
+  listCampaignActors: false,
+  getCharacter: false,
+  listCharacterContent: false,
+  getActor: false,
+  updateActor: false,
+  upsertActor: false,
+  manageActorContent: false,
+  manageActorInventory: false,
+  getContent: false,
+  upsertContent: false,
+  resolveActorEffect: false,
+  createGameEvent: false,
+  manageEncounter: false,
+} as const;
+const CONSEQUENTIAL_OPERATION_IDS: readonly string[] = [];
 
 function operations() {
   return Object.entries(contract.paths).flatMap(([path, pathItem]) => Object.entries(pathItem)
@@ -92,6 +115,22 @@ describe('official OpenAPI contract', () => {
     expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toHaveLength(20);
+  });
+
+  it('declares the complete explicit consequential matrix without relying on method defaults', () => {
+    const actual: Record<string, unknown> = {};
+    for (const { operation } of operations()) {
+      if (operation.operationId === undefined) throw new Error('operationId is required');
+      actual[operation.operationId] = operation['x-openai-isConsequential'];
+    }
+    expect(actual).toEqual(EXPECTED_CONSEQUENTIAL_BY_OPERATION_ID);
+    expect(Object.values(actual).every((value) => typeof value === 'boolean')).toBe(true);
+    expect(Object.entries(actual).filter(([, value]) => value === true).map(([operationId]) => operationId).sort())
+      .toEqual([...CONSEQUENTIAL_OPERATION_IDS].sort());
+    expect(operations().filter(({ operation }) => (
+      operation['x-openai-isConsequential'] === true
+      && !CONSEQUENTIAL_OPERATION_IDS.includes(operation.operationId ?? '')
+    ))).toEqual([]);
   });
 
   it('keeps operation descriptions within the GPT Actions editor limit', () => {
@@ -343,6 +382,27 @@ describe('official OpenAPI contract', () => {
     expect(continuityKnowledge).toContain('uma única intenção `resolve_beat`');
   });
 
+  it('keeps high autonomy explicit without weakening backend authority', () => {
+    expect(gptInstructions).toContain('Autonomia alta é o padrão');
+    expect(gptInstructions).toContain('execute todas as Actions rotineiras necessárias sem pedir nova confirmação textual');
+    expect(gptInstructions).toContain('O backend autentica, valida, calcula e persiste');
+    expect(gptInstructions).toContain('Não invente dano, custo, acerto, equipamento, recompensa, persistência ou `stateVersion`');
+    expect(gptInstructions).toContain('Prefira `startGame` completo, `loadGame` uma vez, `resolve_beat` por decisão');
+    expect(gptInstructions).toContain('Execute recuperação segura quando houver `recoveryAction` explícita');
+    expect(gptInstructions.length).toBeGreaterThanOrEqual(7_550);
+    expect(gptInstructions.length).toBeLessThanOrEqual(7_650);
+  });
+
+  it('documents the autonomy behavior cases and conversational confirmation boundaries', () => {
+    expect(gptInstructions).toContain('“Vou atacar o slime com a adaga” autoriza');
+    expect(gptInstructions).toContain('sem novas perguntas');
+    expect(gptInstructions).toContain('Após aprovação, chame `startGame` uma vez');
+    expect(gptInstructions).toContain('ajuste uma vez, gere nova chave, repita sem confirmação');
+    expect(gptInstructions).toContain('exclusão, morte definitiva ou perda permanente');
+    expect(gptInstructions).toContain('Operações administrativas não são automatizadas nem expostas');
+    expect(gptInstructions).toContain('Se descartar progresso relevante, pergunte');
+  });
+
   it('starts creation only explicitly and handles empty discovery or missing identity without a questionnaire', () => {
     expect(gptInstructions).toContain('Criação Rápida, Guiada ou Livre exige pedido explícito de novo jogo/aventura');
     expect(gptInstructions).toContain('Consulta vazia ou `NOT_FOUND`: informe que nada foi encontrado, ofereça criar e aguarde escolha explícita');
@@ -368,6 +428,15 @@ describe('official OpenAPI contract', () => {
     }
     expect(readinessKnowledge).toContain('`body` ocupa traje/armadura de corpo inteiro');
     expect(readinessKnowledge).toContain('`chest` é reservado a peitoral');
+    expect(gptInstructions).toContain('Slots: use o solicitado se válido');
+    expect(gptInstructions).toContain('Consulte os compatíveis retornados pelo backend');
+    expect(gptInstructions).toContain('corrija só para slot explicitamente declarado');
+    expect(gptInstructions).toContain('sem mudar a natureza do item');
+    expect(gptInstructions).toContain('`body` e `chest` não são equivalentes nem conversíveis sem pedido');
+    expect(gptInstructions).toContain('traje integral, uniforme ou conjunto completo fica em `body`');
+    expect(gptInstructions).toContain('peitoral, couraça ou proteção do torso fica em `chest`');
+    expect(gptInstructions).toContain('nunca a intenção semântica');
+    expect(gptInstructions).not.toMatch(/slot (?:alternativo )?equivalente|slot mais próximo|body`? (?:para|como) `?chest|chest`? (?:para|como) `?body/i);
   });
 
   it('uses closed request objects and lowercase public enums', () => {
@@ -576,6 +645,7 @@ describe('official OpenAPI contract', () => {
   it('contains neither legacy endpoints nor sensitive infrastructure', () => {
     const serialized = JSON.stringify(contract);
     expect(Object.keys(contract.paths).every((path) => !/rpg-gpt|rpg-state|rpg-combat|functions\/v1/i.test(path))).toBe(true);
+    expect(Object.keys(contract.paths).every((path) => !/(?:^|\/)(?:admin|internal|reset|delete|destroy)(?:\/|$)/i.test(path))).toBe(true);
     expect(serialized).not.toMatch(/supabase\.co|onrender\.com|service[_-]?role|postgres(?:ql)?:\/\//i);
   });
 });

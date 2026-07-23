@@ -48,6 +48,9 @@ Os arquivos em `legacy/supabase-gpt-v1/` são somente referência histórica e n
 9. provocar um `INVALID_INPUT` sem persistência e confirmar que não há retry automático do mesmo payload.
 10. iniciar uma conversa somente com “Quero começar uma nova aventura” e confirmar que o GPT pergunta como o jogador deseja ser chamado, sem mencionar `playerRef` ou outro campo da Action.
 11. reencontrar jogos perguntando pelo nome usado para salvar e confirmar que Worlds e Campaigns são apresentados somente por nomes legíveis.
+12. confirmar que o import preservou exatamente 20 `operationId`s e que todas as operações declaram explicitamente `x-openai-isConsequential: false`;
+13. publicar o GPT, abrir uma conversa nova e, no primeiro cartão de Action que oferecer a escolha, selecionar **Sempre permitir** — não apenas **Permitir uma vez**;
+14. validar que uma intenção explícita de ataque executa carga/reuso, aproximação necessária, `resolve_beat` e narração sem confirmações textuais intermediárias.
 
 ## Quebra-gelos
 
@@ -60,13 +63,15 @@ Configure estes quatro quebra-gelos, nesta ordem:
 
 Os quebra-gelos e as respostas iniciais nunca devem pedir refs, chaves, versões ou nomes de campos da API. O GPT traduz as escolhas do jogador para o contrato técnico internamente.
 
-Na criação estruturada, Player e World usam modos explícitos `create|reuse`, Campaign é sempre nova e conteúdo global reutilizado deve ser consultado antes com `getContent`. A Action envia no pacote reutilizado somente mode, scope, code e contentType; o backend não atualiza a definição existente. A resposta de `startGame` ainda deve ser confirmada por `loadGame`.
+Na criação estruturada, Player e World usam modos explícitos `create|reuse`, Campaign é sempre nova e conteúdo global reutilizado deve ser consultado antes com `getContent`. A Action envia no pacote reutilizado somente mode, scope, code e contentType; o backend não atualiza a definição existente. A resposta de `startGame` já contém o estado normalizado e deve ser reutilizada; `loadGame` adicional fica restrito a conflito, perda de contexto, recuperação ou estado ausente.
 
 A criação de Actor envia somente os nove `primaryAttributes` mecânicos permitidos; HP/Mana/SP máximos e todos os derivados são calculados pelo backend. O GPT de staging deve permanecer privado e separado de qualquer GPT anterior.
 
 Encontros aceitam somente atores persistidos pela Action. O GPT envia intenção, nunca resultados mecânicos, e não usa `resolveActorEffect` como atalho. A conclusão não concede XP, loot, ouro, progressão, morte ou recompensa. Conclusão e cancelamento removem somente efeitos `scope=encounter` pertencentes ao encontro; `abandon` faz a mesma limpeza apenas quando essa propriedade é confirmada. Efeitos legados sem origem ou pertencentes a outro encontro são preservados.
 
 `gpt/openapi.json` usa um domínio de exemplo no repositório; o backend publicado injeta a origem HTTPS real. O GPT nunca acessa Supabase, Prisma ou PostgreSQL diretamente.
+
+O flag `x-openai-isConsequential` controla o cartão de aprovação da plataforma, não a autoridade do backend. Todas as 20 operações atuais são leituras, rotinas escopadas do jogo ou recuperação segura e, por isso, declaram `false`. Confirmações conversacionais continuam obrigatórias para exclusão, perda permanente, morte definitiva, abandono com progresso relevante, mudança importante de conceito e gasto raro/irreversível. Uma futura operação administrativa ou destrutiva deve ser auditada separadamente e pode exigir `true`.
 
 ## Manutenção
 

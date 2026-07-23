@@ -1,5 +1,59 @@
 # Decision Log
 
+## 2026-07-23 — Autonomia alta e classificação explícita das 20 GPT Actions
+
+Contexto:
+
+- o OpenAPI não declarava `x-openai-isConsequential` em nenhuma operação; a plataforma tratava GET como `false` e POST/PATCH como `true`, produzindo cartões repetidos e impedindo “Sempre permitir” nas rotinas;
+- as Instructions também exigiam cargas confirmatórias e nova confirmação após correção acionável, mesmo quando a intenção do jogador já autorizava o objetivo;
+- o backend já concentrava autorização, escopo, schemas fechados, idempotência, concorrência otimista, transações e autoridade mecânica.
+
+Legenda de proteções: `AUTH` = `x-rpg-key`; `SCOPE` = Player → World → Campaign/ref explícita; `CLOSED` = Zod/OpenAPI fechado; `IDEMP` = chave/hash/resposta transacional; `OPT` = versão esperada; `TX` = transação/lock; `AUTHORITY` = cálculo/roll/resultado somente backend; `IMMUTABLE` = publicação/ledger imutável; `AUDIT` = evento/resposta auditável e sanitizada.
+
+Auditoria:
+
+| Categoria | operationId | Método e endpoint | Resumo; estado | Reversibilidade; escopo; risco de perda | Proteções do backend | Atual | Recomendado/final; justificativa |
+|---|---|---|---|---|---|---|---|
+| A | `checkHealth` | GET `/health` | liveness; não altera | n/a; processo; nenhum | resposta fechada, sem dados | ausente (default `false`) | `false`; leitura pública operacional |
+| A | `checkReadiness` | GET `/health/ready` | prontidão do banco; não altera | n/a; serviço; nenhum | consulta curta/timeout, resposta binária segura | ausente (default `false`) | `false`; leitura operacional |
+| A | `getOpenApiContract` | GET `/openapi.json` | contrato ativo; não altera | n/a; serviço; nenhum | contrato versionado, base URL injetada | ausente (default `false`) | `false`; leitura pública |
+| A | `loadGame` | POST `/api/v1/game/load` | carrega campanha; não altera | n/a; Campaign; nenhum | AUTH, SCOPE, CLOSED, repeatable read, integridade do encontro | ausente (default `true`) | `false`; POST somente leitura |
+| B | `startGame` | POST `/api/v1/game/start` | cria jogo completo; altera | aditiva, Campaign nova; Player/World/Campaign; baixa, sem overwrite/delete | AUTH, SCOPE, CLOSED, IDEMP, TX, validação canônica, limites | ausente (default `true`) | `false`; criação rotineira aprovada e atômica |
+| A | `listPlayerWorlds` | GET `/api/v1/players/{playerRef}/worlds` | lista mundos; não altera | n/a; Player; nenhum | AUTH, SCOPE, CLOSED, DTO sem IDs | ausente (default `false`) | `false`; leitura |
+| A | `listWorldCampaigns` | GET `/api/v1/players/{playerRef}/worlds/{worldRef}/campaigns` | lista campanhas; não altera | n/a; World; nenhum | AUTH, SCOPE, CLOSED, DTO sem IDs | ausente (default `false`) | `false`; leitura |
+| A | `listCampaignActors` | GET `/api/v1/campaigns/{campaignRef}/actors` | lista atores; não altera | n/a; Campaign; nenhum | AUTH, SCOPE, CLOSED, projeção autoritativa | ausente (default `false`) | `false`; leitura |
+| A | `getCharacter` | GET `/api/v1/characters/{characterRef}` | consulta personagem; não altera | n/a; Campaign/ator; nenhum | AUTH, SCOPE, CLOSED, tipo `character`, DTO | ausente (default `false`) | `false`; leitura |
+| A | `listCharacterContent` | GET `/api/v1/characters/{characterRef}/content` | lista vínculos; não altera | n/a; Campaign/ator; nenhum | AUTH, SCOPE, CLOSED, versões públicas | ausente (default `false`) | `false`; leitura |
+| A | `getActor` | GET `/api/v1/actors/{actorRef}` | consulta ator; não altera | n/a; Campaign/ator; nenhum | AUTH, SCOPE, CLOSED, ficha calculada | ausente (default `false`) | `false`; leitura |
+| B | `updateActor` | PATCH `/api/v1/actors/{actorRef}` | altera só narrativa/identidade | novo patch pode ajustar; ator; baixa, conceito importante exige conversa | AUTH, SCOPE, CLOSED, IDEMP, TX, allowlist, bloqueio em encontro | ausente (default `true`) | `false`; mutação narrativa rotineira, sem mecânica |
+| B | `upsertActor` | POST `/api/v1/actors/upsert` | cria ator ou ajusta narrativa | criação aditiva/patch posterior; Campaign; baixa | AUTH, SCOPE, CLOSED, IDEMP, TX, ficha canônica, mecânica existente imutável | ausente (default `true`) | `false`; rotina escopada e validada |
+| B | `manageActorContent` | POST `/api/v1/actors/{actorRef}/content/manage` | lê/vincula/evolui/remove vínculo | regrant possível; ator/conteúdo; média no remove de progresso | AUTH, SCOPE, CLOSED, IDEMP nas escritas, versão exata, bloqueio em encontro | ausente (default `true`) | `false`; operação agrupada de progressão; perda relevante exige conversa |
+| B | `manageActorInventory` | POST `/api/v1/actors/{actorRef}/inventory/manage` | lê/concede/remove/equipa inventário | maioria reversível; ator; média para destroy/consumo raro | AUTH, SCOPE, CLOSED, IDEMP, OPT, TX/lock, regras canônicas, recomposição | ausente (default `true`) | `false`; rotina de jogo; gasto raro/irreversível exige conversa |
+| A | `getContent` | GET `/api/v1/content/{contentRef}` | consulta versão de conteúdo; não altera | n/a; World/Campaign/tipo; nenhum | AUTH, SCOPE, CLOSED, fallback restrito, versão pública | ausente (default `false`) | `false`; leitura |
+| B | `upsertContent` | POST `/api/v1/content/upsert` | publica/reutiliza versão; altera | versão anterior preservada; World/Campaign; baixa | AUTH, SCOPE, CLOSED, IDEMP, TX, validação canônica, IMMUTABLE | ausente (default `true`) | `false`; criação rotineira sem overwrite destrutivo |
+| B | `resolveActorEffect` | POST `/api/v1/actors/effects/resolve` | lê ou aplica custo/dano/cura/efeito | resultado mecânico persistente do jogo; atores; média normal de combate | AUTH, SCOPE, CLOSED, IDEMP, OPT, TX/locks, rolls e AUTHORITY | ausente (default `true`) | `false`; atividade normal autoritativa do jogo |
+| B | `createGameEvent` | POST `/api/v1/events` | registra fato narrativo; altera | append-only; Campaign/ator; baixa | AUTH, SCOPE, CLOSED, IDEMP, TX, payload limitado, AUDIT | ausente (default `true`) | `false`; persistência narrativa rotineira |
+| B/C | `manageEncounter` | POST `/api/v1/encounters/manage` | lê/cria/resolve/cancela/abandona encontro | beats persistentes; encontro/Campaign; média; cancel com progresso relevante exige conversa | AUTH, SCOPE, CLOSED, IDEMP, OPT, TX/locks, AUTHORITY, ledger/AUDIT; abandon só após drift e sem dano/custo/recompensa | ausente (default `true`) | `false`; rotina agrupada e recuperação segura, sem exclusão/recompensa |
+
+Decisões:
+
+- declarar `x-openai-isConsequential: false` explicitamente nas 20 operações; não existe operação categoria D no contrato atual;
+- adotar matriz testada `operationId → boolean`, sem depender do default por método;
+- tornar autonomia alta o padrão após intenção clara, sem confirmações textuais entre etapas técnicas;
+- preferir `startGame`, uma carga reutilizável e `resolve_beat`; reutilizar projeções retornadas;
+- corrigir uma vez payload acionável com nova chave quando a intenção não mudar; repetir payload/chave idênticos apenas em replay ou falha transitória autorizada;
+- permitir recuperação automática somente com `recoveryAction` explícita, escopo/idempotência e prova de ausência de dano, custo, recompensa e exclusão;
+- manter confirmação conversacional para exclusão, morte/perda permanente, gasto raro, mudança importante de conceito, tema sensível e descarte de progresso relevante;
+- manter backend, banco, Render, Supabase, secrets, 20 operationIds, schemas, exemplos, autenticação, domínio e idempotência inalterados.
+
+Impacto:
+
+- após publicação manual e escolha de “Sempre permitir”, a interface pode reduzir os cartões repetitivos sem conceder nova autoridade ao GPT;
+- uma futura Action administrativa, destrutiva, financeira, de credencial ou infraestrutura deve passar por nova auditoria e pode exigir `true`;
+- esta task não publica o GPT Builder nem altera ambiente ao vivo.
+
+Status: implementado localmente; revisão pré-commit e publicação manual posterior pendentes
+
 ## 2026-07-13 — Fase 1K de orquestração pura de encontros
 
 Decisões:
