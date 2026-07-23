@@ -6,6 +6,7 @@ export default defineConfig({
     include: ['tests/integration/**/*.integration.test.ts'],
     fileParallelism: false,
     maxWorkers: 1,
+    disableConsoleIntercept: process.env.REPORT_ENCOUNTER_BUDGETS === '1',
     hookTimeout: 30_000,
     testTimeout: 30_000,
   },

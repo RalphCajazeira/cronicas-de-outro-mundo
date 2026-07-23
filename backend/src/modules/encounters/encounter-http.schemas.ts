@@ -6,6 +6,8 @@ export const ENCOUNTER_HTTP_MAX_RELATION_OVERRIDES = 128;
 export const ENCOUNTER_HTTP_MAX_TARGETS = 16;
 export const ENCOUNTER_HTTP_MAX_BEAT_COMPONENTS = 3;
 export const ENCOUNTER_HTTP_MAX_NPC_DIRECTIVES = 16;
+export const ENCOUNTER_HTTP_MAX_AUTOMATIC_BEATS = 12;
+export const ENCOUNTER_HTTP_DEFAULT_AUTOMATIC_BEATS = 6;
 export const ENCOUNTER_HTTP_JSON_LIMIT_BYTES = 100 * 1024;
 
 const scopeFields = {
@@ -37,6 +39,14 @@ const participantSchema = z.strictObject({
   sideRef: codeSchema,
   zone: zoneSchema,
   surprised: z.boolean().optional(),
+});
+
+const actorRefsSchema = z.array(codeSchema).min(1).max(ENCOUNTER_HTTP_MAX_PARTICIPANTS).superRefine((refs, context) => {
+  const seen = new Set<string>();
+  refs.forEach((ref, index) => {
+    if (seen.has(ref)) context.addIssue({ code: 'custom', path: [index], message: 'Actor references must be unique' });
+    seen.add(ref);
+  });
 });
 
 const relationOverrideSchema = z.strictObject({
@@ -103,7 +113,18 @@ const beatTargetRefsSchema = z.array(codeSchema).min(1).max(ENCOUNTER_HTTP_MAX_T
   });
 });
 
-const beatComponentFields = { essential: z.boolean().optional() };
+const beatConditionSchema = z.strictObject({
+  actorRef: codeSchema.optional(),
+  resource: z.enum(['hp', 'mana', 'sp']),
+  operator: z.enum(['at_or_below_percent', 'at_or_above_percent']),
+  percent: z.number().int().min(0).max(100),
+});
+
+const beatComponentFields = {
+  essential: z.boolean().optional(),
+  when: beatConditionSchema.optional(),
+  fallback: z.enum(['skip', 'defend']).optional(),
+};
 
 const beatComponentSchema = z.discriminatedUnion('type', [
   z.strictObject({
@@ -141,6 +162,15 @@ const beatComponentsSchema = z.array(beatComponentSchema).min(1).max(64).superRe
       message: `A beat accepts at most 3 components; received ${String(Math.min(components.length, 64))}. Split the intention into separate decisions.`,
     });
   }
+  components.forEach((component, index) => {
+    if (component.fallback !== undefined && component.when === undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: [index, 'fallback'],
+        message: 'Fallback is allowed only for a bounded resource condition',
+      });
+    }
+  });
 });
 
 const npcDirectiveSchema = z.strictObject({
@@ -173,10 +203,65 @@ const resolveBeatSchema = z.strictObject({
   });
 });
 
-const createSchema = z.strictObject({
+const automaticResourcePolicySchema = z.strictObject({
+  allowCommonConsumables: z.boolean().default(false),
+  allowRareConsumables: z.boolean().default(false),
+  allowLimitedAbilities: z.boolean().default(false),
+  preserveManaPercent: z.number().int().min(0).max(100).default(50),
+  preserveSpPercent: z.number().int().min(0).max(100).default(50),
+  stopBelowHpPercent: z.number().int().min(1).max(100).default(25),
+  stopIfProtectedActorBelowHpPercent: z.number().int().min(1).max(100).default(30),
+  allowFlee: z.boolean().default(false),
+  allowTargetSwitch: z.boolean().default(true),
+  allowEnvironmentalInteraction: z.boolean().default(false),
+});
+
+const automaticPolicySchema = z.strictObject({
+  actorRef: codeSchema,
+  mode: z.enum(['until_decision', 'until_terminal', 'bounded']),
+  strategy: z.enum(['aggressive', 'balanced', 'defensive', 'support', 'protect_target', 'escape']),
+  objective: z.string().trim().min(1).max(120),
+  targetPriority: z.enum(['nearest_hostile', 'lowest_hp_hostile', 'explicit']).default('nearest_hostile'),
+  targetRefs: beatTargetRefsSchema.optional(),
+  protectedActorRefs: z.array(codeSchema).max(16).optional(),
+  maximumBeats: z.number().int().min(1).max(ENCOUNTER_HTTP_MAX_AUTOMATIC_BEATS)
+    .default(ENCOUNTER_HTTP_DEFAULT_AUTOMATIC_BEATS),
+  resourcePolicy: automaticResourcePolicySchema.default({
+    allowCommonConsumables: false,
+    allowRareConsumables: false,
+    allowLimitedAbilities: false,
+    preserveManaPercent: 50,
+    preserveSpPercent: 50,
+    stopBelowHpPercent: 25,
+    stopIfProtectedActorBelowHpPercent: 30,
+    allowFlee: false,
+    allowTargetSwitch: true,
+    allowEnvironmentalInteraction: false,
+  }),
+}).superRefine((policy, context) => {
+  if (policy.targetPriority === 'explicit' && policy.targetRefs === undefined) {
+    context.addIssue({ code: 'custom', path: ['targetRefs'], message: 'Required when targetPriority is explicit' });
+  }
+  if (policy.targetPriority !== 'explicit' && policy.targetRefs !== undefined) {
+    context.addIssue({ code: 'custom', path: ['targetRefs'], message: 'Allowed only when targetPriority is explicit' });
+  }
+  const protectedRefs = policy.protectedActorRefs ?? [];
+  if (new Set(protectedRefs).size !== protectedRefs.length) {
+    context.addIssue({ code: 'custom', path: ['protectedActorRefs'], message: 'Protected actor references must be unique' });
+  }
+});
+
+const resolveAutomaticBeatSchema = z.strictObject({
+  operation: z.literal('resolve_beat'), ...scopeFields,
+  idempotencyKey: idempotencyKeySchema, expectedStateVersion: expectedStateVersionSchema,
+  policy: automaticPolicySchema,
+});
+
+const createExplicitSchema = z.strictObject({
   operation: z.literal('create'),
   ...scopeFields,
   idempotencyKey: idempotencyKeySchema,
+  setupMode: z.literal('explicit').optional(),
   partySideRef: codeSchema.optional(),
   participants: z.array(participantSchema).min(1).max(ENCOUNTER_HTTP_MAX_PARTICIPANTS),
   relationOverrides: z.array(relationOverrideSchema).max(ENCOUNTER_HTTP_MAX_RELATION_OVERRIDES).optional(),
@@ -211,6 +296,59 @@ const createSchema = z.strictObject({
   });
 });
 
+const createAssistedSchema = z.strictObject({
+  operation: z.literal('create'),
+  ...scopeFields,
+  idempotencyKey: idempotencyKeySchema,
+  setupMode: z.literal('assisted'),
+  encounterKind: z.literal('combat'),
+  partyActorRefs: actorRefsSchema,
+  hostileActorRefs: actorRefsSchema,
+  neutralActorRefs: z.array(codeSchema).max(ENCOUNTER_HTTP_MAX_PARTICIPANTS).optional(),
+  objective: z.string().trim().min(1).max(240),
+  engagementPreference: z.enum(['immediate', 'close', 'ranged', 'ambush', 'safe_distance']),
+  protectedActorRefs: z.array(codeSchema).max(16).optional(),
+  environmentalContext: z.strictObject({
+    summary: z.string().trim().min(1).max(500),
+    tags: z.array(codeSchema).max(12).optional(),
+  }).optional(),
+}).superRefine((input, context) => {
+  const groups = [
+    ['partyActorRefs', input.partyActorRefs],
+    ['hostileActorRefs', input.hostileActorRefs],
+    ['neutralActorRefs', input.neutralActorRefs ?? []],
+  ] as const;
+  const assigned = new Map<string, string>();
+  for (const [field, refs] of groups) {
+    refs.forEach((ref, index) => {
+      const previous = assigned.get(ref);
+      if (previous !== undefined) {
+        context.addIssue({
+          code: 'custom',
+          path: [field, index],
+          message: `Actor is already assigned to ${previous}`,
+        });
+      }
+      assigned.set(ref, field);
+    });
+  }
+  const protectedRefs = input.protectedActorRefs ?? [];
+  if (new Set(protectedRefs).size !== protectedRefs.length) {
+    context.addIssue({ code: 'custom', path: ['protectedActorRefs'], message: 'Protected actor references must be unique' });
+  }
+  protectedRefs.forEach((ref, index) => {
+    if (!input.partyActorRefs.includes(ref)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['protectedActorRefs', index],
+        message: 'Protected actors must belong to the party',
+      });
+    }
+  });
+});
+
+const createSchema = z.union([createAssistedSchema, createExplicitSchema]);
+
 const loadSchema = z.strictObject({ operation: z.literal('load'), ...scopeFields });
 const submitIntentSchema = z.strictObject({
   operation: z.literal('submit_intent'), ...scopeFields,
@@ -240,9 +378,9 @@ const abandonSchema = z.strictObject({
   confirmAuthorityDrift: z.literal(true),
 });
 
-const manageEncounterOperationSchema = z.discriminatedUnion('operation', [
+const manageEncounterOperationSchema = z.union([
   createSchema, loadSchema, submitIntentSchema, resolveReactionSchema,
-  continueSchema, confirmCompletionSchema, cancelSchema, abandonSchema, resolveBeatSchema,
+  continueSchema, confirmCompletionSchema, cancelSchema, abandonSchema, resolveBeatSchema, resolveAutomaticBeatSchema,
 ]);
 
 export const manageEncounterSchema = z.preprocess((value, context) => {
@@ -255,5 +393,8 @@ export const manageEncounterSchema = z.preprocess((value, context) => {
 
 export type ManageEncounterInput = z.infer<typeof manageEncounterSchema>;
 export type CreateEncounterHttpInput = z.infer<typeof createSchema>;
+export type CreateExplicitEncounterHttpInput = z.infer<typeof createExplicitSchema>;
+export type CreateAssistedEncounterHttpInput = z.infer<typeof createAssistedSchema>;
 export type SubmitIntentHttpInput = z.infer<typeof submitIntentSchema>;
 export type ResolveBeatHttpInput = z.infer<typeof resolveBeatSchema>;
+export type ResolveAutomaticBeatHttpInput = z.infer<typeof resolveAutomaticBeatSchema>;

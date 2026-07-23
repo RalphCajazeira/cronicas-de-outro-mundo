@@ -95,6 +95,42 @@ describe('manageEncounter public schemas', () => {
       ...base, intent: { ...base.intent, resolutionPolicy: 'allow_partial', components: [{ type: 'defend', essential: true }] },
     }).success).toBe(true);
     expect(manageEncounterSchema.safeParse({
+      ...base,
+      intent: {
+        ...base.intent,
+        components: [{
+          type: 'use_item',
+          inventoryEntryRef: 'potion',
+          when: { resource: 'hp', operator: 'at_or_below_percent', percent: 25 },
+          fallback: 'defend',
+        }],
+      },
+    }).success).toBe(true);
+    expect(manageEncounterSchema.safeParse({
+      ...base,
+      intent: {
+        ...base.intent,
+        components: [{ type: 'defend', fallback: 'skip' }],
+      },
+    }).success).toBe(false);
+    expect(manageEncounterSchema.safeParse({
+      ...base,
+      intent: {
+        ...base.intent,
+        components: [{
+          type: 'defend',
+          when: { resource: 'hp', operator: 'at_or_below_percent', percent: 25, expression: 'hp < 25' },
+        }],
+      },
+    }).success).toBe(false);
+    expect(manageEncounterSchema.safeParse({
+      ...base,
+      intent: {
+        ...base.intent,
+        components: [{ type: 'defend', repeat: 'forever' }],
+      },
+    }).success).toBe(false);
+    expect(manageEncounterSchema.safeParse({
       ...base, intent: { ...base.intent, resolutionPolicy: undefined },
     }).success).toBe(false);
     expect(manageEncounterSchema.safeParse({ ...base, damage: 99 }).success).toBe(false);
@@ -140,6 +176,83 @@ describe('manageEncounter public schemas', () => {
     const sparse = [participants[0]];
     sparse.length = 2;
     expect(manageEncounterSchema.safeParse({ ...valid.create, participants: sparse }).success).toBe(false);
+  });
+
+  it('accepts assisted creation, derives closed inputs only, and rejects incompatible side assignments', () => {
+    const assisted = {
+      operation: 'create',
+      ...scope,
+      idempotencyKey: 'assisted-create-001',
+      setupMode: 'assisted',
+      encounterKind: 'combat',
+      partyActorRefs: ['hero', 'ally'],
+      hostileActorRefs: ['enemy'],
+      neutralActorRefs: ['witness'],
+      objective: 'Protect the witness and stop the raiders.',
+      engagementPreference: 'immediate',
+      protectedActorRefs: ['ally'],
+      environmentalContext: { summary: 'A narrow bridge in heavy rain.', tags: ['bridge', 'rain'] },
+    } as const;
+    expect(manageEncounterSchema.safeParse(assisted).success).toBe(true);
+    expect(manageEncounterSchema.safeParse({
+      ...assisted,
+      hostileActorRefs: ['enemy', 'hero'],
+    }).success).toBe(false);
+    expect(manageEncounterSchema.safeParse({
+      ...assisted,
+      protectedActorRefs: ['enemy'],
+    }).success).toBe(false);
+    expect(manageEncounterSchema.safeParse({
+      ...assisted,
+      participants: [{ actorRef: 'forged', sideRef: 'party', zone: 'engaged' }],
+    }).success).toBe(false);
+  });
+
+  it('accepts a bounded automatic policy with safe defaults and rejects outcomes or free loops', () => {
+    const automatic = {
+      operation: 'resolve_beat',
+      ...mutation,
+      policy: {
+        actorRef: 'hero',
+        mode: 'until_terminal',
+        strategy: 'balanced',
+        objective: 'Defeat the hostile group without wasting resources.',
+        targetPriority: 'lowest_hp_hostile',
+        protectedActorRefs: ['ally'],
+        maximumBeats: 12,
+      },
+    } as const;
+    const parsed = manageEncounterSchema.safeParse(automatic);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success || !('policy' in parsed.data)) throw new Error('fixture');
+    expect(parsed.data.policy.resourcePolicy).toMatchObject({
+      allowCommonConsumables: false,
+      allowRareConsumables: false,
+      allowLimitedAbilities: false,
+      preserveManaPercent: 50,
+      preserveSpPercent: 50,
+      stopBelowHpPercent: 25,
+      allowFlee: false,
+    });
+    const defaulted = manageEncounterSchema.parse({
+      ...automatic,
+      policy: Object.fromEntries(Object.entries(automatic.policy).filter(([key]) => key !== 'maximumBeats')),
+    });
+    if (!('policy' in defaulted)) throw new Error('fixture');
+    expect(defaulted.policy.maximumBeats).toBe(6);
+    expect(manageEncounterSchema.safeParse({
+      ...automatic, policy: { ...automatic.policy, maximumBeats: 13 },
+    }).success).toBe(false);
+    expect(manageEncounterSchema.safeParse({
+      ...automatic, policy: { ...automatic.policy, loop: 'forever' },
+    }).success).toBe(false);
+    expect(manageEncounterSchema.safeParse({
+      ...automatic, damage: 999, hit: true, rolls: [20],
+    }).success).toBe(false);
+    expect(manageEncounterSchema.safeParse({
+      ...automatic,
+      policy: { ...automatic.policy, targetPriority: 'explicit' },
+    }).success).toBe(false);
   });
 
   it('rejects unexpected object prototypes at the root and nested levels without echoing values', () => {

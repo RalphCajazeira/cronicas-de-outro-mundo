@@ -21,7 +21,10 @@ describe('encounter public DTO mapper', () => {
   });
 
   it('maps processed boundaries and operation-specific fallbacks without contradiction', () => {
-    const transitionSummary = { processedEventCount: 1, events: [{ category: 'action_resolved' as const, actorRef: 'hero' }], changes: [] };
+    const transitionSummary = {
+      processedEventCount: 1, visibleEventCount: 1, eventsTruncated: false, actorsActed: ['hero'],
+      events: [{ category: 'action_resolved' as const, actorRef: 'hero' }], changes: [],
+    };
     expect(encounterPublicResult(dto({ operation: 'continue', transitionSummary }))).toBe('new_intent_required');
     expect(encounterPublicResult(dto({ operation: 'continue', lifecycleStatus: 'processing_paused', nextRequiredAction: { type: 'continue' }, transitionSummary }))).toBe('processing_paused');
     expect(encounterPublicResult(dto({ operation: 'create' }))).toBe('encounter_created');
@@ -70,6 +73,9 @@ describe('encounter public DTO mapper', () => {
       nextRequiredAction: { type: 'continue', queue: 'queue-secret' } as EncounterDto['nextRequiredAction'],
       transitionSummary: {
         processedEventCount: 1,
+        visibleEventCount: 1,
+        eventsTruncated: false,
+        actorsActed: ['hero'],
         events: [{ category: 'action_resolved', actorRef: 'hero', eventRef: 'event-secret' }],
         changes: [{
           actorRef: 'hero', categories: ['resource_changed'],
@@ -107,12 +113,30 @@ describe('encounter public DTO mapper', () => {
   it('returns a compact scene package on load and an authoritative one-call beat summary', () => {
     const loaded = toEncounterPublicDto(dto({
       scene: {
-        schemaVersion: 1, stateVersion: 2,
+        schemaVersion: 2, encounterRef: 'battle', stateVersion: 2, lifecycleStatus: 'awaiting_intent', objective: null,
         genericActions: ['move', 'defend', 'protect', 'prepare', 'intercept', 'assist', 'flee', 'observe', 'interact', 'improvise', 'use_item', 'attack', 'cast'],
-        environment: { zoneModel: 'abstract_bands', notes: ['Exact geometry is not inferred.'] },
+        processingLimits: {
+          maximumBeatsPerCall: 12, maximumComponentsPerBeat: 3,
+          maximumNpcActionsPerBeat: 4, maximumEventsPerCheckpoint: 32,
+          maximumProjectedActions: 256, maximumSceneBytes: 262_144,
+          maximumTransactionDurationMs: 30_000,
+        },
+        mandatoryStopConditions: ['terminal_candidate'],
+        catalogProjection: {
+          status: 'complete', sourceActionCount: 0, detailedActionCount: 0,
+          omittedBlockedActionCount: 0, summarizedActorRefs: [], summarizedCategories: [],
+        },
+        environment: { zoneModel: 'abstract_bands', summary: null, tags: [], notes: ['Exact geometry is not inferred.'] },
         participants: [{
-          actorRef: 'hero', role: 'guardian', zone: 'near', equippedEntryRefs: ['sword'],
-          knownContentRefs: [{ contentType: 'spell', code: 'spark' }], activeEffectRefs: [], preparedActionRefs: [],
+          actorRef: 'hero', role: 'guardian', sideRef: 'party',
+          relations: { allies: [], hostiles: [], neutrals: [] }, zone: 'near', combatState: 'ready',
+          resources: {
+            hp: { current: 10, maximum: 10 }, mana: { current: 10, maximum: 10 }, sp: { current: 10, maximum: 10 },
+          },
+          equippedEntryRefs: ['sword'],
+          knownContentRefs: [{ contentType: 'spell', code: 'spark' }], activeEffects: [], preparedActionRefs: [],
+          validThreatRefs: [],
+          usableActions: { catalogMode: 'full', attacks: [], abilities: [], items: [], movements: [], reactions: [] },
           tacticalProfile: { strategy: 'defensive', objective: 'protect ally', faction: 'party', traits: ['loyal'] },
         }],
       },

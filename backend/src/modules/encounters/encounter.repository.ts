@@ -6,6 +6,7 @@ import {
 } from '../../generated/prisma/client.js';
 import { prisma } from '../../shared/database/prisma.js';
 import { inspectIdempotencyRecord, isIdempotencyKeyConflict } from '../gpt/gpt.prisma-errors.js';
+import { observeOperationStage } from '../../shared/observability/operation-observability.js';
 import { canonicalEncounterMechanicalJson } from './encounter-mechanical-json.js';
 import { parseEncounterDto, type EncounterDto } from './encounter.types.js';
 import { EncounterError } from './encounter.errors.js';
@@ -81,7 +82,7 @@ export async function executeIdempotentEncounter(
   const requestHash = calculateEncounterRequestHash(input);
   const persistedKey = `encounter:${key}`;
   try {
-    return await database.$transaction(async (transaction) => {
+    return await observeOperationStage('encounter_transaction', () => database.$transaction(async (transaction) => {
       const record = await transaction.idempotencyRecord.create({
         data: { key: persistedKey, operation, requestHash },
         select: { id: true },
@@ -92,7 +93,7 @@ export async function executeIdempotentEncounter(
         data: { response: json(response) },
       });
       return response;
-    }, ENCOUNTER_TRANSACTION_OPTIONS);
+    }, ENCOUNTER_TRANSACTION_OPTIONS));
   } catch (error) {
     if (isRetryableEncounterTransactionError(error)) {
       throw new EncounterError('ENCOUNTER_TRANSACTION_RETRYABLE', { retryable: true, cause: error });

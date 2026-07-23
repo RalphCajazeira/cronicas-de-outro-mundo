@@ -8,8 +8,17 @@ import {
   type ReactionOutcomeResolver,
 } from '../rules/core-v1/index.js';
 import type { PersistedEncounterAuthority } from './encounter-state-loader.js';
+import {
+  ENCOUNTER_MAX_DETAILED_ACTIONS_PER_CATEGORY,
+  ENCOUNTER_MAX_PROJECTED_ACTIONS,
+  type EncounterActionCatalog,
+} from './encounter-action-loader.js';
+import { EncounterError } from './encounter.errors.js';
+import { ENCOUNTER_TRANSACTION_OPTIONS } from './encounter.repository.js';
+import { observeOperationStageSync } from '../../shared/observability/operation-observability.js';
 import type {
   EncounterBeatComponent,
+  EncounterContextV1,
   EncounterGenericAction,
   EncounterNpcDirective,
   EncounterScenePackageDto,
@@ -19,6 +28,9 @@ export const ENCOUNTER_GENERIC_ACTIONS: readonly EncounterGenericAction[] = [
   'move', 'defend', 'protect', 'prepare', 'intercept', 'assist', 'flee',
   'observe', 'interact', 'improvise', 'use_item', 'attack', 'cast',
 ];
+export const ENCOUNTER_COMMON_SCENE_TARGET_BYTES = 65_536;
+export const ENCOUNTER_GROUP_SCENE_TARGET_BYTES = 131_072;
+export const ENCOUNTER_MAX_SCENE_RESPONSE_BYTES = 262_144;
 
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -39,13 +51,104 @@ function traits(value: unknown): string[] {
 export function encounterScenePackage(
   state: CoreV1EncounterState,
   authorities: ReadonlyMap<string, PersistedEncounterAuthority>,
+  options: {
+    readonly lifecycleStatus?: string;
+    readonly context?: EncounterContextV1;
+    readonly actionCatalog?: ReadonlyMap<string, EncounterActionCatalog>;
+  } = {},
 ): EncounterScenePackageDto {
-  return {
-    schemaVersion: 1,
+  return observeOperationStageSync('encounter_capsule_assembly', () => {
+    const context = options.context;
+    const emptyCatalog: EncounterActionCatalog = { attacks: [], abilities: [], items: [] };
+    const catalogByActor = new Map(state.participants.map((participant) => [
+      participant.actorRef,
+      options.actionCatalog?.get(participant.actorRef) ?? emptyCatalog,
+    ]));
+    const controlledActorRefs = new Set(state.participants
+      .filter((participant, index) => state.partySideRef === null
+        ? index === 0 : participant.sideRef === state.partySideRef)
+      .map((participant) => participant.actorRef));
+    const categories = ['attacks', 'abilities', 'items'] as const;
+    const sourceActionCount = [...catalogByActor.values()].reduce((total, catalog) => (
+      total + categories.reduce((actorTotal, category) => actorTotal + catalog[category].length, 0)
+    ), 0);
+    const usableDetailedCount = [...catalogByActor].reduce((total, [actorRef, catalog]) => (
+      controlledActorRefs.has(actorRef)
+        ? total + categories.reduce((actorTotal, category) => (
+          actorTotal + catalog[category].filter((action) => action.canUse).length
+        ), 0)
+        : total
+    ), 0);
+    let remainingBlockedBudget = Math.max(0, ENCOUNTER_MAX_PROJECTED_ACTIONS - usableDetailedCount);
+    let omittedBlockedActionCount = 0;
+    const detailedCatalogs = new Map<string, EncounterActionCatalog>();
+    const summarizedActorRefs: string[] = [];
+    const summarizedCategories = new Set<(typeof categories)[number]>();
+    for (const participant of state.participants) {
+      const catalog = catalogByActor.get(participant.actorRef) ?? emptyCatalog;
+      if (!controlledActorRefs.has(participant.actorRef)) {
+        summarizedActorRefs.push(participant.actorRef);
+        for (const category of categories) {
+          if (catalog[category].length > 0) summarizedCategories.add(category);
+        }
+        continue;
+      }
+      const selected = Object.fromEntries(categories.map((category) => {
+        const usable = catalog[category].filter((action) => action.canUse);
+        const blocked = catalog[category].filter((action) => !action.canUse);
+        const categoryBudget = Math.max(0, ENCOUNTER_MAX_DETAILED_ACTIONS_PER_CATEGORY[category] - usable.length);
+        const allowedBlocked = Math.min(blocked.length, categoryBudget, remainingBlockedBudget);
+        remainingBlockedBudget -= allowedBlocked;
+        omittedBlockedActionCount += blocked.length - allowedBlocked;
+        if (allowedBlocked < blocked.length) summarizedCategories.add(category);
+        return [category, [...usable, ...blocked.slice(0, allowedBlocked)]];
+      })) as unknown as EncounterActionCatalog;
+      detailedCatalogs.set(participant.actorRef, selected);
+    }
+    const detailedActionCount = [...detailedCatalogs.values()].reduce((total, catalog) => (
+      total + categories.reduce((actorTotal, category) => actorTotal + catalog[category].length, 0)
+    ), 0);
+    const scene: EncounterScenePackageDto = {
+    schemaVersion: 2,
+    encounterRef: state.encounterRef,
     stateVersion: state.stateVersion,
+    lifecycleStatus: options.lifecycleStatus ?? state.status,
+    objective: context?.objective ?? null,
     genericActions: [...ENCOUNTER_GENERIC_ACTIONS],
+    processingLimits: {
+      maximumBeatsPerCall: 12,
+      maximumComponentsPerBeat: 3,
+      maximumNpcActionsPerBeat: 4,
+      maximumEventsPerCheckpoint: 32,
+      maximumProjectedActions: ENCOUNTER_MAX_PROJECTED_ACTIONS,
+      maximumSceneBytes: ENCOUNTER_MAX_SCENE_RESPONSE_BYTES,
+      maximumTransactionDurationMs: ENCOUNTER_TRANSACTION_OPTIONS.timeout,
+    },
+    mandatoryStopConditions: [
+      'terminal_candidate',
+      'actor_incapacitated',
+      'hp_policy_threshold',
+      'protected_actor_at_risk',
+      'rare_or_irreversible_resource_required',
+      'new_threat_or_participant',
+      'objective_changed',
+      'no_valid_action',
+      'material_narrative_choice',
+      'authority_or_version_conflict',
+      'processing_budget',
+    ],
+    catalogProjection: {
+      status: summarizedActorRefs.length > 0 || omittedBlockedActionCount > 0 ? 'partial' : 'complete',
+      sourceActionCount,
+      detailedActionCount,
+      omittedBlockedActionCount,
+      summarizedActorRefs: summarizedActorRefs.sort(),
+      summarizedCategories: [...summarizedCategories].sort(),
+    },
     environment: {
       zoneModel: 'abstract_bands',
+      summary: context?.environment.summary ?? null,
+      tags: [...(context?.environment.tags ?? [])],
       notes: [
         'Positions use engaged, near, medium, far and out_of_range bands.',
         'Exact geometry and scene objects are not inferred; use explicit target references.',
@@ -55,26 +158,117 @@ export function encounterScenePackage(
       const authority = authorities.get(participant.actorRef);
       const metadata = record(authority?.actor.metadata);
       const personality = authority?.actor.personality;
+      const actionCatalog = options.actionCatalog?.get(participant.actorRef)
+        ?? { attacks: [], abilities: [], items: [] };
+      const detailedCatalog = detailedCatalogs.get(participant.actorRef);
+      const fullCatalog = detailedCatalog !== undefined;
+      const relationRows = state.participants.filter((target) => target.actorRef !== participant.actorRef).map((target) => ({
+        actorRef: target.actorRef,
+        relation: relation(state, participant.actorRef, target.actorRef),
+      })).sort((left, right) => left.actorRef.localeCompare(right.actorRef));
+      const relations = {
+        allies: relationRows.filter((entry) => entry.relation === 'ally').map((entry) => entry.actorRef),
+        hostiles: relationRows.filter((entry) => entry.relation === 'hostile').map((entry) => entry.actorRef),
+        neutrals: relationRows.filter((entry) => entry.relation === 'neutral').map((entry) => entry.actorRef),
+      };
+      const zones = ['engaged', 'near', 'medium', 'far', 'out_of_range'] as const;
+      const movements = zones.filter((zone) => zone !== participant.zone).map((destination) => {
+        const kind = movementKind(participant.zone, destination);
+        const distance = Math.abs(zones.indexOf(participant.zone) - zones.indexOf(destination));
+        const maximum = kind === 'run' ? 2 : 1;
+        const blockers = distance <= maximum ? [] : ['destination_too_far_for_one_movement'];
+        return {
+          destination,
+          movementKind: kind,
+          canUse: blockers.length === 0,
+          ...(blockers.length === 0 ? {} : { blockers }),
+        };
+      });
+      const equippedEntryRefs = participant.equipmentContext.loadout.slots
+        .flatMap((slot) => slot.entryRef === null ? [] : [slot.entryRef])
+        .filter((entryRef, index, refs) => refs.indexOf(entryRef) === index).sort();
+      const knownContentRefs = participant.equipmentContext.requirements.knownContentRefs
+        .map((content) => ({ contentType: content.contentKind, code: content.code }))
+        .sort((left, right) => `${left.contentType}:${left.code}`.localeCompare(`${right.contentType}:${right.code}`));
+      const activeEffects = participant.activeEffects.map((effect) => ({
+        effectRef: effect.effectRef,
+        kind: effect.kind,
+        stacks: effect.stacks,
+        durationType: effect.durationState.type,
+      })).sort((left, right) => left.effectRef.localeCompare(right.effectRef));
+      const preparedActionRefs = state.actionPlans
+        .filter((plan) => plan.actorRef === participant.actorRef && plan.planRef.startsWith('prepared-'))
+        .map((plan) => plan.planRef).sort();
+      const tacticalStrategy = text(metadata.tactic) ?? text(metadata.strategy);
+      const tacticalObjective = text(metadata.objective);
+      const tacticalFaction = text(metadata.faction);
+      const tacticalTraits = traits(personality);
+      const tacticalProfile = {
+        ...(tacticalStrategy === null ? {} : { strategy: tacticalStrategy }),
+        ...(tacticalObjective === null ? {} : { objective: tacticalObjective }),
+        ...(tacticalFaction === null ? {} : { faction: tacticalFaction }),
+        ...(tacticalTraits.length === 0 ? {} : { traits: tacticalTraits }),
+      };
+      const counts = (category: (typeof categories)[number]) => ({
+        total: actionCatalog[category].length,
+        usable: actionCatalog[category].filter((action) => action.canUse).length,
+      });
       return {
         actorRef: participant.actorRef,
         role: authority?.actor.role ?? null,
+        sideRef: participant.sideRef,
+        relations,
         zone: participant.zone,
-        equippedEntryRefs: participant.equipmentContext.loadout.slots
-          .flatMap((slot) => slot.entryRef === null ? [] : [slot.entryRef]).filter((entryRef, index, refs) => refs.indexOf(entryRef) === index).sort(),
-        knownContentRefs: participant.equipmentContext.requirements.knownContentRefs
-          .map((content) => ({ contentType: content.contentKind, code: content.code }))
-          .sort((left, right) => `${left.contentType}:${left.code}`.localeCompare(`${right.contentType}:${right.code}`)),
-        activeEffectRefs: participant.activeEffects.map((effect) => effect.effectRef).sort(),
-        preparedActionRefs: state.actionPlans.filter((plan) => plan.actorRef === participant.actorRef).map((plan) => plan.planRef).sort(),
-        tacticalProfile: {
-          strategy: text(metadata.tactic) ?? text(metadata.strategy),
-          objective: text(metadata.objective),
-          faction: text(metadata.faction),
-          traits: traits(personality),
+        combatState: participant.combatState,
+        resources: {
+          hp: { ...participant.resources.hp },
+          mana: { ...participant.resources.mana },
+          sp: { ...participant.resources.sp },
         },
+        ...(equippedEntryRefs.length === 0 ? {} : { equippedEntryRefs }),
+        ...(knownContentRefs.length === 0 ? {} : { knownContentRefs }),
+        ...(activeEffects.length === 0 ? {} : { activeEffects }),
+        ...(preparedActionRefs.length === 0 ? {} : { preparedActionRefs }),
+        validThreatRefs: [...relations.hostiles],
+        usableActions: {
+          catalogMode: fullCatalog ? 'full' : 'summary',
+          attacks: (detailedCatalog?.attacks ?? []).map((action) => structuredClone(action)),
+          abilities: (detailedCatalog?.abilities ?? []).map((action) => structuredClone(action)),
+          items: (detailedCatalog?.items ?? []).map((action) => structuredClone(action)),
+          ...(fullCatalog ? {} : { summary: {
+            attacks: counts('attacks'),
+            abilities: counts('abilities'),
+            items: counts('items'),
+          } }),
+          movements,
+          reactions: participant.reactionCapabilities.map((capability) => ({
+            kind: capability.kind,
+            cost: capability.cost.type === 'active_defense'
+              ? { type: 'sp' as const, amount: capability.cost.sp }
+              : { type: 'unsupported' as const },
+            canUse: capability.cost.type !== 'active_defense'
+              || participant.resources.sp.current >= capability.cost.sp,
+            ...(capability.cost.type === 'active_defense'
+              && participant.resources.sp.current < capability.cost.sp
+              ? { blockers: ['insufficient_sp'] } : {}),
+          })),
+        },
+        ...(Object.keys(tacticalProfile).length === 0 ? {} : { tacticalProfile }),
       };
     }),
   };
+  const sceneBytes = Buffer.byteLength(JSON.stringify(scene), 'utf8');
+  if (sceneBytes > ENCOUNTER_MAX_SCENE_RESPONSE_BYTES) {
+    throw new EncounterError('ENCOUNTER_CORE_REJECTED', {
+      issues: [{
+        path: 'scene',
+        code: 'SCENE_RESPONSE_LIMIT',
+        message: `The authoritative encounter capsule is ${String(sceneBytes)} UTF-8 bytes and exceeds the ${String(ENCOUNTER_MAX_SCENE_RESPONSE_BYTES)}-byte hard cap.`,
+      }],
+    });
+  }
+  return scene;
+  });
 }
 
 function relation(state: CoreV1EncounterState, sourceActorRef: string, targetActorRef: string) {

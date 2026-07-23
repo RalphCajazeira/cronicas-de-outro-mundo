@@ -5,6 +5,7 @@ import {
   CORE_V1_MAX_ENCOUNTER_PARTICIPANTS,
 } from '../rules/core-v1/index.js';
 import { parseEncounterAdapterState, type EncounterAdapterStateV1 } from './encounter-adapter-state.js';
+import type { EncounterContextV1 } from './encounter.types.js';
 
 export const ENCOUNTER_CONSEQUENCE_SCHEMA_VERSION = 1 as const;
 export const ENCOUNTER_CONSEQUENCE_MAX_UTF8_BYTES = 1_048_576;
@@ -62,6 +63,7 @@ export interface EncounterTerminalEventPayloadV1 {
 export interface EncounterOperationResultSummary {
   readonly adapterState: EncounterAdapterStateV1;
   readonly consequencesSummary?: EncounterConsequenceSummaryV1;
+  readonly encounterContext?: EncounterContextV1;
 }
 
 export interface EncounterPublicConsequencesSummaryV1 {
@@ -312,14 +314,48 @@ export function parseEncounterTerminalEventPayload(value: unknown): EncounterTer
 }
 
 export function parseEncounterOperationResultSummary(value: unknown): EncounterOperationResultSummary {
-  const root = closedOptionalRecord(value, ['adapterState'], ['consequencesSummary'], '$');
+  const root = closedOptionalRecord(value, ['adapterState'], ['consequencesSummary', 'encounterContext'], '$');
   const adapterState = parseEncounterAdapterState(root.adapterState);
   return {
     adapterState,
     ...(root.consequencesSummary === undefined ? {} : {
       consequencesSummary: parseEncounterConsequenceSummary(root.consequencesSummary),
     }),
+    ...(root.encounterContext === undefined ? {} : {
+      encounterContext: parseEncounterContext(root.encounterContext),
+    }),
   };
+}
+
+export function parseEncounterContext(value: unknown): EncounterContextV1 {
+  const root = closedRecord(
+    value,
+    ['schemaVersion', 'setupMode', 'encounterKind', 'objective', 'engagementPreference', 'protectedActorRefs', 'environment'],
+    '$.encounterContext',
+  );
+  if (root.schemaVersion !== 1
+    || !['explicit', 'assisted'].includes(root.setupMode as string)
+    || root.encounterKind !== 'combat'
+    || (root.objective !== null && (typeof root.objective !== 'string' || root.objective.length < 1 || root.objective.length > 240))
+    || !['explicit', 'immediate', 'close', 'ranged', 'ambush', 'safe_distance'].includes(root.engagementPreference as string)
+    || !Array.isArray(root.protectedActorRefs)
+    || Object.keys(root.protectedActorRefs).length !== root.protectedActorRefs.length
+    || root.protectedActorRefs.length > 16
+    || root.protectedActorRefs.some((ref) => typeof ref !== 'string' || !publicRefPattern.test(ref) || uuidPattern.test(ref))
+    || new Set(root.protectedActorRefs).size !== root.protectedActorRefs.length) {
+    throw new TypeError('Encounter context is invalid');
+  }
+  const environment = closedRecord(root.environment, ['summary', 'tags'], '$.encounterContext.environment');
+  if ((environment.summary !== null
+      && (typeof environment.summary !== 'string' || environment.summary.length < 1 || environment.summary.length > 500))
+    || !Array.isArray(environment.tags)
+    || Object.keys(environment.tags).length !== environment.tags.length
+    || environment.tags.length > 12
+    || environment.tags.some((tag) => typeof tag !== 'string' || !publicRefPattern.test(tag))
+    || new Set(environment.tags).size !== environment.tags.length) {
+    throw new TypeError('Encounter environment context is invalid');
+  }
+  return structuredClone(value) as EncounterContextV1;
 }
 
 export function databaseEncounterOutcome(outcome: EncounterOutcomeValue): EncounterOutcome {

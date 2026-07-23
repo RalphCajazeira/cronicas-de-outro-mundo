@@ -87,7 +87,12 @@ describe('manageEncounter HTTP route', () => {
     const service: EncounterHttpService = { manage: () => Promise.resolve({
       ...result, result: 'processing_paused', lifecycleStatus: 'processing_paused', stateVersion: 2,
       nextRequiredAction: { type: 'continue' },
-      transitionSummary: { processedEventCount: 1, events: [{ category: 'damage_applied', actorRef: 'private-target-sentinel' }], changes: [{ actorRef: 'private-target-sentinel', categories: ['damage_applied'], resources: { hp: { before: 99991, after: 99990, delta: -1 } } }] },
+      transitionSummary: {
+        processedEventCount: 1, visibleEventCount: 1, eventsTruncated: false,
+        actorsActed: ['private-target-sentinel'],
+        events: [{ category: 'damage_applied', actorRef: 'private-target-sentinel' }],
+        changes: [{ actorRef: 'private-target-sentinel', categories: ['damage_applied'], resources: { hp: { before: 99991, after: 99990, delta: -1 } } }],
+      },
     }) };
     const response = await request(app(service, (record) => records.push(record)))
       .post('/api/v1/encounters/manage').set('x-rpg-key', 'test-key')
@@ -127,6 +132,63 @@ describe('manageEncounter HTTP route', () => {
       },
     });
     expect(JSON.stringify(records)).not.toMatch(/private-actor-sentinel|private-key-sentinel/);
+  });
+
+  it('audits automatic budgets and stop semantics without policy or narrative payloads', async () => {
+    const records: HttpAuditRecord[] = [];
+    const service: EncounterHttpService = { manage: () => Promise.resolve({
+      ...result,
+      operation: 'resolve_beat',
+      result: 'processing_paused',
+      lifecycleStatus: 'processing_paused',
+      stateVersion: 9,
+      nextRequiredAction: { type: 'continue' },
+      batchSummary: {
+        mode: 'automatic',
+        startingStateVersion: 3,
+        endingStateVersion: 9,
+        beatsProcessed: 6,
+        actionsResolved: 18,
+        actorsActed: [],
+        stopReason: 'processing_limit',
+        stopCategory: 'technical',
+        requiresPlayerDecision: false,
+        decisionReason: null,
+        availableAlternatives: [],
+        terminalCandidate: null,
+        narrativeFacts: ['private-narrative-sentinel'],
+      },
+    }) };
+    const response = await request(app(service, (record) => records.push(record)))
+      .post('/api/v1/encounters/manage').set('x-rpg-key', 'test-key')
+      .send({
+        operation: 'resolve_beat',
+        ...scope,
+        idempotencyKey: 'automatic-audit-key',
+        expectedStateVersion: 3,
+        policy: {
+          actorRef: 'hero',
+          mode: 'until_decision',
+          strategy: 'balanced',
+          objective: 'private-objective-sentinel',
+          maximumBeats: 6,
+        },
+      });
+    expect(response.status).toBe(200);
+    expect(records[0]).toMatchObject({
+      operationId: 'manageEncounter',
+      encounter: {
+        operation: 'resolve_beat',
+        mode: 'automatic',
+        beatsProcessed: 6,
+        actionsResolved: 18,
+        stopReason: 'processing_limit',
+        stopCategory: 'technical',
+        requiresPlayerDecision: false,
+      },
+      performance: { operation: 'manageEncounter', outcome: 'commit', queryCount: 0 },
+    });
+    expect(JSON.stringify(records)).not.toMatch(/private-objective-sentinel|private-narrative-sentinel|automatic-audit-key/);
   });
 
   it.each([

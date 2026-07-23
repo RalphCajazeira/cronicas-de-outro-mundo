@@ -650,3 +650,29 @@ Impacto:
 - produção e todos os recursos fora do staging autorizado permanecem intocados.
 
 Status: infraestrutura, benchmarks, smoke direto, GPT Builder, smoke pelo GPT e limpeza final aprovados; documentação local aguarda revisão, sem commit ou push
+
+## 2026-07-23 — Cápsula autoritativa e resolução automática limitada
+
+Decisão:
+
+- manter uma única Action pública `manageEncounter`, exatamente 20 `operationId`s e o `resolve_beat` existente como único pipeline mecânico;
+- acrescentar criação `assisted`, derivando party/hostile/neutral, relações bilaterais e zonas canônicas, com validação de uma primeira ação ou aproximação possível antes da persistência;
+- elevar `scene` para schema v2 e projetar ações autoritativas em uma consulta de conteúdo em lote para todos os atores, reutilizando autoridade de inventário já carregada;
+- aceitar plano de até três componentes com condição percentual fechada e fallback `skip|defend`, rejeitando código, expressão, repetição e loop livre;
+- aceitar política automática limitada a 12 beats na mesma transação/checkpoint externo, reutilizando action plan, reações, NPCs, rolls lazy, mutation applier, locks, idempotência e finalizador;
+- conservar consumíveis, raridades, habilidades limitadas e reservas de mana/SP por padrão; morte, perda permanente e recompensa continuam fora da automação;
+- classificar parada como `technical`, `decision`, `terminal` ou `error`; budget técnico autoriza continuação automática com nova versão/chave, enquanto decisão exige retorno ao jogador;
+- limitar a resposta pública a 32 eventos, preservando deltas finais e ledger do lote completo, e instrumentar modo, queries, estágio da cápsula, beats, ações, parada, decisão e commit/erro sem payloads, SQL, rolls ou secrets;
+- preservar modo explícito e fluxo granular como fallback, sem migration, dependência, aumento de timeout ou mudança de infraestrutura.
+- após medição, substituir o limite provisório de 384 KiB por metas de 64/128 KiB e hard cap fechado de 256 KiB; detalhar somente atores controláveis, resumir NPCs e preservar todas as ações utilizáveis do protagonista;
+- usar seis beats como default seguro e 12 como hard max; budget atingido é parada técnica persistida, continuável com nova versão e nova chave;
+- carregar autoridade/catálogo uma vez no automático, atualizar somente consumo e disponibilidade afetados em memória e montar uma cápsula pública final.
+
+Impacto:
+
+- criação, leitura mecânica e vários beats deixam de exigir consultas intermediárias por ação;
+- uma política automática produz um único checkpoint idempotente por chamada e nunca duplica roll, consumo ou consequência no replay;
+- ações espaciais ainda sem contexto autoritativo permanecem visíveis como bloqueadas, em vez de derrubar a cápsula inteira;
+- mudanças locais exigem gates completos e revisão antes de qualquer commit, push, deploy ou atualização do GPT Builder.
+
+Status: implementação local em validação; nenhum commit, push, deploy, migration, banco remoto ou GPT Builder alterado

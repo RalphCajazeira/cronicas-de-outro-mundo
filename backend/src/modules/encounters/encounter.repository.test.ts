@@ -85,6 +85,9 @@ describe('encounter repository primitives', () => {
   it('rejects contradictory next actions and malformed persisted transition summaries', () => {
     const transitionSummary = {
       processedEventCount: 1,
+      visibleEventCount: 1,
+      eventsTruncated: false,
+      actorsActed: ['hero'],
       events: [{ category: 'damage_applied', actorRef: 'hero', targetRef: 'hero' }],
       changes: [{
         actorRef: 'hero', categories: ['damage_applied', 'resource_changed'],

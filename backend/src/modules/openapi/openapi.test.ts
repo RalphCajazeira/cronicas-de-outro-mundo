@@ -482,11 +482,13 @@ describe('official OpenAPI contract', () => {
     expect(schema.properties?.operation?.enum).toEqual([
       'create', 'load', 'resolve_beat', 'submit_intent', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel', 'abandon',
     ]);
-    expect(schema.allOf).toHaveLength(7);
+    expect(schema.allOf).toHaveLength(8);
     expect(schema.properties?.intent?.oneOf).toHaveLength(2);
     const examples = operation?.requestBody?.content?.['application/json']?.examples ?? {};
     expect(Object.keys(examples).sort()).toEqual([
-      'abandon', 'cancel', 'confirm_completion', 'continue', 'create', 'load',
+      'abandon', 'cancel', 'confirm_completion', 'continue', 'continue_after_technical_budget',
+      'create', 'create_assisted', 'load',
+      'resolve_automatic_safe',
       'resolve_beat_after_component_limit', 'resolve_beat_after_component_rejection',
       'resolve_beat_attack', 'resolve_beat_cast', 'resolve_beat_idempotent_replay',
       'resolve_beat_impossible', 'resolve_beat_move_protect_prepare', 'resolve_beat_npc_limit',
@@ -508,15 +510,15 @@ describe('official OpenAPI contract', () => {
       'continue', 'confirm_completion', 'cancel', 'abandon',
     ] as const;
     for (const operationName of operationNames) {
-      const rule = schema.allOf?.find((candidate) => {
+      const rules = schema.allOf?.filter((candidate) => {
         const discriminator = candidate.if?.properties?.operation;
         return discriminator?.const === operationName || discriminator?.enum?.includes(operationName) === true;
-      });
-      expect(rule, operationName).toBeDefined();
-      const requiresConfirmation = rule?.then?.required?.includes('confirmAuthorityDrift') === true;
-      const prohibitsConfirmation = rule?.then?.allOf?.some((candidate) => (
+      }) ?? [];
+      expect(rules.length, operationName).toBeGreaterThan(0);
+      const requiresConfirmation = rules.some((rule) => rule.then?.required?.includes('confirmAuthorityDrift') === true);
+      const prohibitsConfirmation = rules.every((rule) => rule.then?.allOf?.some((candidate) => (
         candidate.not?.required?.includes('confirmAuthorityDrift') === true
-      )) === true;
+      )) === true);
       expect({ requiresConfirmation, prohibitsConfirmation }, operationName).toEqual(operationName === 'abandon'
         ? { requiresConfirmation: true, prohibitsConfirmation: false }
         : { requiresConfirmation: false, prohibitsConfirmation: true });

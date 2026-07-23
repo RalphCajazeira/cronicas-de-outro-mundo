@@ -4,6 +4,7 @@ import {
   markOperationTimeout,
   observeOperation,
   observeOperationStage,
+  observeOperationStageSync,
   operationTelemetrySnapshot,
   recordDatabaseQuery,
   runWithOperationTelemetry,
@@ -25,5 +26,16 @@ describe('operation observability', () => {
     });
     expect(snapshot?.stages).toEqual([expect.objectContaining({ name: 'content_publication', calls: 1, queryCount: 1 })]);
     expect(JSON.stringify(snapshot)).not.toMatch(/payload|password|secret|postgres|sql/i);
+  });
+
+  it('counts synchronous capsule assembly without logging its payload', async () => {
+    const context = createOperationTelemetryContext();
+    await runWithOperationTelemetry(context, () => observeOperation('manageEncounter', () => {
+      expect(observeOperationStageSync('encounter_capsule_assembly', () => 42)).toBe(42);
+      return Promise.resolve();
+    }));
+    expect(operationTelemetrySnapshot(context)?.stages).toContainEqual(expect.objectContaining({
+      name: 'encounter_capsule_assembly', calls: 1, queryCount: 0,
+    }));
   });
 });

@@ -63,15 +63,16 @@ function eventCategory(type: CoreV1EncounterBatchResult['processedEvents'][numbe
 
 export function encounterTransitionSummary(batch: CoreV1EncounterBatchResult): EncounterTransitionSummaryDto | undefined {
   if (batch.processedEvents.length === 0) return undefined;
-  if (batch.processedEvents.length > CORE_V1_MAX_ENCOUNTER_BATCH_EVENTS
+  if (batch.processedEvents.length > CORE_V1_MAX_ENCOUNTER_BATCH_EVENTS * 12
     || Object.keys(batch.processedEvents).length !== batch.processedEvents.length) {
     throw new EncounterError('ENCOUNTER_DENORMALIZED_DRIFT');
   }
-  const events = batch.processedEvents.map((event) => ({
+  const events = batch.processedEvents.slice(0, CORE_V1_MAX_ENCOUNTER_BATCH_EVENTS).map((event) => ({
     category: eventCategory(event.type),
     actorRef: event.timelineEvent.actorRef,
     ...(event.targetRef === undefined ? {} : { targetRef: event.targetRef }),
   }));
+  const actorsActed = [...new Set(batch.processedEvents.map((event) => event.timelineEvent.actorRef))].sort();
   const beforeByRef = new Map(batch.encounterBefore.participants.map((participant) => [participant.actorRef, participant]));
   const changes: EncounterTransitionSummaryDto['changes'][number][] = [];
   for (const after of batch.encounterAfter.participants) {
@@ -112,5 +113,12 @@ export function encounterTransitionSummary(batch: CoreV1EncounterBatchResult): E
       ...(activeEffects.applied === 0 && activeEffects.removed === 0 ? {} : { activeEffects }),
     });
   }
-  return { processedEventCount: batch.processedEvents.length, events, changes };
+  return {
+    processedEventCount: batch.processedEvents.length,
+    visibleEventCount: events.length,
+    eventsTruncated: events.length < batch.processedEvents.length,
+    actorsActed,
+    events,
+    changes,
+  };
 }

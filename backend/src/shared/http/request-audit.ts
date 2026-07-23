@@ -236,7 +236,7 @@ function summarizeEncounterAudit(value: unknown): Record<string, AuditValue> | u
   const result: Record<string, AuditValue> = {};
   for (const field of [
     'operation', 'encounterRef', 'result', 'lifecycleStatus', 'sourceActorRef', 'reactorRef',
-    'outcome', 'eventType',
+    'outcome', 'eventType', 'mode', 'stopReason', 'stopCategory',
   ]) {
     const item = safeString(value[field]);
     if (item !== undefined) result[field] = item;
@@ -244,9 +244,13 @@ function summarizeEncounterAudit(value: unknown): Record<string, AuditValue> | u
   for (const field of [
     'participantCount', 'relationOverrideCount', 'processedEventCount', 'stateVersion', 'expectedStateVersion',
     'actorChangeCount', 'removedEncounterEffectCount',
+    'capsuleActionCount', 'beatsProcessed', 'actionsResolved',
   ]) {
     const item = value[field];
     if (typeof item === 'number' && Number.isSafeInteger(item) && item >= 0) result[field] = item;
+  }
+  if (typeof value.requiresPlayerDecision === 'boolean') {
+    result.requiresPlayerDecision = value.requiresPlayerDecision;
   }
   return result;
 }

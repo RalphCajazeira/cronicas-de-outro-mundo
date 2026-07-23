@@ -1,9 +1,11 @@
 import type {
   EncounterBeatSummaryDto,
+  EncounterBatchSummaryDto,
   EncounterDto,
   EncounterNextRequiredActionDto,
   EncounterRecoverySummaryDto,
   EncounterScenePackageDto,
+  EncounterSetupSummaryDto,
   EncounterTransitionSummaryDto,
 } from './encounter.types.js';
 import type { EncounterPublicConsequencesSummaryV1 } from './encounter-consequence.js';
@@ -41,6 +43,8 @@ export interface EncounterPublicDto {
   readonly consequencesSummary?: EncounterPublicConsequencesSummaryV1;
   readonly scene?: EncounterScenePackageDto;
   readonly beatSummary?: EncounterBeatSummaryDto;
+  readonly setupSummary?: EncounterSetupSummaryDto;
+  readonly batchSummary?: EncounterBatchSummaryDto;
 }
 
 export function encounterPublicResult(dto: EncounterDto): EncounterPublicResult {
@@ -80,6 +84,9 @@ function toPublicNextRequiredAction(value: EncounterNextRequiredActionDto): Enco
 function toPublicTransitionSummary(value: EncounterTransitionSummaryDto): EncounterTransitionSummaryDto {
   return {
     processedEventCount: value.processedEventCount,
+    visibleEventCount: value.visibleEventCount,
+    eventsTruncated: value.eventsTruncated,
+    actorsActed: [...value.actorsActed],
     events: value.events.map((event) => ({
       category: event.category,
       ...(event.actorRef === undefined ? {} : { actorRef: event.actorRef }),
@@ -145,5 +152,7 @@ export function toEncounterPublicDto(dto: EncounterDto): EncounterPublicDto {
     }),
     ...(dto.scene === undefined ? {} : { scene: structuredClone(dto.scene) }),
     ...(dto.beatSummary === undefined ? {} : { beatSummary: structuredClone(dto.beatSummary) }),
+    ...(dto.setupSummary === undefined ? {} : { setupSummary: structuredClone(dto.setupSummary) }),
+    ...(dto.batchSummary === undefined ? {} : { batchSummary: structuredClone(dto.batchSummary) }),
   };
 }

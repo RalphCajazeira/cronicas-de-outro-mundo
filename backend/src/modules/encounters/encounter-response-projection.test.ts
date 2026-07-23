@@ -1,6 +1,10 @@
 import { EncounterLifecycleStatus } from '../../generated/prisma/client.js';
 import { describe, expect, it } from 'vitest';
-import type { CoreV1EncounterBatchResult, CoreV1EncounterState } from '../rules/core-v1/index.js';
+import {
+  CORE_V1_MAX_ENCOUNTER_BATCH_EVENTS,
+  type CoreV1EncounterBatchResult,
+  type CoreV1EncounterState,
+} from '../rules/core-v1/index.js';
 import { encounterNextRequiredAction, encounterTransitionSummary } from './encounter-response-projection.js';
 
 function participant(overrides: Record<string, unknown> = {}) {
@@ -90,7 +94,12 @@ describe('persisted encounter response projection', () => {
     } as unknown as CoreV1EncounterBatchResult;
     expect(encounterTransitionSummary(complete)?.processedEventCount).toBe(32);
     const oversized = { ...complete, processedEvents: [...complete.processedEvents, complete.processedEvents[0]!] };
-    expect(() => encounterTransitionSummary(oversized)).toThrowError(expect.objectContaining({ code: 'ENCOUNTER_DENORMALIZED_DRIFT' }));
+    expect(encounterTransitionSummary(oversized)).toMatchObject({
+      processedEventCount: 33,
+      visibleEventCount: CORE_V1_MAX_ENCOUNTER_BATCH_EVENTS,
+      eventsTruncated: true,
+      actorsActed: ['hero'],
+    });
   });
 
   it('counts removed effects without exposing their definitions', () => {
@@ -105,5 +114,68 @@ describe('persisted encounter response projection', () => {
       actorRef: 'hero', categories: ['effect_removed'], activeEffects: { applied: 0, removed: 1 },
     }]);
     expect(JSON.stringify(summary)).not.toContain('removed-effect-secret');
+  });
+
+  it('keeps consolidated deltas and every acting actor when the 32-event public timeline is truncated', () => {
+    const before = state({ participants: [
+      participant({ actorRef: 'hero', activeEffects: [{ effectRef: 'old-hero-effect' }] }),
+      participant({
+        actorRef: 'enemy',
+        resources: {
+          hp: { current: 12, maximum: 12 }, mana: { current: 8, maximum: 8 }, sp: { current: 6, maximum: 6 },
+        },
+      }),
+    ] });
+    const after = state({ participants: [
+      participant({
+        actorRef: 'hero',
+        resources: {
+          hp: { current: 6, maximum: 10 }, mana: { current: 3, maximum: 5 }, sp: { current: 4, maximum: 4 },
+        },
+        activeEffects: [{ effectRef: 'new-hero-effect' }],
+      }),
+      participant({
+        actorRef: 'enemy',
+        resources: {
+          hp: { current: 4, maximum: 12 }, mana: { current: 8, maximum: 8 }, sp: { current: 2, maximum: 6 },
+        },
+        combatState: 'recovering',
+      }),
+    ] });
+    const batch = {
+      encounterBefore: before,
+      encounterAfter: after,
+      processedEvents: Array.from({ length: 64 }, (_, index) => ({
+        type: index % 2 === 0 ? 'action_effect' : 'action_end',
+        timelineEvent: { actorRef: index % 2 === 0 ? 'hero' : 'enemy' },
+        targetRef: index % 2 === 0 ? 'enemy' : 'hero',
+      })),
+    } as unknown as CoreV1EncounterBatchResult;
+    const summary = encounterTransitionSummary(batch);
+    expect(summary).toMatchObject({
+      processedEventCount: 64,
+      visibleEventCount: 32,
+      eventsTruncated: true,
+      actorsActed: ['enemy', 'hero'],
+    });
+    expect(summary?.events).toHaveLength(32);
+    expect(summary?.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        actorRef: 'hero',
+        resources: {
+          hp: { before: 10, after: 6, delta: -4 },
+          mana: { before: 5, after: 3, delta: -2 },
+        },
+        activeEffects: { applied: 1, removed: 1 },
+      }),
+      expect.objectContaining({
+        actorRef: 'enemy',
+        resources: {
+          hp: { before: 12, after: 4, delta: -8 },
+          sp: { before: 6, after: 2, delta: -4 },
+        },
+        combatState: { before: 'ready', after: 'recovering' },
+      }),
+    ]));
   });
 });

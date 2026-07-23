@@ -7,6 +7,7 @@ import {
 } from '../../generated/prisma/client.js';
 import { loadActorMechanicalSheet } from '../actors/actor-mechanics.service.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
+import { observeOperationStage } from '../../shared/observability/operation-observability.js';
 import { loadActorActiveEffectMechanicalInputs } from '../effects/active-effect-mechanical-inputs.js';
 import { loadActorInventoryMechanicalInputs } from '../inventory/inventory-mechanical-inputs.js';
 import type { CoreV1EncounterState } from '../rules/core-v1/index.js';
@@ -71,6 +72,7 @@ export interface LoadedEncounter {
   readonly adapterState: EncounterAdapterStateV1;
   readonly authorities: ReadonlyMap<string, PersistedEncounterAuthority>;
   readonly consequencesSummary?: EncounterConsequenceSummaryV1;
+  readonly context?: import('./encounter.types.js').EncounterContextV1;
 }
 
 function stopReason(value: CoreV1EncounterState['completionCandidate']): EncounterCompletionCandidate | null {
@@ -213,9 +215,18 @@ export async function loadPersistedEncounterAuthorities(
   for (const actor of actors) {
     loaded.push({
       actor,
-      sheet: await loadActorMechanicalSheet(transaction, actor.id),
-      inventory: await loadActorInventoryMechanicalInputs(transaction, actor.id),
-      effects: await loadActorActiveEffectMechanicalInputs(transaction, actor.id, engineTick),
+      sheet: await observeOperationStage(
+        'encounter_mechanics',
+        () => loadActorMechanicalSheet(transaction, actor.id),
+      ),
+      inventory: await observeOperationStage(
+        'encounter_inventory',
+        () => loadActorInventoryMechanicalInputs(transaction, actor.id),
+      ),
+      effects: await observeOperationStage(
+        'encounter_effects',
+        () => loadActorActiveEffectMechanicalInputs(transaction, actor.id, engineTick),
+      ),
     });
   }
   return new Map(loaded.map((authority) => [authority.actor.code, authority]));
@@ -425,6 +436,9 @@ export async function validateLoadedEncounter(
   const consequencesSummary = validateTerminalConsequence(record, operationSummary);
   const persisted = record.participants.filter((participant) => participant.actorId !== null);
   const snapshotRefs = new Set(state.participants.map((participant) => participant.actorRef));
+  if (operationSummary.encounterContext?.protectedActorRefs.some((actorRef) => !snapshotRefs.has(actorRef)) === true) {
+    throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
+  }
   if (record.participants.length !== state.participants.length
     || record.participants.some((participant) => !snapshotRefs.has(participant.actorRef))) {
     throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
@@ -446,10 +460,14 @@ export async function validateLoadedEncounter(
       adapterState,
       authorities: new Map(),
       ...(consequencesSummary === undefined ? {} : { consequencesSummary }),
+      ...(operationSummary.encounterContext === undefined ? {} : { context: operationSummary.encounterContext }),
     };
   }
   if (options.skipCurrentAuthorities) {
-    return { record, state, adapterState, authorities: new Map() };
+    return {
+      record, state, adapterState, authorities: new Map(),
+      ...(operationSummary.encounterContext === undefined ? {} : { context: operationSummary.encounterContext }),
+    };
   }
   const versionRows = await transaction.actor.findMany({
     where: { id: { in: persistedActorIds } },
@@ -525,5 +543,8 @@ export async function validateLoadedEncounter(
       throw new EncounterError('ENCOUNTER_RESOURCE_DRIFT');
     }
   }
-  return { record, state, adapterState, authorities };
+  return {
+    record, state, adapterState, authorities,
+    ...(operationSummary.encounterContext === undefined ? {} : { context: operationSummary.encounterContext }),
+  };
 }

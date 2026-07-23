@@ -37,7 +37,12 @@ import { prismaReadinessCheck } from '../../src/modules/health/health.repository
 import { createEncounterService, encounterService } from '../../src/modules/encounters/encounter.service.js';
 import { RecordingEncounterRollProvider } from '../../src/modules/encounters/encounter-roll-provider.js';
 import { createEncounterHttpService } from '../../src/modules/encounters/encounter-http.service.js';
-import { ACTIVE_ENCOUNTER_LIFECYCLES } from '../../src/modules/encounters/encounter.types.js';
+import { manageEncounterSchema } from '../../src/modules/encounters/encounter-http.schemas.js';
+import type { EncounterPublicDto } from '../../src/modules/encounters/encounter-http.dto.js';
+import {
+  ACTIVE_ENCOUNTER_LIFECYCLES,
+  type EncounterDto,
+} from '../../src/modules/encounters/encounter.types.js';
 import { getOfficialContract } from '../../src/modules/openapi/openapi.routes.js';
 import { lockActorAuthorities } from '../../src/modules/encounters/encounter.repository.js';
 import {
@@ -82,6 +87,23 @@ function bodyRecord(response: { body: unknown }): Record<string, unknown> {
 function responseErrorMessage(response: { body: unknown }): unknown {
   const error = bodyRecord(response).error;
   return error !== null && typeof error === 'object' ? (error as Record<string, unknown>).message : undefined;
+}
+
+async function measureEncounterOperation<T>(work: () => Promise<T>) {
+  const context = createOperationTelemetryContext();
+  const startedAt = performance.now();
+  const value = await runWithOperationTelemetry(
+    context,
+    () => observeOperation('manageEncounter', work),
+  );
+  const metrics = operationTelemetrySnapshot(context);
+  if (metrics === undefined) throw new Error('Encounter telemetry snapshot is required');
+  return {
+    value,
+    metrics,
+    durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+    responseBytes: Buffer.byteLength(JSON.stringify(value), 'utf8'),
+  };
 }
 const seedScope = { playerRef: 'ralph', worldRef: 'elarion', campaignRef: 'main-campaign' };
 const seedScopeQuery = 'playerRef=ralph&worldRef=elarion&campaignRef=main-campaign';
@@ -437,6 +459,7 @@ async function createBeatNpcFixture(
   suffix: string,
   npcCount: number,
   beforeEncounter?: (context: BeatFixtureSetupContext) => Promise<void>,
+  createOperation: (work: () => Promise<EncounterDto>) => Promise<EncounterDto> = (work) => work(),
 ) {
   const rulesetVersion = await prisma.$transaction((transaction) => ensureCoreV1RulesetVersion(transaction));
   const player = await prisma.player.create({
@@ -486,10 +509,10 @@ async function createBeatNpcFixture(
         : leftActorRef === heroRef || rightActorRef === heroRef ? 'hostile' as const : 'ally' as const,
     }))
   ));
-  const created = await encounterService.create({
+  const created = await createOperation(() => encounterService.create({
     ...scope, encounterRef, idempotencyKey: `beat-${suffix}-create`, partySideRef: 'party',
     participants, relations,
-  });
+  }));
   return { scope, encounterRef, heroRef, npcRefs, created, world, campaign, hero };
 }
 
@@ -1350,6 +1373,650 @@ describe('idempotent seed', () => {
 encounterPersistenceConstraintTests();
 
 describe('Phase 1L-B transactional encounter adapter', () => {
+  it('creates an assisted combat with canonical sides, bilateral hostility and an immediate first action', async () => {
+    const encounterRef = 'phase-assisted-combat';
+    const created = await post('/api/v1/encounters/manage', {
+      operation: 'create',
+      encounterRef,
+      idempotencyKey: 'phase-assisted-create-0001',
+      setupMode: 'assisted',
+      encounterKind: 'combat',
+      partyActorRefs: ['ralph'],
+      hostileActorRefs: ['lyra'],
+      objective: 'Stop Lyra without changing the saved actors.',
+      engagementPreference: 'immediate',
+      protectedActorRefs: ['ralph'],
+      environmentalContext: { summary: 'A controlled training circle.', tags: ['training'] },
+    });
+    let cleanupNeeded = created.status === 200;
+    try {
+      expect(created.status).toBe(200);
+      const createdBody = created.body as EncounterPublicDto;
+      expect(createdBody).toMatchObject({
+        operation: 'create',
+        scene: {
+          schemaVersion: 2,
+          objective: 'Stop Lyra without changing the saved actors.',
+        },
+      });
+      const setup = createdBody.setupSummary;
+      if (setup === undefined) throw new Error('Assisted setup summary is required');
+      expect(setup.setupMode).toBe('assisted');
+      expect(setup.sides).toEqual([
+        { sideRef: 'party', actorRefs: ['ralph'] },
+        { sideRef: 'hostile', actorRefs: ['lyra'] },
+      ]);
+      expect(setup.zones).toEqual([
+        { actorRef: 'lyra', zone: 'engaged' },
+        { actorRef: 'ralph', zone: 'engaged' },
+      ]);
+      expect(setup.blockers).toEqual([]);
+      expect(setup.relations).toContainEqual(
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+      );
+      expect(setup.firstAvailableActions.length).toBeGreaterThan(0);
+      await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } })).resolves.toBe(1);
+      const cancelled = await post('/api/v1/encounters/manage', {
+        operation: 'cancel',
+        encounterRef,
+        idempotencyKey: 'phase-assisted-cancel-0001',
+        expectedStateVersion: createdBody.stateVersion,
+      });
+      expect(cancelled.status).toBe(200);
+      cleanupNeeded = false;
+    } finally {
+      if (cleanupNeeded) {
+        const persisted = await prisma.encounter.findFirst({
+          where: { encounterRef },
+          select: { lifecycleStatus: true, stateVersion: true },
+        });
+        if (persisted !== null && ACTIVE_ENCOUNTER_LIFECYCLES.includes(
+          persisted.lifecycleStatus as typeof ACTIVE_ENCOUNTER_LIFECYCLES[number],
+        )) {
+          await encounterService.cancel({
+            ...seedScope,
+            encounterRef,
+            idempotencyKey: 'phase-assisted-cleanup-0001',
+            expectedStateVersion: persisted.stateVersion,
+          });
+        }
+      }
+    }
+  });
+
+  it('evaluates a closed HP condition and applies the declared defend fallback in one beat', async () => {
+    const encounterRef = 'phase-conditional-fallback';
+    const created = await encounterService.create({
+      ...seedScope,
+      idempotencyKey: 'phase-conditional-create-0001',
+      encounterRef,
+      partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'engaged' },
+        { bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'hostile', zone: 'engaged' },
+      ],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+      ],
+    });
+    let cleanupNeeded = true;
+    try {
+      const resolved = await encounterService.resolveBeat({
+        ...seedScope,
+        encounterRef,
+        idempotencyKey: 'phase-conditional-resolve-0001',
+        expectedStateVersion: created.stateVersion,
+        intent: {
+          actorRef: 'ralph',
+          objective: 'Use only bounded conditions.',
+          narrative: 'Ralph observes if critically hurt and otherwise assumes a defensive fallback.',
+          resolutionPolicy: 'atomic',
+          components: [
+            { type: 'move', destination: 'near' },
+            {
+              type: 'observe',
+              when: { resource: 'hp', operator: 'at_or_below_percent', percent: 1 },
+              fallback: 'skip',
+            },
+            {
+              type: 'observe',
+              when: { resource: 'hp', operator: 'at_or_below_percent', percent: 1 },
+              fallback: 'defend',
+            },
+          ],
+        },
+      });
+      expect(resolved.beatSummary?.componentResults).toEqual([
+        expect.objectContaining({ index: 0, type: 'move', status: 'modified' }),
+        expect.objectContaining({ index: 1, status: 'conditional', code: 'CONDITION_NOT_MET' }),
+        expect.objectContaining({ index: 2, type: 'defend', status: 'modified', code: 'CONDITION_FALLBACK' }),
+      ]);
+      expect(resolved.batchSummary).toMatchObject({
+        mode: 'plan',
+        beatsProcessed: 1,
+      });
+      expect(resolved.batchSummary?.actionsResolved).toBeGreaterThan(0);
+      await encounterService.cancel({
+        ...seedScope,
+        encounterRef,
+        idempotencyKey: 'phase-conditional-cancel-0001',
+        expectedStateVersion: resolved.stateVersion,
+      });
+      cleanupNeeded = false;
+    } finally {
+      if (cleanupNeeded) {
+        const persisted = await prisma.encounter.findFirst({
+          where: { encounterRef },
+          select: { lifecycleStatus: true, stateVersion: true },
+        });
+        const terminalLifecycles = new Set<EncounterLifecycleStatus>([
+          EncounterLifecycleStatus.COMPLETED,
+          EncounterLifecycleStatus.FAILED,
+          EncounterLifecycleStatus.CANCELLED,
+        ]);
+        if (persisted !== null && !terminalLifecycles.has(persisted.lifecycleStatus)) {
+          await encounterService.cancel({
+            ...seedScope,
+            encounterRef,
+            idempotencyKey: 'phase-conditional-cleanup-0001',
+            expectedStateVersion: persisted.stateVersion,
+          });
+        }
+      }
+    }
+  });
+
+  it('resolves a bounded automatic policy across multiple beats with one idempotent checkpoint', async () => {
+    const encounterRef = 'phase-automatic-bounded';
+    const created = await encounterService.create({
+      ...seedScope,
+      idempotencyKey: 'phase-automatic-create-0001',
+      encounterRef,
+      partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: 'ralph', sideRef: 'party', zone: 'engaged' },
+        { bindingKind: 'persisted_actor', actorRef: 'lyra', sideRef: 'hostile', zone: 'engaged' },
+      ],
+      relations: [
+        { leftActorRef: 'lyra', rightActorRef: 'lyra', relation: 'self' },
+        { leftActorRef: 'lyra', rightActorRef: 'ralph', relation: 'hostile' },
+        { leftActorRef: 'ralph', rightActorRef: 'ralph', relation: 'self' },
+      ],
+    });
+    let cleanupNeeded = true;
+    try {
+      const input = {
+        ...seedScope,
+        encounterRef,
+        idempotencyKey: 'phase-automatic-resolve-0001',
+        expectedStateVersion: created.stateVersion,
+        policy: {
+          actorRef: 'ralph',
+          mode: 'bounded' as const,
+          strategy: 'balanced' as const,
+          objective: 'Resolve safely without consumables.',
+          targetPriority: 'nearest_hostile' as const,
+          protectedActorRefs: [],
+          maximumBeats: 2,
+          resourcePolicy: {
+            allowCommonConsumables: false,
+            allowRareConsumables: false,
+            allowLimitedAbilities: false,
+            preserveManaPercent: 50,
+            preserveSpPercent: 50,
+            stopBelowHpPercent: 10,
+            stopIfProtectedActorBelowHpPercent: 30,
+            allowFlee: false,
+            allowTargetSwitch: true,
+            allowEnvironmentalInteraction: false,
+          },
+        },
+      };
+      const resolved = await encounterService.resolveBeat(input);
+      expect(resolved.batchSummary).toMatchObject({
+        mode: 'automatic',
+        startingStateVersion: created.stateVersion,
+        beatsProcessed: 2,
+        stopCategory: 'technical',
+        requiresPlayerDecision: false,
+      });
+      expect(resolved.batchSummary?.endingStateVersion).toBe(resolved.stateVersion);
+      expect(resolved.stateVersion).toBeGreaterThan(created.stateVersion);
+      expect(resolved.scene?.stateVersion).toBe(resolved.stateVersion);
+      const ralphActions = resolved.scene?.participants.find((participant) => participant.actorRef === 'ralph')
+        ?.usableActions;
+      expect(ralphActions).toBeDefined();
+      expect((ralphActions?.attacks.length ?? 0) + (ralphActions?.abilities.length ?? 0) + (ralphActions?.items.length ?? 0))
+        .toBeGreaterThan(0);
+      await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } })).resolves.toBe(2);
+      const replay = await encounterService.resolveBeat(input);
+      expect(replay).toEqual(resolved);
+      await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } })).resolves.toBe(2);
+      await encounterService.cancel({
+        ...seedScope,
+        encounterRef,
+        idempotencyKey: 'phase-automatic-cancel-0001',
+        expectedStateVersion: resolved.stateVersion,
+      });
+      cleanupNeeded = false;
+    } finally {
+      if (cleanupNeeded) {
+        const persisted = await prisma.encounter.findFirst({
+          where: { encounterRef },
+          select: { lifecycleStatus: true, stateVersion: true },
+        });
+        const terminalLifecycles = new Set<EncounterLifecycleStatus>([
+          EncounterLifecycleStatus.COMPLETED,
+          EncounterLifecycleStatus.FAILED,
+          EncounterLifecycleStatus.CANCELLED,
+        ]);
+        if (persisted !== null && !terminalLifecycles.has(persisted.lifecycleStatus)) {
+          await encounterService.cancel({
+            ...seedScope,
+            encounterRef,
+            idempotencyKey: 'phase-automatic-cleanup-0001',
+            expectedStateVersion: persisted.stateVersion,
+          });
+        }
+      }
+    }
+  });
+
+  it('keeps PostgreSQL query, capsule and transaction budgets bounded across hardened encounter operations', async () => {
+    const facade = createEncounterHttpService(encounterService);
+    const reports: Record<string, unknown>[] = [];
+    const openEncounterRefs = new Map<string, { scope: typeof seedScope; stateVersion: number }>();
+    const stage = (
+      measurement: Awaited<ReturnType<typeof measureEncounterOperation>>,
+      name: string,
+    ) => measurement.metrics.stages.find((entry) => entry.name === name);
+    const report = (
+      scenario: string,
+      measurement: Awaited<ReturnType<typeof measureEncounterOperation<EncounterDto | EncounterPublicDto>>>,
+      beats: number,
+      startingStateVersion: number,
+    ) => {
+      const value = measurement.value;
+      reports.push({
+        scenario,
+        queries: measurement.metrics.queryCount,
+        queriesPerBeat: beats === 0 ? 0 : Math.round(measurement.metrics.queryCount / beats * 100) / 100,
+        contentReadBatches: stage(measurement, 'encounter_content')?.calls ?? 0,
+        contentReadQueries: stage(measurement, 'encounter_content')?.queryCount ?? 0,
+        inventoryReadBatches: stage(measurement, 'encounter_inventory')?.calls ?? 0,
+        inventoryReadQueries: stage(measurement, 'encounter_inventory')?.queryCount ?? 0,
+        effectReadBatches: stage(measurement, 'encounter_effects')?.calls ?? 0,
+        effectReadQueries: stage(measurement, 'encounter_effects')?.queryCount ?? 0,
+        capsuleRebuilds: stage(measurement, 'encounter_capsule_assembly')?.calls ?? 0,
+        transactionDurationMs: stage(measurement, 'encounter_transaction')?.durationMs ?? measurement.durationMs,
+        responseBytes: measurement.responseBytes,
+        events: value.transitionSummary?.processedEventCount ?? 0,
+        stateVersionsConsumed: value.stateVersion - startingStateVersion,
+      });
+    };
+    const cancelOpen = async (scope: typeof seedScope, encounterRef: string, stateVersion: number, key: string) => {
+      const current = await prisma.encounter.findFirst({
+        where: {
+          encounterRef,
+          campaign: { code: scope.campaignRef, world: { code: scope.worldRef, player: { slug: scope.playerRef } } },
+        },
+        select: { lifecycleStatus: true, stateVersion: true },
+      });
+      if (current !== null && ACTIVE_ENCOUNTER_LIFECYCLES.includes(
+        current.lifecycleStatus as typeof ACTIVE_ENCOUNTER_LIFECYCLES[number],
+      )) {
+        await encounterService.cancel({
+          ...scope, encounterRef, idempotencyKey: key,
+          expectedStateVersion: Math.max(stateVersion, current.stateVersion),
+        });
+      }
+      openEncounterRefs.delete(encounterRef);
+    };
+    const policy = (actorRef: string, maximumBeats: number) => ({
+      actorRef,
+      mode: 'bounded' as const,
+      strategy: 'defensive' as const,
+      objective: 'Defend until the bounded technical checkpoint.',
+      targetPriority: 'nearest_hostile' as const,
+      protectedActorRefs: [],
+      maximumBeats,
+      resourcePolicy: {
+        allowCommonConsumables: false,
+        allowRareConsumables: false,
+        allowLimitedAbilities: false,
+        preserveManaPercent: 50,
+        preserveSpPercent: 50,
+        stopBelowHpPercent: 10,
+        stopIfProtectedActorBelowHpPercent: 10,
+        allowFlee: false,
+        allowTargetSwitch: true,
+        allowEnvironmentalInteraction: false,
+      },
+    });
+
+    try {
+      let assistedHeroRef = '';
+      const two = await createBeatNpcFixture('hardening-budget-two', 1, async ({ world, campaign, hero, scope }) => {
+        const assistedHero = await createMechanicalActor({
+          campaignId: campaign.id,
+          code: scope.playerRef,
+          name: 'Hardening Budget Protagonist',
+          actorType: ActorType.CHARACTER,
+        });
+        assistedHeroRef = assistedHero.code;
+        for (let index = 0; index < 6; index += 1) {
+          const code = `hardening-budget-spell-${String(index)}`;
+          const definition = await publishTestContent({
+            worldId: world.id,
+            campaignId: campaign.id,
+            contentType: ContentType.SPELL,
+            code,
+            name: `Hardening Budget Spell ${String(index)}`,
+            profile: {
+              ...activeProfile('spell', code, `Hardening Budget Spell ${String(index)}`),
+              cost: { type: 'mana' as const, amount: 3 },
+              effects: [{
+                type: 'damage' as const,
+                targeting: { type: 'single_target' as const, rangeBand: 'near' as const, maxTargets: 1 },
+                damageComponents: [{
+                  id: `${code}-arcane`,
+                  channel: 'magical' as const,
+                  element: 'arcane' as const,
+                  baseDamage: 4,
+                  scaling: 'full' as const,
+                  canCrit: true,
+                }],
+              }],
+            },
+          });
+          await prisma.actorContent.create({
+            data: {
+              actorId: assistedHero.id,
+              contentDefinitionId: definition.id,
+              contentVersionId: definition.versions[0]!.id,
+              state: ActorContentState.MASTERED,
+            },
+          });
+        }
+        const sustainCode = 'hardening-budget-sustain';
+        const sustain = await publishTestContent({
+          worldId: world.id,
+          campaignId: campaign.id,
+          contentType: ContentType.SPELL,
+          code: sustainCode,
+          name: 'Hardening Budget Sustain',
+          profile: {
+            ...activeProfile('spell', sustainCode, 'Hardening Budget Sustain'),
+            cost: { type: 'none' as const },
+            effects: [{
+              type: 'restore_resource' as const,
+              resource: 'hp' as const,
+              amount: 1,
+              targeting: { type: 'self' as const, rangeBand: 'self' as const },
+            }],
+          },
+        });
+        await prisma.actorContent.create({
+          data: {
+            actorId: hero.id,
+            contentDefinitionId: sustain.id,
+            contentVersionId: sustain.versions[0]!.id,
+            state: ActorContentState.MASTERED,
+          },
+        });
+        await publishTestContent({
+          worldId: world.id,
+          campaignId: campaign.id,
+          contentType: ContentType.WEAPON,
+          code: 'hardening-budget-sword',
+          name: 'Hardening Budget Sword',
+          description: 'Arma inicial.',
+          profile: {
+            ...weaponProfile('hardening-budget-sword', 'Hardening Budget Sword'),
+            handedness: 'one_handed' as const,
+            weaponTags: ['sword'],
+          },
+          inventorySpec: uniqueInventorySpec(2, {
+            equipmentSlots: ['main_hand'],
+            handedness: 'one_handed',
+          }),
+          tags: ['weapon'],
+        });
+      });
+      await cancelOpen(two.scope, two.encounterRef, two.created.stateVersion, 'hardening-budget-two-initial-cancel');
+      const assistedRef = 'hardening-budget-assisted';
+      const assistedInput = manageEncounterSchema.parse({
+        operation: 'create',
+        ...two.scope,
+        encounterRef: assistedRef,
+        idempotencyKey: 'hardening-budget-assisted-create',
+        setupMode: 'assisted',
+        encounterKind: 'combat',
+        partyActorRefs: [assistedHeroRef],
+        hostileActorRefs: [two.npcRefs[0]],
+        objective: 'Measure assisted creation with six initial protagonist contents.',
+        engagementPreference: 'immediate',
+      });
+      const assisted = await measureEncounterOperation(() => facade.manage(assistedInput));
+      openEncounterRefs.set(assistedRef, { scope: two.scope, stateVersion: assisted.value.stateVersion });
+      report('assisted_create_2p_6content', assisted, 0, 0);
+      expect(assisted.metrics.queryCount).toBeLessThanOrEqual(150);
+      expect(stage(assisted, 'encounter_capsule_assembly')?.calls).toBe(1);
+      expect(assisted.value.scene?.participants).toHaveLength(2);
+      expect(assisted.responseBytes).toBeLessThanOrEqual(64 * 1024);
+      await cancelOpen(two.scope, assistedRef, assisted.value.stateVersion, 'hardening-budget-assisted-cancel');
+
+      const createAutomatic = async (suffix: string) => {
+        const encounterRef = `hardening-budget-${suffix}`;
+        const created = await encounterService.create({
+          ...two.scope,
+          encounterRef,
+          idempotencyKey: `hardening-budget-${suffix}-create`,
+          partySideRef: 'party',
+          participants: [
+            { bindingKind: 'persisted_actor', actorRef: two.heroRef, sideRef: 'party', zone: 'near' },
+            { bindingKind: 'persisted_actor', actorRef: two.npcRefs[0]!, sideRef: 'hostile', zone: 'near' },
+          ],
+          relations: [
+            { leftActorRef: two.heroRef, rightActorRef: two.heroRef, relation: 'self' },
+            { leftActorRef: two.heroRef, rightActorRef: two.npcRefs[0]!, relation: 'hostile' },
+            { leftActorRef: two.npcRefs[0]!, rightActorRef: two.npcRefs[0]!, relation: 'self' },
+          ],
+        });
+        openEncounterRefs.set(encounterRef, { scope: two.scope, stateVersion: created.stateVersion });
+        return { encounterRef, created };
+      };
+
+      const autoFourFixture = await createAutomatic('auto-four');
+      const autoFour = await measureEncounterOperation(() => encounterService.resolveBeat({
+        ...two.scope,
+        encounterRef: autoFourFixture.encounterRef,
+        idempotencyKey: 'hardening-budget-auto-four-resolve',
+        expectedStateVersion: autoFourFixture.created.stateVersion,
+        policy: policy(two.heroRef, 4),
+      }));
+      openEncounterRefs.set(autoFourFixture.encounterRef, { scope: two.scope, stateVersion: autoFour.value.stateVersion });
+      report('auto_resolve_4', autoFour, 4, autoFourFixture.created.stateVersion);
+      expect(autoFour.value.batchSummary?.beatsProcessed).toBe(4);
+      expect(autoFour.metrics.queryCount).toBeLessThanOrEqual(130);
+      expect(stage(autoFour, 'encounter_content')?.calls).toBe(1);
+      expect(stage(autoFour, 'encounter_capsule_assembly')?.calls).toBe(1);
+      await cancelOpen(two.scope, autoFourFixture.encounterRef, autoFour.value.stateVersion, 'hardening-budget-auto-four-cancel');
+
+      const autoTwelveFixture = await createAutomatic('auto-twelve');
+      const autoTwelve = await measureEncounterOperation(() => encounterService.resolveBeat({
+        ...two.scope,
+        encounterRef: autoTwelveFixture.encounterRef,
+        idempotencyKey: 'hardening-budget-auto-twelve-resolve',
+        expectedStateVersion: autoTwelveFixture.created.stateVersion,
+        policy: policy(two.heroRef, 12),
+      }));
+      openEncounterRefs.set(autoTwelveFixture.encounterRef, { scope: two.scope, stateVersion: autoTwelve.value.stateVersion });
+      report('auto_resolve_12', autoTwelve, 12, autoTwelveFixture.created.stateVersion);
+      expect(autoTwelve.value.batchSummary?.beatsProcessed).toBe(12);
+      expect(autoTwelve.metrics.queryCount).toBeLessThanOrEqual(140);
+      expect(autoTwelve.metrics.queryCount).toBeLessThanOrEqual(autoFour.metrics.queryCount + 10);
+      expect(stage(autoTwelve, 'encounter_content')?.calls).toBe(1);
+      expect(stage(autoTwelve, 'encounter_capsule_assembly')?.calls).toBe(1);
+      await cancelOpen(two.scope, autoTwelveFixture.encounterRef, autoTwelve.value.stateVersion, 'hardening-budget-auto-twelve-cancel');
+
+      const group = await createBeatNpcFixture('hardening-budget-group', 5, async ({ world, campaign, hero }) => {
+        const code = 'hardening-budget-group-sustain';
+        const sustain = await publishTestContent({
+          worldId: world.id,
+          campaignId: campaign.id,
+          contentType: ContentType.SPELL,
+          code,
+          name: 'Hardening Group Sustain',
+          profile: {
+            ...activeProfile('spell', code, 'Hardening Group Sustain'),
+            cost: { type: 'none' as const },
+            effects: [{
+              type: 'restore_resource' as const,
+              resource: 'hp' as const,
+              amount: 1,
+              targeting: { type: 'self' as const, rangeBand: 'self' as const },
+            }],
+          },
+        });
+        await prisma.actorContent.create({
+          data: {
+            actorId: hero.id,
+            contentDefinitionId: sustain.id,
+            contentVersionId: sustain.versions[0]!.id,
+            state: ActorContentState.MASTERED,
+          },
+        });
+      });
+      await cancelOpen(group.scope, group.encounterRef, group.created.stateVersion, 'hardening-budget-group-initial-cancel');
+      const groupRef = 'hardening-budget-group-six';
+      const groupActorRefs = [group.heroRef, ...group.npcRefs];
+      const allyRef = group.npcRefs[0]!;
+      const groupRelations = [...groupActorRefs].sort().flatMap((leftActorRef, leftIndex, ordered) => (
+        ordered.slice(leftIndex).map((rightActorRef) => ({
+          leftActorRef,
+          rightActorRef,
+          relation: leftActorRef === rightActorRef ? 'self' as const
+            : [leftActorRef, rightActorRef].every((ref) => [group.heroRef, allyRef].includes(ref))
+              ? 'ally' as const
+              : [leftActorRef, rightActorRef].some((ref) => [group.heroRef, allyRef].includes(ref))
+                ? 'hostile' as const
+                : 'ally' as const,
+        }))
+      ));
+      const groupCreated = await encounterService.create({
+        ...group.scope,
+        encounterRef: groupRef,
+        idempotencyKey: 'hardening-budget-group-create',
+        partySideRef: 'party',
+        participants: groupActorRefs.map((actorRef) => ({
+          bindingKind: 'persisted_actor' as const,
+          actorRef,
+          sideRef: [group.heroRef, allyRef].includes(actorRef) ? 'party' : 'hostile',
+          zone: 'near' as const,
+        })),
+        relations: groupRelations,
+      });
+      openEncounterRefs.set(groupRef, { scope: group.scope, stateVersion: groupCreated.stateVersion });
+      const groupAuto = await measureEncounterOperation(() => encounterService.resolveBeat({
+        ...group.scope,
+        encounterRef: groupRef,
+        idempotencyKey: 'hardening-budget-group-resolve',
+        expectedStateVersion: groupCreated.stateVersion,
+        policy: policy(group.heroRef, 8),
+      }));
+      openEncounterRefs.set(groupRef, { scope: group.scope, stateVersion: groupAuto.value.stateVersion });
+      report('auto_resolve_group_2allies_4enemies_8', groupAuto, 8, groupCreated.stateVersion);
+      expect(groupAuto.value.batchSummary?.beatsProcessed).toBe(8);
+      expect(groupAuto.metrics.queryCount).toBeLessThanOrEqual(280);
+      expect(stage(groupAuto, 'encounter_content')?.calls).toBe(1);
+      expect(stage(groupAuto, 'encounter_capsule_assembly')?.calls).toBe(1);
+      expect(groupAuto.value.scene?.participants).toHaveLength(6);
+      expect(groupAuto.responseBytes).toBeLessThanOrEqual(128 * 1024);
+      await cancelOpen(group.scope, groupRef, groupAuto.value.stateVersion, 'hardening-budget-group-cancel');
+
+      const planInventory = await post(`/api/v1/actors/${two.heroRef}/inventory/manage`, {
+        ...two.scope,
+        operation: 'get',
+      });
+      expect(planInventory.status).toBe(200);
+      const planGrant = await post(`/api/v1/actors/${two.heroRef}/inventory/manage`, {
+        ...two.scope,
+        operation: 'grant',
+        idempotencyKey: 'hardening-budget-plan-grant',
+        expectedInventoryStateVersion: Number(bodyRecord(planInventory).inventoryStateVersion),
+        contentRef: {
+          scope: 'campaign',
+          contentType: 'weapon',
+          code: 'hardening-budget-sword',
+          versionNumber: 1,
+        },
+        quantity: 1,
+        entryRefs: ['hardening-budget-sword-1'],
+      });
+      expect(planGrant.status).toBe(200);
+      const planEquip = await post(`/api/v1/actors/${two.heroRef}/inventory/manage`, {
+        ...two.scope,
+        operation: 'equip',
+        idempotencyKey: 'hardening-budget-plan-equip',
+        expectedInventoryStateVersion: Number(bodyRecord(planGrant).inventoryStateVersion),
+        entryRef: 'hardening-budget-sword-1',
+        targetSlotRef: 'main_hand',
+      });
+      expect(planEquip.status).toBe(200);
+      const planRef = 'hardening-budget-plan';
+      const planCreated = await encounterService.create({
+        ...two.scope,
+        encounterRef: planRef,
+        idempotencyKey: 'hardening-budget-plan-create',
+        partySideRef: 'party',
+        participants: [
+          { bindingKind: 'persisted_actor', actorRef: two.heroRef, sideRef: 'party', zone: 'near' },
+          { bindingKind: 'persisted_actor', actorRef: two.npcRefs[0]!, sideRef: 'hostile', zone: 'near' },
+        ],
+        relations: [
+          { leftActorRef: two.heroRef, rightActorRef: two.heroRef, relation: 'self' },
+          { leftActorRef: two.heroRef, rightActorRef: two.npcRefs[0]!, relation: 'hostile' },
+          { leftActorRef: two.npcRefs[0]!, rightActorRef: two.npcRefs[0]!, relation: 'self' },
+        ],
+      });
+      openEncounterRefs.set(planRef, { scope: two.scope, stateVersion: planCreated.stateVersion });
+      const plan = await measureEncounterOperation(() => encounterService.resolveBeat({
+        ...two.scope,
+        encounterRef: planRef,
+        idempotencyKey: 'hardening-budget-plan-resolve',
+        expectedStateVersion: planCreated.stateVersion,
+        intent: {
+          actorRef: two.heroRef,
+          objective: 'Move, attack and defend in one external plan.',
+          narrative: 'Ralph avança, ataca e assume guarda.',
+          resolutionPolicy: 'allow_partial',
+          components: [
+            { type: 'move', destination: 'engaged' },
+            { type: 'attack', inventoryEntryRef: 'hardening-budget-sword-1', targetRefs: [two.npcRefs[0]!] },
+            { type: 'defend' },
+          ],
+        },
+      }));
+      openEncounterRefs.set(planRef, { scope: two.scope, stateVersion: plan.value.stateVersion });
+      report('plan_move_attack_defend', plan, 1, planCreated.stateVersion);
+      expect(plan.metrics.queryCount).toBeLessThanOrEqual(180);
+      expect(stage(plan, 'encounter_capsule_assembly')?.calls).toBe(1);
+      expect(plan.value.beatSummary?.componentResults).toHaveLength(3);
+      await cancelOpen(two.scope, planRef, plan.value.stateVersion, 'hardening-budget-plan-cancel');
+
+      if (process.env.REPORT_ENCOUNTER_BUDGETS === '1') {
+        console.info(`ENCOUNTER_HARDENING_METRICS=${JSON.stringify(reports)}`);
+      }
+    } finally {
+      for (const [encounterRef, open] of openEncounterRefs) {
+        await cancelOpen(open.scope, encounterRef, open.stateVersion, `${encounterRef}-forced-cleanup`);
+      }
+    }
+  });
+
   it('resolves a composite player beat, NPC fallback, reaction preparation and checkpoint in one external mutation', async () => {
     const encounterRef = 'phase-beat-resolution';
     const created = await encounterService.create({
@@ -1548,7 +2215,9 @@ describe('Phase 1L-B transactional encounter adapter', () => {
       const afterRollback = await encounterService.load({ ...seedScope, encounterRef });
       expect(afterRollback.stateVersion).toBe(created.stateVersion);
       expect(afterRollback.scene?.participants.find((entry) => entry.actorRef === 'ralph'))
-        .toMatchObject({ zone: 'near', preparedActionRefs: [] });
+        .toMatchObject({ zone: 'near' });
+      expect(afterRollback.scene?.participants.find((entry) => entry.actorRef === 'ralph'))
+        .not.toHaveProperty('preparedActionRefs');
 
       const partialKey = 'phase-beat-partial-accepted';
       const partial = await encounterService.resolveBeat({
@@ -1589,10 +2258,11 @@ describe('Phase 1L-B transactional encounter adapter', () => {
     }
   });
 
-  it('processes exactly four NPCs deterministically and rejects five before any actor acts', async () => {
+  it('processes at most four NPCs deterministically and explicitly defers excess actors', async () => {
     const four = await createBeatNpcFixture('limit-four', 4);
     const five = await createBeatNpcFixture('limit-five', 5);
     let fourVersion = four.created.stateVersion;
+    let fiveVersion = five.created.stateVersion;
     try {
       const fiveKey = 'beat-limit-five-resolve';
       const fiveResponse = await post('/api/v1/encounters/manage', {
@@ -1604,15 +2274,23 @@ describe('Phase 1L-B transactional encounter adapter', () => {
         },
         npcDirectives: five.npcRefs.map((actorRef) => ({ actorRef, strategy: 'aggressive' })),
       });
-      expect(fiveResponse.status).toBe(422);
+      expect(fiveResponse.status).toBe(200);
       expect(fiveResponse.body).toMatchObject({
-        error: { code: 'NPC_LIMIT_EXCEEDED', retryable: false, recoveryAction: 'choose_new_intent' },
+        beatSummary: {
+          externalTransitions: 1,
+          deferredNpcActorRefs: [expect.any(String)],
+        },
       });
-      for (const actorRef of five.npcRefs) expect(JSON.stringify(fiveResponse.body)).toContain(actorRef);
-      await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef: five.encounterRef } } })).resolves.toBe(1);
-      await expect(prisma.idempotencyRecord.count({ where: { key: `encounter:${fiveKey}` } })).resolves.toBe(0);
-      const fiveReloaded = await encounterService.load({ ...five.scope, encounterRef: five.encounterRef });
-      expect(fiveReloaded.stateVersion).toBe(five.created.stateVersion);
+      const fiveBody = fiveResponse.body as EncounterPublicDto;
+      fiveVersion = fiveBody.stateVersion;
+      expect(fiveBody.beatSummary?.npcResults).toHaveLength(4);
+      expect(fiveBody.beatSummary?.deferredNpcActorRefs).toHaveLength(1);
+      expect(new Set([
+        ...(fiveBody.beatSummary?.npcResults.map((result) => result.actorRef) ?? []),
+        ...(fiveBody.beatSummary?.deferredNpcActorRefs ?? []),
+      ])).toEqual(new Set(five.npcRefs));
+      await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef: five.encounterRef } } })).resolves.toBe(2);
+      await expect(prisma.idempotencyRecord.count({ where: { key: `encounter:${fiveKey}` } })).resolves.toBe(1);
 
       const resolvedFour = await encounterService.resolveBeat({
         ...four.scope, encounterRef: four.encounterRef, idempotencyKey: 'beat-limit-four-resolve',
@@ -1645,7 +2323,9 @@ describe('Phase 1L-B transactional encounter adapter', () => {
           await encounterService.cancel({
             ...fixture.scope, encounterRef: fixture.encounterRef,
             idempotencyKey: `${fixture.encounterRef}-cleanup`,
-            expectedStateVersion: fixture === four ? Math.max(fourVersion, persisted.stateVersion) : persisted.stateVersion,
+            expectedStateVersion: fixture === four
+              ? Math.max(fourVersion, persisted.stateVersion)
+              : Math.max(fiveVersion, persisted.stateVersion),
           });
         }
       }
@@ -5589,7 +6269,7 @@ describe('resolve_beat mechanical vertical slice', () => {
 
     const resolve = async (
       suffix: string,
-      component: Parameters<typeof encounterService.resolveBeat>[0]['intent']['components'][number],
+      component: NonNullable<Parameters<typeof encounterService.resolveBeat>[0]['intent']>['components'][number],
       verify: () => Promise<void>,
     ) => {
       const encounterRef = `phase-beat-mechanical-${suffix}`;

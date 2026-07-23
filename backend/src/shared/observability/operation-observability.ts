@@ -104,6 +104,19 @@ export async function observeOperationStage<T>(name: string, work: () => Promise
   }
 }
 
+export function observeOperationStageSync<T>(name: string, work: () => T): T {
+  const current = storage.getStore();
+  if (current === undefined) return work();
+  const startedAt = performance.now();
+  try {
+    return storage.run({ telemetry: current.telemetry, stage: name }, work);
+  } finally {
+    const stage = stageTelemetry(current.telemetry, name);
+    stage.calls += 1;
+    stage.durationMs += performance.now() - startedAt;
+  }
+}
+
 export function recordDatabaseQuery(durationMs: number): void {
   const current = storage.getStore();
   if (current === undefined) return;

@@ -4,6 +4,7 @@ import type { EncounterDto } from './encounter.types.js';
 import { manageEncounterSchema } from './encounter-http.schemas.js';
 import {
   buildEncounterRelations,
+  buildAssistedEncounterCreateInput,
   createEncounterHttpService,
   deriveEncounterIntentRef,
   type EncounterApplicationService,
@@ -28,7 +29,10 @@ function fakeInternal() {
     resolveReaction: vi.fn<EncounterApplicationService['resolveReaction']>().mockResolvedValue(internalDto('resolve_reaction')),
     continue: vi.fn<EncounterApplicationService['continue']>().mockResolvedValue({
       ...internalDto('continue'), lifecycleStatus: 'processing_paused', nextRequiredAction: { type: 'continue' as const },
-      transitionSummary: { processedEventCount: 1, events: [{ category: 'action_resolved' as const, actorRef: 'hero' }], changes: [] },
+      transitionSummary: {
+        processedEventCount: 1, visibleEventCount: 1, eventsTruncated: false, actorsActed: ['hero'],
+        events: [{ category: 'action_resolved' as const, actorRef: 'hero' }], changes: [],
+      },
     }),
     confirmCompletion: vi.fn<EncounterApplicationService['confirmCompletion']>().mockResolvedValue({ ...internalDto('confirm_completion'), lifecycleStatus: 'completed', nextRequiredAction: { type: 'none' as const } }),
     cancel: vi.fn<EncounterApplicationService['cancel']>().mockResolvedValue({ ...internalDto('cancel'), lifecycleStatus: 'cancelled', nextRequiredAction: { type: 'none' as const } }),
@@ -124,6 +128,62 @@ describe('encounter HTTP facade', () => {
     expect(internal.submitIntent).not.toHaveBeenCalled();
   });
 
+  it('reproduces the explicit side/zone hazard and fixes it through deterministic assisted setup', () => {
+    const explicit = manageEncounterSchema.parse({
+      operation: 'create', ...scope, idempotencyKey: 'explicit-hazard-001',
+      participants: [
+        { actorRef: 'hero', sideRef: 'same-side', zone: 'far' },
+        { actorRef: 'enemy', sideRef: 'same-side', zone: 'far' },
+      ],
+    });
+    if (explicit.operation !== 'create' || !('participants' in explicit)) throw new Error('fixture');
+    expect(buildEncounterRelations(explicit)).toContainEqual({
+      leftActorRef: 'enemy', rightActorRef: 'hero', relation: 'ally',
+    });
+
+    const assisted = manageEncounterSchema.parse({
+      operation: 'create', ...scope, idempotencyKey: 'assisted-fixed-001',
+      setupMode: 'assisted', encounterKind: 'combat',
+      partyActorRefs: ['hero', 'ally'], hostileActorRefs: ['enemy'], neutralActorRefs: ['witness'],
+      objective: 'Stop the enemy.', engagementPreference: 'immediate',
+    });
+    if (assisted.operation !== 'create' || assisted.setupMode !== 'assisted') throw new Error('fixture');
+    const derived = buildAssistedEncounterCreateInput(assisted);
+    expect(derived.participants).toEqual(expect.arrayContaining([
+      expect.objectContaining({ actorRef: 'hero', sideRef: 'party', zone: 'engaged' }),
+      expect.objectContaining({ actorRef: 'enemy', sideRef: 'hostile', zone: 'engaged' }),
+      expect.objectContaining({ actorRef: 'witness', sideRef: 'neutral', zone: 'far' }),
+    ]));
+    expect(derived.relations).toEqual(expect.arrayContaining([
+      { leftActorRef: 'hero', rightActorRef: 'hero', relation: 'self' },
+      { leftActorRef: 'ally', rightActorRef: 'hero', relation: 'ally' },
+      { leftActorRef: 'enemy', rightActorRef: 'hero', relation: 'hostile' },
+      { leftActorRef: 'hero', rightActorRef: 'witness', relation: 'neutral' },
+    ]));
+  });
+
+  it('forwards an automatic policy with conservative defaults and no mechanical outcome fields', async () => {
+    const internal = fakeInternal();
+    const input = manageEncounterSchema.parse({
+      operation: 'resolve_beat', ...scope,
+      idempotencyKey: 'automatic-policy-001', expectedStateVersion: 7,
+      policy: {
+        actorRef: 'hero', mode: 'until_terminal', strategy: 'balanced',
+        objective: 'Finish safely.', targetPriority: 'nearest_hostile', maximumBeats: 6,
+      },
+    });
+    await createEncounterHttpService(internal).manage(input);
+    const forwarded = internal.resolveBeat.mock.calls[0]?.[0];
+    expect(forwarded?.policy).toMatchObject({
+      actorRef: 'hero', mode: 'until_terminal', maximumBeats: 6,
+      resourcePolicy: {
+        allowCommonConsumables: false, allowRareConsumables: false,
+        preserveManaPercent: 50, preserveSpPercent: 50, allowFlee: false,
+      },
+    });
+    expect(JSON.stringify(forwarded)).not.toMatch(/"damage"|"hit"|"rolls"|"outcome"/);
+  });
+
   it('translates safe intent fields and never forwards public mechanics', async () => {
     const internal = fakeInternal();
     const input = manageEncounterSchema.parse({
@@ -162,6 +222,61 @@ describe('encounter HTTP facade', () => {
     expect(internal.submitIntent).not.toHaveBeenCalled();
     expect(internal.continue).not.toHaveBeenCalled();
     expect(internal.resolveReaction).not.toHaveBeenCalled();
+  });
+
+  it('reduces the equivalent granular experience from seven external calls to one plan or one automatic call', async () => {
+    const granularExternalCalls = [
+      'load',
+      'movement',
+      'attack',
+      'defense',
+      'second_attack',
+      'npc_actions',
+      'completion_or_pause',
+    ];
+    const planInternal = fakeInternal();
+    await createEncounterHttpService(planInternal).manage(manageEncounterSchema.parse({
+      operation: 'resolve_beat',
+      ...scope,
+      idempotencyKey: 'external-call-plan-001',
+      expectedStateVersion: 7,
+      intent: {
+        actorRef: 'hero',
+        objective: 'Advance, attack and defend.',
+        narrative: 'Hero advances, attacks and takes a defensive stance.',
+        resolutionPolicy: 'allow_partial',
+        components: [
+          { type: 'move', destination: 'engaged' },
+          { type: 'attack', inventoryEntryRef: 'sword', targetRefs: ['enemy'] },
+          { type: 'defend' },
+        ],
+      },
+    }));
+    const automaticInternal = fakeInternal();
+    await createEncounterHttpService(automaticInternal).manage(manageEncounterSchema.parse({
+      operation: 'resolve_beat',
+      ...scope,
+      idempotencyKey: 'external-call-automatic-001',
+      expectedStateVersion: 7,
+      policy: {
+        actorRef: 'hero',
+        mode: 'bounded',
+        strategy: 'balanced',
+        objective: 'Resolve four safe beats.',
+        targetPriority: 'nearest_hostile',
+        maximumBeats: 4,
+      },
+    }));
+
+    expect({
+      granular: granularExternalCalls.length,
+      plan: planInternal.resolveBeat.mock.calls.length,
+      automatic: automaticInternal.resolveBeat.mock.calls.length,
+    }).toEqual({ granular: 7, plan: 1, automatic: 1 });
+    expect(planInternal.submitIntent).not.toHaveBeenCalled();
+    expect(planInternal.continue).not.toHaveBeenCalled();
+    expect(automaticInternal.submitIntent).not.toHaveBeenCalled();
+    expect(automaticInternal.continue).not.toHaveBeenCalled();
   });
 
   it.each(['load', 'resolve_reaction', 'continue', 'confirm_completion', 'cancel', 'abandon'] as const)('dispatches %s only to its matching method', async (operation) => {

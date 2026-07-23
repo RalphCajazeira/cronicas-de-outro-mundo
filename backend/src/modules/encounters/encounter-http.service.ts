@@ -10,6 +10,7 @@ import type {
 } from './encounter.types.js';
 import type {
   CreateEncounterHttpInput,
+  CreateAssistedEncounterHttpInput,
   ManageEncounterInput,
   SubmitIntentHttpInput,
 } from './encounter-http.schemas.js';
@@ -35,6 +36,7 @@ function canonicalPair(left: string, right: string): readonly [string, string] {
 }
 
 export function buildEncounterRelations(input: CreateEncounterHttpInput): CoreV1EncounterParticipantRelation[] {
+  if (!('participants' in input)) throw new TypeError('Explicit Encounter participants are required');
   if (Object.keys(input.participants).length !== input.participants.length
     || (input.relationOverrides !== undefined
       && Object.keys(input.relationOverrides).length !== input.relationOverrides.length)) {
@@ -65,6 +67,89 @@ export function buildEncounterRelations(input: CreateEncounterHttpInput): CoreV1
     .localeCompare(`${right.leftActorRef}\u0000${right.rightActorRef}`));
 }
 
+export function buildAssistedEncounterCreateInput(
+  input: CreateAssistedEncounterHttpInput,
+): CreateEncounterInput {
+  const zoneByPreference = {
+    immediate: 'engaged',
+    close: 'near',
+    ranged: 'medium',
+    ambush: 'engaged',
+    safe_distance: 'far',
+  } as const;
+  const participantGroups = [
+    { sideRef: 'party', actorRefs: input.partyActorRefs },
+    { sideRef: 'hostile', actorRefs: input.hostileActorRefs },
+    { sideRef: 'neutral', actorRefs: input.neutralActorRefs ?? [] },
+  ] as const;
+  const participants = participantGroups.flatMap(({ sideRef, actorRefs }) => actorRefs.map((actorRef) => ({
+    bindingKind: 'persisted_actor' as const,
+    actorRef,
+    sideRef,
+    zone: sideRef === 'neutral' ? 'far' as const : zoneByPreference[input.engagementPreference],
+    ...(input.engagementPreference === 'ambush' && sideRef === 'hostile' ? { surprised: true } : {}),
+  }))).sort((left, right) => left.actorRef.localeCompare(right.actorRef));
+  const relations: CoreV1EncounterParticipantRelation[] = [];
+  for (let leftIndex = 0; leftIndex < participants.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex; rightIndex < participants.length; rightIndex += 1) {
+      const left = participants[leftIndex];
+      const right = participants[rightIndex];
+      if (left === undefined || right === undefined) throw new TypeError('Assisted Encounter participant derivation failed');
+      const relation = leftIndex === rightIndex ? 'self' as const
+        : left.sideRef === 'neutral' || right.sideRef === 'neutral' ? 'neutral' as const
+          : left.sideRef === right.sideRef ? 'ally' as const : 'hostile' as const;
+      relations.push({
+        leftActorRef: left.actorRef,
+        rightActorRef: right.actorRef,
+        relation,
+      });
+    }
+  }
+  const protectedActorRefs = [...(input.protectedActorRefs ?? [])].sort();
+  const context = {
+    schemaVersion: 1 as const,
+    setupMode: 'assisted' as const,
+    encounterKind: 'combat' as const,
+    objective: input.objective,
+    engagementPreference: input.engagementPreference,
+    protectedActorRefs,
+    environment: {
+      summary: input.environmentalContext?.summary ?? null,
+      tags: [...(input.environmentalContext?.tags ?? [])].sort(),
+    },
+  };
+  return {
+    playerRef: input.playerRef,
+    worldRef: input.worldRef,
+    campaignRef: input.campaignRef,
+    encounterRef: input.encounterRef,
+    idempotencyKey: input.idempotencyKey,
+    setupMode: 'assisted',
+    partySideRef: 'party',
+    participants,
+    relations,
+    context,
+    setupSummary: {
+      setupMode: 'assisted',
+      sides: participantGroups.map((group) => ({
+        sideRef: group.sideRef,
+        actorRefs: [...group.actorRefs].sort(),
+      })).filter((group) => group.actorRefs.length > 0),
+      relations,
+      zones: participants.map((participant) => ({ actorRef: participant.actorRef, zone: participant.zone })),
+      objective: input.objective,
+      normalizations: [
+        `engagement_preference:${input.engagementPreference}`,
+        'bilateral_relations_canonicalized',
+        'neutral_relations_preserved',
+      ],
+      warnings: [],
+      firstAvailableActions: [],
+      blockers: [],
+    },
+  };
+}
+
 export function deriveEncounterIntentRef(input: SubmitIntentHttpInput): string {
   const semanticInput = {
     operation: input.operation,
@@ -88,12 +173,16 @@ export function createEncounterHttpService(internal: EncounterApplicationService
     async manage(input) {
       try {
         if (input.operation === 'create') {
+          if (input.setupMode === 'assisted') {
+            return toEncounterPublicDto(await internal.create(buildAssistedEncounterCreateInput(input)));
+          }
           return toEncounterPublicDto(await internal.create({
             playerRef: input.playerRef,
             worldRef: input.worldRef,
             campaignRef: input.campaignRef,
             encounterRef: input.encounterRef,
             idempotencyKey: input.idempotencyKey,
+            setupMode: 'explicit',
             ...(input.partySideRef === undefined ? {} : { partySideRef: input.partySideRef }),
             participants: input.participants.map((participant) => ({
               bindingKind: 'persisted_actor' as const,
@@ -103,6 +192,15 @@ export function createEncounterHttpService(internal: EncounterApplicationService
               ...(participant.surprised === undefined ? {} : { surprised: participant.surprised }),
             })),
             relations: buildEncounterRelations(input),
+            context: {
+              schemaVersion: 1,
+              setupMode: 'explicit',
+              encounterKind: 'combat',
+              objective: null,
+              engagementPreference: 'explicit',
+              protectedActorRefs: [],
+              environment: { summary: null, tags: [] },
+            },
           }));
         }
         if (input.operation === 'load') {
@@ -120,6 +218,33 @@ export function createEncounterHttpService(internal: EncounterApplicationService
           expectedStateVersion: input.expectedStateVersion,
         };
         if (input.operation === 'resolve_beat') {
+          if ('policy' in input) {
+            return toEncounterPublicDto(await internal.resolveBeat({
+              ...reference,
+              policy: {
+                actorRef: input.policy.actorRef,
+                mode: input.policy.mode,
+                strategy: input.policy.strategy,
+                objective: input.policy.objective,
+                targetPriority: input.policy.targetPriority,
+                ...(input.policy.targetRefs === undefined ? {} : { targetRefs: input.policy.targetRefs }),
+                protectedActorRefs: input.policy.protectedActorRefs ?? [],
+                maximumBeats: input.policy.maximumBeats,
+                resourcePolicy: input.policy.resourcePolicy ?? {
+                  allowCommonConsumables: false,
+                  allowRareConsumables: false,
+                  allowLimitedAbilities: false,
+                  preserveManaPercent: 50,
+                  preserveSpPercent: 50,
+                  stopBelowHpPercent: 25,
+                  stopIfProtectedActorBelowHpPercent: 30,
+                  allowFlee: false,
+                  allowTargetSwitch: true,
+                  allowEnvironmentalInteraction: false,
+                },
+              },
+            }));
+          }
           return toEncounterPublicDto(await internal.resolveBeat({
             ...reference,
             intent: {

@@ -2049,6 +2049,61 @@ describe('core-v1 reactions, casting, movement, combos and plans', () => {
     }), 'STOP_CONDITION');
   });
 
+  it('keeps a three-action batch mechanically identical to the equivalent granular authoritative sequence', () => {
+    const initial = readyEncounter([participant('hero', 'party'), participant('enemy', 'hostile')]);
+    const intents = Array.from({ length: 3 }, (_, index) => intent({
+      intentRef: `equivalence-intent-${String(index + 1)}`,
+    }));
+    let granular = initial;
+    const granularReports = intents.map((entry) => {
+      const scheduled = expectOk(applyCoreV1EncounterIntent({
+        encounter: granular,
+        intent: entry,
+        definition: definition(),
+        targetingContext: { candidates: candidates(granular) },
+        runtime,
+      }));
+      const processed = expectOk(processCoreV1EncounterBatch(scheduled.encounterAfter, runtime));
+      granular = processed.encounterAfter;
+      return processed;
+    });
+    const planned = expectOk(applyCoreV1EncounterActionPlan({
+      encounter: initial,
+      plan: {
+        planRef: 'equivalence-plan',
+        actorRef: 'hero',
+        expectedStateVersion: initial.stateVersion,
+        intents,
+        stopConditions: [],
+      },
+      definitions: Object.fromEntries(intents.map((entry) => [entry.intentRef, definition()])),
+      targetingContexts: Object.fromEntries(intents.map((entry) => [
+        entry.intentRef, { candidates: candidates(initial) },
+      ])),
+      runtime,
+    }));
+    const granularEffectResolutions = granularReports.flatMap((report) => report.effectResolutions);
+    const granularHero = granular.participants.find((entry) => entry.actorRef === 'hero');
+    const granularEnemy = granular.participants.find((entry) => entry.actorRef === 'enemy');
+    const plannedHero = planned.encounterAfter.participants.find((entry) => entry.actorRef === 'hero');
+    const plannedEnemy = planned.encounterAfter.participants.find((entry) => entry.actorRef === 'enemy');
+
+    expect(planned.stopReason).toBe('plan_completed');
+    expect(planned.effectResolutions).toEqual(granularEffectResolutions);
+    expect(plannedHero?.resources).toEqual(granularHero?.resources);
+    expect(plannedEnemy?.resources).toEqual(granularEnemy?.resources);
+    expect(plannedHero?.resources.sp.current).toBe(88);
+    expect(plannedEnemy?.resources.hp.current).toBeLessThan(100);
+    expect(planned.encounterAfter.stateVersion).toBe(granular.stateVersion);
+    expect(planned.encounterAfter.currentTick).toBe(granular.currentTick);
+    expect(planned.encounterAfter.actionSequence).toBe(granular.actionSequence);
+    expect(planned.encounterAfter.participants).toEqual(granular.participants);
+    expect(planned.encounterAfter.actionPlans).toEqual([]);
+    expect(planned.resolvedActions).toEqual([
+      ...new Set(granularReports.flatMap((report) => report.resolvedActions)),
+    ].sort());
+  });
+
   it('continues a plan after partial success when no target stop condition was selected', () => {
     const result = interleavedPlan('target_invalidated');
     expect(result.stopReason).toBe('plan_completed');
