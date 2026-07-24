@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanSlateObjects } from './clean-slate.js';
+import { cleanSlateObjects } from '../../scripts/clean-slate.js';
 
 describe('clean-slate allowlist', () => {
   it('covers the public objects created by the twelve committed migrations', () => {
