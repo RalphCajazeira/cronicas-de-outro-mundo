@@ -11,7 +11,7 @@ import { observeOperationStage } from '../../shared/observability/operation-obse
 import { loadActorActiveEffectMechanicalInputs } from '../effects/active-effect-mechanical-inputs.js';
 import { loadActorInventoryMechanicalInputs } from '../inventory/inventory-mechanical-inputs.js';
 import type { CoreV1EncounterState } from '../rules/core-v1/index.js';
-import { validateCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
+import { validateSupportedCoreRulesetVersion } from '../rules/ruleset.registry.js';
 import {
   createCoreV1EncounterSnapshotHash,
   parseCoreV1EncounterSnapshot,
@@ -423,7 +423,7 @@ export async function validateLoadedEncounter(
     throw new EncounterError('ENCOUNTER_DENORMALIZED_DRIFT');
   }
   try {
-    validateCoreV1RulesetVersion(record.rulesetVersion);
+    validateSupportedCoreRulesetVersion(record.rulesetVersion);
   } catch (error) {
     throw new EncounterError('ENCOUNTER_MECHANICS_DRIFT', { cause: error });
   }

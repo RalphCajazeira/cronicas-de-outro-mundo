@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Prisma } from '../../generated/prisma/client.js';
 import { createAfterExpectedUnique } from '../../shared/database/create-after-expected-unique.js';
 import { canonicalJson } from '../../shared/json/canonical-json.js';
@@ -8,7 +9,21 @@ import {
   CORE_V1_CONTENT_PROFILE_SCHEMA_VERSION,
   CORE_V1_CONTENT_PROFILE_SNAPSHOT,
 } from './core-v1/core-v1.content-profile.manifest.js';
-import { ensureCoreV1RulesetVersion, type RulesetRegistryClient } from './ruleset.registry.js';
+import {
+  ensureCoreV1RulesetVersion,
+  type CoreRulesetVersion,
+  type RulesetRegistryClient,
+} from './ruleset.registry.js';
+
+export const CORE_V1_2_CONTENT_PROFILE_CODE = 'core-v1.2-content-v1' as const;
+const coreV12ContentProfileSnapshot = structuredClone(CORE_V1_CONTENT_PROFILE_SNAPSHOT) as {
+  identity: { code: string };
+};
+coreV12ContentProfileSnapshot.identity.code = CORE_V1_2_CONTENT_PROFILE_CODE;
+const CORE_V1_2_CONTENT_PROFILE_CANONICAL_JSON = canonicalJson(coreV12ContentProfileSnapshot);
+const CORE_V1_2_CONTENT_PROFILE_HASH = createHash('sha256')
+  .update(CORE_V1_2_CONTENT_PROFILE_CANONICAL_JSON)
+  .digest('hex');
 
 export const CORE_CONTENT_PROFILE_VERSION_DRIFT = 'CORE_CONTENT_PROFILE_VERSION_DRIFT' as const;
 export type ContentProfileDriftField = 'rulesetVersion' | 'code' | 'schemaVersion' | 'configHash' | 'configSnapshot';
@@ -86,4 +101,41 @@ export async function ensureCoreV1ContentProfileVersion(
     },
   );
   return validateCoreV1ContentProfileVersion(version, rulesetVersion.id);
+}
+
+export async function ensureCoreV12ContentProfileVersion(
+  client: ContentProfileRegistryClient,
+  rulesetVersion: CoreRulesetVersion,
+): Promise<CoreContentProfileVersion> {
+  let version = await client.contentProfileVersion.findUnique({
+    where: { code: CORE_V1_2_CONTENT_PROFILE_CODE },
+    select: contentProfileSelect,
+  });
+  version ??= await createAfterExpectedUnique(
+    client,
+    'ensure_core_v1_2_content_profile',
+    () => client.contentProfileVersion.create({
+      data: {
+        rulesetVersionId: rulesetVersion.id,
+        code: CORE_V1_2_CONTENT_PROFILE_CODE,
+        schemaVersion: CORE_V1_CONTENT_PROFILE_SCHEMA_VERSION,
+        configHash: CORE_V1_2_CONTENT_PROFILE_HASH,
+        configSnapshot: JSON.parse(CORE_V1_2_CONTENT_PROFILE_CANONICAL_JSON) as Prisma.InputJsonValue,
+      },
+      select: contentProfileSelect,
+    }),
+    () => client.contentProfileVersion.findUnique({
+      where: { code: CORE_V1_2_CONTENT_PROFILE_CODE },
+      select: contentProfileSelect,
+    }),
+    { modelName: 'ContentProfileVersion', fields: ['code'], index: 'ContentProfileVersion_code_key', allowModelOnly: true },
+  );
+  if (version.rulesetVersionId !== rulesetVersion.id
+    || version.code !== CORE_V1_2_CONTENT_PROFILE_CODE
+    || version.schemaVersion !== CORE_V1_CONTENT_PROFILE_SCHEMA_VERSION
+    || version.configHash !== CORE_V1_2_CONTENT_PROFILE_HASH
+    || canonicalJson(version.configSnapshot) !== CORE_V1_2_CONTENT_PROFILE_CANONICAL_JSON) {
+    throw new CoreContentProfileVersionDriftError(['rulesetVersion']);
+  }
+  return version;
 }

@@ -41,7 +41,7 @@ const allowedStringFields = [
   'sourceActorRef', 'state', 'status', 'targetActorRef', 'weaponEntryRef', 'worldMode', 'worldRef',
 ] as const;
 const allowedNumberFields = [
-  'entryCount', 'equippedCount', 'expectedInventoryStateVersion', 'inventoryStateVersion',
+  'entryCount', 'equippedCount', 'expectedInventoryStateVersion', 'expectedMechanicsStateVersion', 'inventoryStateVersion',
   'mastery', 'mechanicsStateVersion', 'progress', 'rank', 'removed',
 ] as const;
 const sensitiveKeyPattern = /authorization|cookie|key|password|secret|token/i;
@@ -109,6 +109,18 @@ function summarizeRequest(request: Request): Record<string, AuditValue> {
   if (inventoryActor !== undefined) body.actorRef = inventoryActor;
   if (typeof request.body.expectedInventoryStateVersion === 'number') {
     body.inventoryStateVersionBefore = request.body.expectedInventoryStateVersion;
+  }
+  if (typeof request.body.expectedMechanicsStateVersion === 'number') {
+    body.mechanicsStateVersionBefore = request.body.expectedMechanicsStateVersion;
+  }
+  for (const field of ['attributeDeltas', 'basePrimaryAttributes', 'progressionPrimaryAttributes'] as const) {
+    if (isRecord(request.body[field])) body[`${field}Count`] = Object.keys(request.body[field]).length;
+  }
+  if (isRecord(request.body.source)) {
+    const sourceType = safeString(request.body.source.type);
+    const sourceRef = fingerprint(request.body.source.ref);
+    if (sourceType !== undefined) body.xpSourceType = sourceType;
+    if (sourceRef !== undefined) body.xpSource = sourceRef;
   }
   if (isRecord(request.body.contentRef)) {
     const contentRef: Record<string, AuditValue> = {};

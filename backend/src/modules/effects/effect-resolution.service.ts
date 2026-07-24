@@ -19,6 +19,9 @@ import type { ResolveActorEffectInput } from '../gpt/gpt.schemas.js';
 import { loadActorInventoryMechanicalInputs } from '../inventory/inventory-mechanical-inputs.js';
 import {
   advanceActorActionDurations,
+  CORE_V1_ATTRIBUTE_HARD_CAP,
+  CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM,
+  CORE_V1_2_VERSION_CODE,
   resolveCoreV1ConsumableUse,
   resolveCoreV1EffectSequence,
   validateCoreV1ContentProfile,
@@ -33,7 +36,13 @@ import {
   type CoreV1RuntimeDurationBinding,
   type CoreV1StatusDefinitionBinding,
 } from '../rules/core-v1/index.js';
-import { ensureCoreV1EffectRulesVersion } from '../rules/effect-rules.registry.js';
+import {
+  ensureCoreV12EffectRulesVersion,
+  ensureCoreV1EffectRulesVersion,
+} from '../rules/effect-rules.registry.js';
+import {
+  validateSupportedCoreRulesetVersion,
+} from '../rules/ruleset.registry.js';
 import { loadActorActiveEffectMechanicalInputs } from './active-effect-mechanical-inputs.js';
 import {
   expireDueActorEffects,
@@ -426,11 +435,26 @@ export async function resolveActorEffectTransaction(
   const statuses = statusDefinitions(effects, refs, executable.version.sourceEffectBindings);
   const bindingIds = new Map<number, string>(executable.version.sourceEffectBindings.map((binding) => [binding.effectIndex, binding.targetContentVersionId]));
   const durations = runtimeDurations(profile, effects);
+  const rulesetVersion = await client.rulesetVersion.findUnique({
+    where: { id: scope.campaign.rulesetVersionId },
+    select: {
+      id: true, rulesetId: true, code: true, revision: true, schemaVersion: true,
+      configHash: true, configSnapshot: true, ruleset: { select: { code: true } },
+    },
+  });
+  if (rulesetVersion === null) throw operationError('RULESET_VERSION_MISMATCH', 'Campaign ruleset version is unavailable');
+  const supportedRuleset = validateSupportedCoreRulesetVersion(rulesetVersion);
+  const maximumPrimaryAttribute = supportedRuleset.code === CORE_V1_2_VERSION_CODE
+    ? CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM
+    : CORE_V1_ATTRIBUTE_HARD_CAP;
+  const effectRulesPromise = supportedRuleset.code === CORE_V1_2_VERSION_CODE
+    ? ensureCoreV12EffectRulesVersion(client, supportedRuleset)
+    : ensureCoreV1EffectRulesVersion(client, supportedRuleset);
   const [sourceContext, targetContext, targetSheet, effectRulesVersion] = await Promise.all([
     actorContext(client, actors.source),
     actors.target.id === actors.source.id ? actorContext(client, actors.source) : actorContext(client, actors.target),
     loadActorMechanicalSheet(client, actors.target.id),
-    ensureCoreV1EffectRulesVersion(client),
+    effectRulesPromise,
   ]);
   const coherentTarget = actors.target.id === actors.source.id ? sourceContext : targetContext;
   const needsRolls = effects.some((effect) => effect.type === 'damage' || effect.type === 'add_damage');
@@ -450,6 +474,7 @@ export async function resolveActorEffectTransaction(
     defense,
     ...(weaponDamageComponents === undefined ? {} : { weaponDamageComponents }),
     costModifiers: modifiers,
+    maximumPrimaryAttribute,
   } as const;
   const preflightRolls: CoreV1InjectedRolls | undefined = needsRolls ? { hitRollBps: 1, criticalRollBps: 1 } : undefined;
   const preflightCommon = { ...commonWithoutRolls, ...(preflightRolls === undefined ? {} : { rolls: preflightRolls }) };

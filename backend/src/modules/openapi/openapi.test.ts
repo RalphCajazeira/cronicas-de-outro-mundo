@@ -6,7 +6,7 @@ import {
 } from '../rules/core-v1/core-v1.content-mechanics.config.js';
 import { ACTIVE_API_ROUTES, getOfficialContract } from './openapi.routes.js';
 import { manageEncounterSchema } from '../encounters/encounter-http.schemas.js';
-import { manageActorInventorySchema } from '../gpt/gpt.schemas.js';
+import { manageActorInventorySchema, manageActorProgressionSchema, upsertActorSchema } from '../gpt/gpt.schemas.js';
 import { coreV1ContentProfileSchema, inventorySpecSchema } from '../content/content.schemas.js';
 
 interface Operation { operationId?: string; security?: unknown; tags?: string[]; parameters?: Array<Schema & { name?: string; in?: string; required?: boolean }>; requestBody?: { content?: { 'application/json'?: { schema?: Schema; examples?: Record<string, { value?: unknown }> } } }; description?: string; responses?: Record<string, unknown>; 'x-openai-isConsequential'?: unknown }
@@ -24,7 +24,9 @@ interface Schema {
   const?: unknown;
   format?: string;
   minItems?: number;
+  minProperties?: number;
   maxItems?: number;
+  maximum?: number;
   maxLength?: number;
   if?: Schema;
   then?: Schema;
@@ -59,6 +61,7 @@ const EXPECTED_CONSEQUENTIAL_BY_OPERATION_ID = {
   upsertActor: false,
   manageActorContent: false,
   manageActorInventory: false,
+  manageActorProgression: false,
   getContent: false,
   upsertContent: false,
   resolveActorEffect: false,
@@ -109,12 +112,12 @@ function collectEnums(value: unknown, result: unknown[][] = []): unknown[][] {
 }
 
 describe('official OpenAPI contract', () => {
-  it('is valid JSON loaded as OpenAPI 3.1 with exactly 20 unique operationIds', () => {
+  it('is valid JSON loaded as OpenAPI 3.1 with exactly 21 unique operationIds', () => {
     const ids = operations().map(({ operation }) => operation.operationId);
     expect(contract.openapi).toBe('3.1.0');
     expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(20);
+    expect(ids).toHaveLength(21);
   });
 
   it('declares the complete explicit consequential matrix without relying on method defaults', () => {
@@ -167,7 +170,7 @@ describe('official OpenAPI contract', () => {
     expect(contract.security).toEqual([{ RpgApiKey: [] }]);
     const publicIds = operations().filter(({ operation }) => Array.isArray(operation.security) && operation.security.length === 0).map(({ operation }) => operation.operationId).sort();
     expect(publicIds).toEqual(['checkHealth', 'checkReadiness', 'getOpenApiContract']);
-    expect(operations().filter(({ operation }) => !Array.isArray(operation.security) || operation.security.length > 0)).toHaveLength(17);
+    expect(operations().filter(({ operation }) => !Array.isArray(operation.security) || operation.security.length > 0)).toHaveLength(18);
   });
 
   it('contains no localhost production server', () => {
@@ -259,6 +262,53 @@ describe('official OpenAPI contract', () => {
     }
   });
 
+  it('publishes one closed progression Action with conditional writes and Zod-valid examples', () => {
+    const operation = operations().find((item) => item.operation.operationId === 'manageActorProgression')?.operation;
+    expect(operations().filter((item) => item.operation.operationId === 'manageActorProgression')).toHaveLength(1);
+    expect(operation?.tags).toEqual(['Actors']);
+    const schema = resolveSchema(operation?.requestBody?.content?.['application/json']?.schema);
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toEqual(['playerRef', 'worldRef', 'campaignRef', 'actorRef', 'operation']);
+    expect(schema.properties?.operation?.enum).toEqual([
+      'get', 'grant_xp', 'level_up', 'allocate_attributes', 'set_progression_state',
+    ]);
+    const conditionalRequired = schema.allOf?.map((rule) => rule.then?.required ?? []) ?? [];
+    expect(conditionalRequired).toEqual(expect.arrayContaining([
+      ['idempotencyKey', 'expectedMechanicsStateVersion', 'xpAmount', 'source', 'reason'],
+      ['idempotencyKey', 'expectedMechanicsStateVersion'],
+      ['idempotencyKey', 'expectedMechanicsStateVersion', 'attributeDeltas'],
+      ['idempotencyKey', 'expectedMechanicsStateVersion', 'reason'],
+    ]));
+    const examples = operation?.requestBody?.content?.['application/json']?.examples ?? {};
+    expect(Object.keys(examples)).toEqual([
+      'get_progression', 'grant_xp', 'level_up', 'allocate_exact', 'idempotent_replay', 'correct_sheet',
+      'get_level_50', 'level_up_20_to_21', 'level_up_99_to_100',
+      'allocate_above_old_cap_to_zero', 'correct_high_level_sheet',
+    ]);
+    for (const [name, example] of Object.entries(examples)) {
+      expect(manageActorProgressionSchema.safeParse(example.value).success, name).toBe(true);
+    }
+    expect(operation?.responses).toHaveProperty('422');
+    expect(JSON.stringify(operation?.responses)).toContain('MECHANICS_STATE_VERSION_CONFLICT');
+    expect(JSON.stringify(operation?.responses)).toContain('INSUFFICIENT_ATTRIBUTE_POINTS');
+    expect(JSON.stringify(operation?.responses)).toContain('INSUFFICIENT_XP');
+    expect(JSON.stringify(operation?.responses)).toContain('LEVEL_TECHNICAL_RANGE_EXCEEDED');
+    expect(JSON.stringify(operation?.responses)).toContain('XP_RANGE_EXCEEDED');
+    expect(JSON.stringify(operation?.responses)).toContain('ACTOR_ENCOUNTER_LOCKED');
+    expect(JSON.stringify(operation?.responses)).toContain('XP_SOURCE_ALREADY_GRANTED');
+  });
+
+  it('documents valid level 5 and level 50 NPC creation', () => {
+    const operation = operations().find((item) => item.operation.operationId === 'upsertActor')?.operation;
+    const examples = operation?.requestBody?.content?.['application/json']?.examples ?? {};
+    expect(Object.keys(examples)).toEqual([
+      'npc_level_5_full_progression', 'npc_level_5_available_points', 'npc_level_50_full_progression',
+    ]);
+    for (const [name, example] of Object.entries(examples)) {
+      expect(upsertActorSchema.safeParse(example.value).success, name).toBe(true);
+    }
+  });
+
   it('documents sanitized actionable inventory error examples without changing the Action count', () => {
     const operation = operations().find((item) => item.operation.operationId === 'manageActorInventory')?.operation;
     const responses = operation?.responses as Record<string, {
@@ -293,7 +343,7 @@ describe('official OpenAPI contract', () => {
       expect(typeof firstIssue?.message, name).toBe('string');
     }
     expect(operation?.responses).toHaveProperty('422');
-    expect(operations()).toHaveLength(20);
+    expect(operations()).toHaveLength(21);
     expect(JSON.stringify(examples)).not.toMatch(/api[_-]?key|authorization|cookie|postgres|prisma|sql|stack trace|[0-9a-f]{8}-[0-9a-f-]{27}/i);
   });
 
@@ -337,7 +387,7 @@ describe('official OpenAPI contract', () => {
     const scope = contract.components.schemas.ScopeInput;
     expect(scope?.required).toEqual(['playerRef', 'worldRef', 'campaignRef']);
     expect(contract.components.schemas.Code?.not).toEqual({ format: 'uuid' });
-    for (const operationId of ['loadGame', 'startGame', 'upsertActor', 'updateActor', 'upsertContent', 'manageActorContent', 'manageActorInventory', 'createGameEvent', 'resolveActorEffect']) {
+    for (const operationId of ['loadGame', 'startGame', 'upsertActor', 'updateActor', 'upsertContent', 'manageActorContent', 'manageActorInventory', 'manageActorProgression', 'createGameEvent', 'resolveActorEffect']) {
       const operation = byId.get(operationId);
       const schema = resolveSchema(operation?.requestBody?.content?.['application/json']?.schema);
       expect(schema.required, operationId).toEqual(expect.arrayContaining(['playerRef', 'worldRef', 'campaignRef']));
@@ -383,24 +433,28 @@ describe('official OpenAPI contract', () => {
   });
 
   it('keeps high autonomy explicit without weakening backend authority', () => {
-    expect(gptInstructions).toContain('Autonomia alta é o padrão');
-    expect(gptInstructions).toContain('execute todas as Actions rotineiras necessárias sem pedir nova confirmação textual');
+    expect(gptInstructions).toContain('Com intenção clara, execute as Actions rotineiras necessárias sem nova confirmação');
     expect(gptInstructions).toContain('O backend autentica, valida, calcula e persiste');
     expect(gptInstructions).toContain('Não invente dano, custo, acerto, equipamento, recompensa, persistência ou `stateVersion`');
     expect(gptInstructions).toContain('Prefira `startGame` completo, `loadGame` uma vez, `resolve_beat` por decisão');
-    expect(gptInstructions).toContain('Execute recuperação segura quando houver `recoveryAction` explícita');
-    expect(gptInstructions.length).toBeGreaterThanOrEqual(7_550);
-    expect(gptInstructions.length).toBeLessThanOrEqual(7_650);
+    expect(gptInstructions).toContain('Execute `recoveryAction` explícita');
+    expect(gptInstructions.length).toBeLessThanOrEqual(7_600);
   });
 
   it('documents the autonomy behavior cases and conversational confirmation boundaries', () => {
     expect(gptInstructions).toContain('“Vou atacar o slime com a adaga” autoriza');
     expect(gptInstructions).toContain('sem novas perguntas');
     expect(gptInstructions).toContain('Após aprovação, chame `startGame` uma vez');
-    expect(gptInstructions).toContain('ajuste uma vez, gere nova chave, repita sem confirmação');
+    expect(gptInstructions).toContain('ajuste uma vez, gere nova chave, repita e avise depois');
     expect(gptInstructions).toContain('exclusão, morte definitiva ou perda permanente');
     expect(gptInstructions).toContain('Operações administrativas não são automatizadas nem expostas');
     expect(gptInstructions).toContain('Se descartar progresso relevante, pergunte');
+    expect(gptInstructions).toContain('apresente 3–4 opções com deltas');
+    expect(gptInstructions).toContain('“distribua como achar melhor”');
+    expect(gptInstructions).toContain('`set_progression_state`');
+    expect(gptInstructions).toContain('Nunca use metadata para nível, XP, atributos, saldo ou progressão');
+    expect(gptInstructions).toContain('sem máximo de gameplay');
+    expect(gptInstructions).toContain('`source.type/ref` estável');
   });
 
   it('starts creation only explicitly and handles empty discovery or missing identity without a questionnaire', () => {
@@ -429,13 +483,11 @@ describe('official OpenAPI contract', () => {
     expect(readinessKnowledge).toContain('`body` ocupa traje/armadura de corpo inteiro');
     expect(readinessKnowledge).toContain('`chest` é reservado a peitoral');
     expect(gptInstructions).toContain('Slots: use o solicitado se válido');
-    expect(gptInstructions).toContain('Consulte os compatíveis retornados pelo backend');
-    expect(gptInstructions).toContain('corrija só para slot explicitamente declarado');
-    expect(gptInstructions).toContain('sem mudar a natureza do item');
-    expect(gptInstructions).toContain('`body` e `chest` não são equivalentes nem conversíveis sem pedido');
-    expect(gptInstructions).toContain('traje integral, uniforme ou conjunto completo fica em `body`');
-    expect(gptInstructions).toContain('peitoral, couraça ou proteção do torso fica em `chest`');
-    expect(gptInstructions).toContain('nunca a intenção semântica');
+    expect(gptInstructions).toContain('só corrija para slot declarado pelo backend');
+    expect(gptInstructions).toContain('`body` e `chest` não são equivalentes');
+    expect(gptInstructions).toContain('traje integral fica em `body`');
+    expect(gptInstructions).toContain('peitoral/couraça, em `chest`');
+    expect(gptInstructions).toContain('nunca a intenção');
     expect(gptInstructions).not.toMatch(/slot (?:alternativo )?equivalente|slot mais próximo|body`? (?:para|como) `?chest|chest`? (?:para|como) `?body/i);
   });
 
@@ -642,6 +694,23 @@ describe('official OpenAPI contract', () => {
     expect(forbidden.every((field) => contract.components.schemas.ActorUpsertInput?.properties?.[field] === undefined)).toBe(true);
     expect(contract.components.schemas.InitialActorInput?.required).toContain('primaryAttributes');
     expect(contract.components.schemas.ActorUpsertInput?.required).toContain('primaryAttributes');
+    expect(contract.components.schemas.ActorUpsertInput?.properties?.progressionPrimaryAttributes)
+      .toEqual({ $ref: '#/components/schemas/ProgressionPrimaryAttributes' });
+    expect(contract.components.schemas.EffectivePrimaryAttributes?.properties?.strength?.maximum).toBeUndefined();
+    expect(contract.components.schemas.ActorProgressionManageInput?.properties?.level?.maximum).toBeUndefined();
+    expect(contract.components.schemas.ActorUpsertInput?.properties?.level?.maximum).toBeUndefined();
+    for (const schemaName of [
+      'ProgressionPrimaryAttributes', 'EffectivePrimaryAttributes', 'PrimaryAttributeDeltas',
+      'ActorProgressionManageInput', 'ActorProgressionResourceChange', 'ActorProgression',
+    ]) {
+      const schema = contract.components.schemas[schemaName];
+      expect(schema, schemaName).toBeDefined();
+      if (schema?.type === 'object') {
+        expect(schema.additionalProperties, schemaName).toBe(false);
+        expect(schema.properties, schemaName).toBeDefined();
+      }
+      expect(JSON.stringify(schema), schemaName).not.toMatch(/"any"/i);
+    }
   });
 
   it('contains neither legacy endpoints nor sensitive infrastructure', () => {

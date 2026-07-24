@@ -7,6 +7,12 @@ import { canonicalJson } from '../../shared/json/canonical-json.js';
 import { ConflictError, NotFoundError } from '../../shared/errors/app-error.js';
 import {
   CORE_V1_ATTRIBUTE_HARD_CAP,
+  CORE_V1_INITIAL_ATTRIBUTE_BUDGET,
+  CORE_V1_LEVEL_CAP,
+  CORE_V1_RULESET_ID,
+  CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM,
+  CORE_V1_2_TECHNICAL_LEVEL_MAXIMUM,
+  CORE_V1_2_VERSION_CODE,
   CORE_V1_PRIMARY_ATTRIBUTES,
   calculateEffectiveAttributes,
   calculateInventoryEncumbrance,
@@ -21,20 +27,25 @@ import {
   type ResourceModifierSet,
   type SecondaryAttributeModifiers,
   type SecondaryAttributes,
+  type ValidationIssue,
+  type ValidationResult,
 } from '../rules/core-v1/index.js';
 import {
   loadActorInventoryMechanicalInputs,
   type ActorInventoryMechanicalInputs,
   type InventoryMechanicalInputsClient,
 } from '../inventory/inventory-mechanical-inputs.js';
-import { validateCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
+import {
+  validateCoreV12RulesetVersion,
+  validateCoreV1RulesetVersion,
+} from '../rules/ruleset.registry.js';
 import {
   loadActorActiveEffectMechanicalInputs,
   type ActiveEffectMechanicalInputsClient,
   type ActorActiveEffectMechanicalInputs,
 } from '../effects/active-effect-mechanical-inputs.js';
 
-const attributeCodeToDatabase = {
+export const attributeCodeToDatabase = {
   strength: ActorAttributeCode.STRENGTH,
   vitality: ActorAttributeCode.VITALITY,
   agility: ActorAttributeCode.AGILITY,
@@ -46,11 +57,161 @@ const attributeCodeToDatabase = {
   luck: ActorAttributeCode.LUCK,
 } as const satisfies Record<PrimaryAttributeCode, ActorAttributeCode>;
 
-const databaseToAttributeCode = Object.fromEntries(
+export const databaseToAttributeCode = Object.fromEntries(
   Object.entries(attributeCodeToDatabase).map(([code, databaseCode]) => [databaseCode, code]),
 ) as Record<ActorAttributeCode, PrimaryAttributeCode>;
 
 const resourceTypes = [ActorResourceType.HP, ActorResourceType.MANA, ActorResourceType.SP] as const;
+export const ACTOR_ATTRIBUTE_POINTS_PER_ADDITIONAL_LEVEL = 10;
+export type ActorProgressionPolicy = 'legacy_core_v1' | 'unbounded_core_v1_2';
+
+export function actorProgressionPolicy(rulesetVersionCode: string): ActorProgressionPolicy {
+  if (rulesetVersionCode === CORE_V1_2_VERSION_CODE) return 'unbounded_core_v1_2';
+  if (rulesetVersionCode === CORE_V1_RULESET_ID) return 'legacy_core_v1';
+  throw new Error('Actor ruleset version is not supported');
+}
+
+export interface ActorStoredAttributeState {
+  readonly basePrimaryAttributes: PrimaryAttributes;
+  readonly progressionPrimaryAttributes: PrimaryAttributes;
+  readonly effectivePrimaryAttributes: PrimaryAttributes;
+  readonly attributePointsEarned: number;
+  readonly attributePointsAllocated: number;
+  readonly attributePointsAvailable: number;
+  readonly totalAttributeEntitlement: number;
+}
+
+function progressionIssue(
+  path: string,
+  rule: string,
+  message: string,
+  expected?: unknown,
+  received?: unknown,
+): ValidationIssue {
+  return { path, rule, message, ...(expected === undefined ? {} : { expected }), ...(received === undefined ? {} : { received }) };
+}
+
+export function emptyProgressionPrimaryAttributes(): PrimaryAttributes {
+  return Object.fromEntries(CORE_V1_PRIMARY_ATTRIBUTES.map((code) => [code, 0])) as unknown as PrimaryAttributes;
+}
+
+export function validateActorProgressionAttributes(
+  baseInput: unknown,
+  progressionInput: unknown,
+  level: number,
+  policy: ActorProgressionPolicy = 'legacy_core_v1',
+): ValidationResult<ActorStoredAttributeState> {
+  const issues: ValidationIssue[] = [];
+  const technicalMaximum = policy === 'unbounded_core_v1_2'
+    ? CORE_V1_2_TECHNICAL_LEVEL_MAXIMUM
+    : CORE_V1_LEVEL_CAP;
+  if (!Number.isSafeInteger(level) || level < 1 || level > technicalMaximum) {
+    issues.push(progressionIssue(
+      'level',
+      policy === 'unbounded_core_v1_2' ? 'LEVEL_TECHNICAL_RANGE' : 'LEVEL',
+      policy === 'unbounded_core_v1_2'
+        ? 'Actor level exceeds the technical storage and calculation envelope'
+        : 'Actor level must be within the ruleset level range',
+      [1, technicalMaximum],
+      level,
+    ));
+  }
+  const baseValidation = validateInitialPrimaryAttributes(baseInput);
+  if (!baseValidation.ok) issues.push(...baseValidation.issues);
+  if (progressionInput === null || typeof progressionInput !== 'object' || Array.isArray(progressionInput)) {
+    issues.push(progressionIssue('progressionPrimaryAttributes', 'ATTRIBUTE_OBJECT', 'Progression attributes must be an object'));
+  }
+  const progressionRecord = progressionInput as Record<string, unknown>;
+  const progressionKeys = progressionInput !== null && typeof progressionInput === 'object' && !Array.isArray(progressionInput)
+    ? Object.keys(progressionRecord)
+    : [];
+  const unknownKeys = progressionKeys.filter((key) => !CORE_V1_PRIMARY_ATTRIBUTES.includes(key as PrimaryAttributeCode));
+  const missingKeys = CORE_V1_PRIMARY_ATTRIBUTES.filter((code) => !Object.hasOwn(progressionRecord ?? {}, code));
+  if (unknownKeys.length > 0 || missingKeys.length > 0) {
+    issues.push(progressionIssue(
+      'progressionPrimaryAttributes',
+      'ATTRIBUTE_KEYS',
+      'Progression attributes must contain exactly the nine canonical attributes',
+      CORE_V1_PRIMARY_ATTRIBUTES,
+      progressionKeys,
+    ));
+  }
+  const progression = emptyProgressionPrimaryAttributes();
+  for (const code of CORE_V1_PRIMARY_ATTRIBUTES) {
+    const value = progressionRecord?.[code];
+    if (!Number.isSafeInteger(value) || (value as number) < 0) {
+      issues.push(progressionIssue(
+        `progressionPrimaryAttributes.${code}`,
+        'ATTRIBUTE_PROGRESSION_VALUE',
+        'Progression attribute value must be a non-negative safe integer',
+        'non-negative safe integer',
+        value,
+      ));
+      continue;
+    }
+    progression[code] = value as number;
+  }
+  if (!baseValidation.ok || issues.length > 0) return { ok: false, issues };
+
+  const attributePointsEarned = ACTOR_ATTRIBUTE_POINTS_PER_ADDITIONAL_LEVEL * (level - 1);
+  const attributePointsAllocated = CORE_V1_PRIMARY_ATTRIBUTES.reduce((total, code) => total + progression[code], 0);
+  if (attributePointsAllocated > attributePointsEarned) {
+    issues.push(progressionIssue(
+      'progressionPrimaryAttributes',
+      'ATTRIBUTE_POINTS_EXCEEDED',
+      'Allocated progression points exceed the entitlement for this level',
+      attributePointsEarned,
+      attributePointsAllocated,
+    ));
+  }
+  const effective = { ...baseValidation.value };
+  for (const code of CORE_V1_PRIMARY_ATTRIBUTES) {
+    effective[code] += progression[code];
+    if (policy === 'legacy_core_v1' && effective[code] > CORE_V1_ATTRIBUTE_HARD_CAP) {
+      issues.push(progressionIssue(
+        `progressionPrimaryAttributes.${code}`,
+        'ATTRIBUTE_EFFECTIVE_CAP',
+        'Effective attribute exceeds the versioned ruleset cap',
+        CORE_V1_ATTRIBUTE_HARD_CAP,
+        effective[code],
+      ));
+    }
+  }
+  if (issues.length > 0) return { ok: false, issues };
+  return {
+    ok: true,
+    value: {
+      basePrimaryAttributes: { ...baseValidation.value },
+      progressionPrimaryAttributes: { ...progression },
+      effectivePrimaryAttributes: effective,
+      attributePointsEarned,
+      attributePointsAllocated,
+      attributePointsAvailable: attributePointsEarned - attributePointsAllocated,
+      totalAttributeEntitlement: CORE_V1_INITIAL_ATTRIBUTE_BUDGET + attributePointsEarned,
+    },
+  };
+}
+
+export function projectStoredAttributeState(
+  attributes: readonly { readonly code: ActorAttributeCode; readonly baseValue: number; readonly earnedValue: number }[],
+  level: number,
+  policy: ActorProgressionPolicy = 'legacy_core_v1',
+): ActorStoredAttributeState {
+  if (attributes.length !== CORE_V1_PRIMARY_ATTRIBUTES.length) throw integrityError();
+  const base = {} as PrimaryAttributes;
+  const progression = {} as PrimaryAttributes;
+  const seen = new Set<PrimaryAttributeCode>();
+  for (const attribute of attributes) {
+    const code = databaseToAttributeCode[attribute.code];
+    if (code === undefined || seen.has(code)) throw integrityError();
+    seen.add(code);
+    base[code] = attribute.baseValue;
+    progression[code] = attribute.earnedValue;
+  }
+  const validation = validateActorProgressionAttributes(base, progression, level, policy);
+  if (!validation.ok) throw integrityError();
+  return validation.value;
+}
 
 interface MechanicalStateRecord {
   id: string;
@@ -137,20 +298,16 @@ function mapEffectiveAttributes(
   record: MechanicalStateRecord,
   modifiers: Partial<Record<PrimaryAttributeCode, readonly AuthorizedNumericModifier[]>>,
 ): PrimaryAttributes {
-  if (record.attributes.length !== CORE_V1_PRIMARY_ATTRIBUTES.length) throw integrityError();
-  const mapped = new Map<PrimaryAttributeCode, number>();
-  for (const attribute of record.attributes) {
-    const code = databaseToAttributeCode[attribute.code];
-    if (code === undefined || mapped.has(code)) throw integrityError();
-    if (!Number.isSafeInteger(attribute.baseValue) || !Number.isSafeInteger(attribute.earnedValue)
-      || !Number.isSafeInteger(attribute.xp) || attribute.baseValue < 0 || attribute.earnedValue < 0
-      || attribute.xp < 0 || attribute.baseValue + attribute.earnedValue > CORE_V1_ATTRIBUTE_HARD_CAP) {
-      throw integrityError();
-    }
-    mapped.set(code, attribute.baseValue + attribute.earnedValue);
-  }
-  if (CORE_V1_PRIMARY_ATTRIBUTES.some((code) => !mapped.has(code))) throw integrityError();
-  return calculateEffectiveAttributes(Object.fromEntries(mapped) as PrimaryAttributes, modifiers);
+  if (record.attributes.some((attribute) => !Number.isSafeInteger(attribute.xp) || attribute.xp < 0)) throw integrityError();
+  const policy = actorProgressionPolicy(record.campaign.rulesetVersion.code);
+  const maximum = policy === 'unbounded_core_v1_2'
+    ? CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM
+    : CORE_V1_ATTRIBUTE_HARD_CAP;
+  return calculateEffectiveAttributes(
+    projectStoredAttributeState(record.attributes, record.level, policy).effectivePrimaryAttributes,
+    modifiers,
+    maximum,
+  );
 }
 
 function groupMechanicalModifiers(modifiers: readonly {
@@ -190,7 +347,16 @@ function groupMechanicalModifiers(modifiers: readonly {
 }
 
 function calculateMechanicalState(record: MechanicalStateRecord): MechanicalCalculation {
-  const ruleset = validateCoreV1RulesetVersion(record.campaign.rulesetVersion);
+  const policy = actorProgressionPolicy(record.campaign.rulesetVersion.code);
+  const ruleset = policy === 'unbounded_core_v1_2'
+    ? validateCoreV12RulesetVersion(record.campaign.rulesetVersion)
+    : validateCoreV1RulesetVersion(record.campaign.rulesetVersion);
+  const maximumPrimaryAttribute = policy === 'unbounded_core_v1_2'
+    ? CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM
+    : CORE_V1_ATTRIBUTE_HARD_CAP;
+  const maximumLevel = policy === 'unbounded_core_v1_2'
+    ? CORE_V1_2_TECHNICAL_LEVEL_MAXIMUM
+    : CORE_V1_LEVEL_CAP;
   const mechanicalModifiers = groupMechanicalModifiers([
     ...record.inventoryInputs.modifiers,
     ...record.activeEffectInputs.modifiers,
@@ -202,14 +368,25 @@ function calculateMechanicalState(record: MechanicalStateRecord): MechanicalCalc
     accuracyRank: 0,
     evasionRank: 0,
   } as const;
-  const maximums = calculateResourceMaximums(effectiveAttributes, record.level, mechanicalModifiers.resources);
+  const maximums = calculateResourceMaximums(
+    effectiveAttributes,
+    record.level,
+    mechanicalModifiers.resources,
+    maximumPrimaryAttribute,
+    maximumLevel,
+  );
   const unencumbered = calculateSecondaryAttributes({
-    attributes: effectiveAttributes, ...calculationInputs, encumbrancePenalty: 0, modifiers: mechanicalModifiers.secondary,
+    attributes: effectiveAttributes,
+    maximumPrimaryAttribute,
+    ...calculationInputs,
+    encumbrancePenalty: 0,
+    modifiers: mechanicalModifiers.secondary,
   });
   const encumbrance = calculateInventoryEncumbrance(record.inventoryInputs.totalCarriedWeight, unencumbered.carryingCapacity);
   if (!encumbrance.ok || encumbrance.value.penaltyBps % 100 !== 0) throw integrityError();
   const secondary = calculateSecondaryAttributes({
     attributes: effectiveAttributes,
+    maximumPrimaryAttribute,
     ...calculationInputs,
     encumbrancePenalty: encumbrance.value.penaltyBps / 100,
     modifiers: mechanicalModifiers.secondary,
@@ -470,16 +647,27 @@ export async function recomputeActorDerivedSnapshot(
 
 export async function createActorMechanicalState(
   client: ActorMechanicsClient,
-  input: { actorId: string; primaryAttributes: unknown },
+  input: { actorId: string; primaryAttributes: unknown; level?: number; progressionPrimaryAttributes?: unknown },
 ): Promise<ActorMechanicalSheet> {
-  const validation = validateInitialPrimaryAttributes(input.primaryAttributes);
+  const actor = await client.actor.findUnique({
+    where: { id: input.actorId },
+    select: { campaign: { select: { rulesetVersion: { select: { code: true } } } } },
+  });
+  if (actor === null) throw new NotFoundError('Actor');
+  const policy = actorProgressionPolicy(actor.campaign.rulesetVersion.code);
+  const validation = validateActorProgressionAttributes(
+    input.primaryAttributes,
+    input.progressionPrimaryAttributes ?? emptyProgressionPrimaryAttributes(),
+    input.level ?? 1,
+    policy,
+  );
   if (!validation.ok) throw new ConflictError('Primary attributes are invalid for core-v1');
   await client.actorAttribute.createMany({
     data: CORE_V1_PRIMARY_ATTRIBUTES.map((code) => ({
       actorId: input.actorId,
       code: attributeCodeToDatabase[code],
-      baseValue: validation.value[code],
-      earnedValue: 0,
+      baseValue: validation.value.basePrimaryAttributes[code],
+      earnedValue: validation.value.progressionPrimaryAttributes[code],
       xp: 0,
     })),
   });

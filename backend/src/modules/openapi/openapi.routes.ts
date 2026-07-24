@@ -22,6 +22,7 @@ export const ACTIVE_API_ROUTES = [
   'PATCH /api/v1/actors/:actorRef',
   'POST /api/v1/actors/:actorRef/content/manage',
   'POST /api/v1/actors/:actorRef/inventory/manage',
+  'POST /api/v1/actors/progression/manage',
   'GET /api/v1/content/:contentRef',
   'POST /api/v1/content/upsert',
   'POST /api/v1/events',

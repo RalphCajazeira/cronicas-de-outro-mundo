@@ -65,7 +65,8 @@ const emptyGptRepository: GptRepository = {
   loadGame: () => Promise.resolve({}), listPlayerWorlds: () => Promise.resolve([]), listWorldCampaigns: () => Promise.resolve([]),
   startGame: () => Promise.resolve({}), listCampaignActors: () => Promise.resolve([]), upsertActor: () => Promise.resolve({}),
   patchActor: () => Promise.resolve({}), upsertContent: () => Promise.resolve({}), manageActorContent: () => Promise.resolve({}),
-  manageActorInventory: () => Promise.resolve({}), createEvent: () => Promise.resolve({}), resolveActorEffect: () => Promise.resolve({}),
+  manageActorInventory: () => Promise.resolve({}), manageActorProgression: () => Promise.resolve({}),
+  createEvent: () => Promise.resolve({}), resolveActorEffect: () => Promise.resolve({}),
 };
 const emptyEncounterHttpService: EncounterHttpService = {
   manage: () => Promise.reject(new Error('Encounter service is not used by this test')),
@@ -85,6 +86,7 @@ function appWith(
     upsertContent: (input) => Promise.resolve({ code: input.code, contentType: input.contentType }),
     manageActorContent: (_actorRef, input) => Promise.resolve({ operation: input.operation, state: input.changes?.state ?? 'known' }),
     manageActorInventory: (_actorRef, input) => Promise.resolve({ operation: input.operation, inventoryStateVersion: 1 }),
+    manageActorProgression: (input) => Promise.resolve({ actorRef: input.actorRef, operation: input.operation }),
     createEvent: (input) => Promise.resolve({ eventType: input.eventType, title: input.title }),
     resolveActorEffect: (input) => Promise.resolve({ operation: input.operation }),
   },

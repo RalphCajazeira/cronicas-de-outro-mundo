@@ -50,13 +50,19 @@ import {
   parseCoreV1EncounterSnapshot,
   serializeCoreV1EncounterState,
 } from '../../src/modules/encounters/encounter-state-snapshot.js';
-import { ensureCoreV1RulesetVersion } from '../../src/modules/rules/ruleset.registry.js';
+import {
+  ensureCoreV1RulesetVersion,
+  ensureCurrentCoreRulesetVersion,
+} from '../../src/modules/rules/ruleset.registry.js';
 import { CORE_V1_CONFIG_HASH, CORE_V1_CONFIG_SNAPSHOT } from '../../src/modules/rules/core-v1/core-v1.manifest.js';
+import { CORE_V1_2_CONFIG_HASH } from '../../src/modules/rules/core-v1/core-v1.progression-v2.manifest.js';
 import {
   calculateSecondaryAttributes,
   cancelCoreV1Encounter,
   createCoreV1EmptyEquipmentLoadout,
   getInitialAttributePreset,
+  CORE_V1_2_TECHNICAL_LEVEL_MAXIMUM,
+  nextCoreV12LevelXp,
 } from '../../src/modules/rules/core-v1/index.js';
 import { disconnectPrisma, prisma } from '../../src/shared/database/prisma.js';
 import { canonicalJson } from '../../src/shared/json/canonical-json.js';
@@ -589,6 +595,68 @@ describe('migration and PostgreSQL schema', () => {
     expect(migration[0]?.finished_at).toBeInstanceOf(Date);
   });
 
+  it('records the Phase 1M-B unbounded progression migration as successfully applied', async () => {
+    const migration = await prisma.$queryRaw<Array<{ finished_at: Date | null }>>`
+      SELECT finished_at FROM "_prisma_migrations"
+      WHERE migration_name = '20260724210000_unbounded_actor_progression' AND rolled_back_at IS NULL
+    `;
+    expect(migration[0]?.finished_at).toBeInstanceOf(Date);
+  });
+
+  it('installs the widened actor checks and semantic XP-source protections', async () => {
+    const constraints = await prisma.$queryRaw<Array<{ conname: string; definition: string }>>`
+      SELECT conname, pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conname IN (
+        'Actor_level_check',
+        'ActorAttribute_baseValue_check',
+        'ActorAttribute_effective_cap_check',
+        'GameEvent_xp_source_pair_check'
+      )
+      ORDER BY conname
+    `;
+    expect(constraints.map((constraint) => constraint.conname)).toEqual([
+      'ActorAttribute_baseValue_check',
+      'Actor_level_check',
+      'GameEvent_xp_source_pair_check',
+    ]);
+    expect(constraints.find((constraint) => constraint.conname === 'Actor_level_check')?.definition)
+      .toContain('level >= 1');
+    expect(constraints.find((constraint) => constraint.conname === 'Actor_level_check')?.definition)
+      .toContain('level <= 20722');
+    expect(constraints.find((constraint) => constraint.conname === 'ActorAttribute_baseValue_check')?.definition)
+      .toContain('"baseValue" >= 4');
+    expect(constraints.find((constraint) => constraint.conname === 'ActorAttribute_baseValue_check')?.definition)
+      .toContain('"baseValue" <= 16');
+    const pairDefinition = constraints.find((constraint) => constraint.conname === 'GameEvent_xp_source_pair_check')?.definition;
+    expect(pairDefinition).toContain('"xpSourceType" IS NULL');
+    expect(pairDefinition).toContain('"xpSourceRef" IS NULL');
+    expect(pairDefinition).toContain('"xpSourceType" IS NOT NULL');
+    expect(pairDefinition).toContain('"xpSourceRef" IS NOT NULL');
+
+    const indexes = await prisma.$queryRaw<Array<{ indexdef: string }>>`
+      SELECT indexdef FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND indexname = 'GameEvent_actorId_xpSourceType_xpSourceRef_key'
+    `;
+    expect(indexes[0]?.indexdef).toContain('UNIQUE INDEX');
+    expect(indexes[0]?.indexdef).toContain('("actorId", "xpSourceType", "xpSourceRef")');
+    expect(indexes[0]?.indexdef).toContain('"actorId" IS NOT NULL');
+    expect(indexes[0]?.indexdef).toContain('"xpSourceType" IS NOT NULL');
+    expect(indexes[0]?.indexdef).toContain('"xpSourceRef" IS NOT NULL');
+
+    const campaign = await prisma.campaign.findFirstOrThrow({ select: { id: true } });
+    await expect(prisma.gameEvent.create({
+      data: {
+        campaignId: campaign.id,
+        eventType: 'invalid-xp-source-pair',
+        title: 'Invalid pair must roll back',
+        xpSourceType: 'manual',
+      },
+    })).rejects.toThrow();
+    await expect(prisma.gameEvent.count({ where: { eventType: 'invalid-xp-source-pair' } })).resolves.toBe(0);
+  });
+
   it('contains every principal table', async () => {
     const rows = await prisma.$queryRaw<Array<{ table_name: string }>>`
       SELECT table_name FROM information_schema.tables
@@ -741,7 +809,7 @@ describe('migration and PostgreSQL schema', () => {
         AND constraint_name IN ('ActorAttribute_effective_cap_check', 'ActorResource_current_check', 'ActorDerivedSnapshot_inputHash_check')
     `;
     expect(constraints.map((item) => item.constraint_name).sort()).toEqual([
-      'ActorAttribute_effective_cap_check', 'ActorDerivedSnapshot_inputHash_check', 'ActorResource_current_check',
+      'ActorDerivedSnapshot_inputHash_check', 'ActorResource_current_check',
     ]);
   });
 
@@ -4506,7 +4574,7 @@ describe('Phase 1L-B transactional encounter adapter', () => {
 });
 
 describe('Phase 1L-C encounter HTTP integration', () => {
-  it('serves the active 20-operation OpenAPI with the runtime base URL', () => {
+  it('serves the active 21-operation OpenAPI with the runtime base URL', () => {
     const document: Record<string, unknown> = {
       ...getOfficialContract(),
       servers: [{ url: config.PUBLIC_BASE_URL ?? `http://localhost:${config.PORT}` }],
@@ -4521,8 +4589,8 @@ describe('Phase 1L-C encounter HTTP integration', () => {
         const operation = bodyRecord({ body: operationValue });
         return typeof operation.operationId === 'string' ? [operation.operationId] : [];
       });
-    expect(operationIds).toHaveLength(20);
-    expect(new Set(operationIds).size).toBe(20);
+    expect(operationIds).toHaveLength(21);
+    expect(new Set(operationIds).size).toBe(21);
   });
 
   it('creates, replays, loads, rejects stale versions and cancels through the real transactional adapter', async () => {
@@ -5348,7 +5416,7 @@ describe('GPT v1 persistence with real transactions', () => {
         code: 'new-player', actorType: 'character', level: 1, xp: 0,
         primaryAttributes: balancedPrimaryAttributes,
         resources: { hp: { current: 45, max: 45 }, mana: { current: 35, max: 35 }, sp: { current: 35, max: 35 } },
-        mechanicsStateVersion: 3, ruleset: { code: 'core-v1', revision: 'RC1.1' },
+        mechanicsStateVersion: 3, ruleset: { code: 'core-v1.2', revision: 'RC1.2' },
         appearance: { summary: 'Manto de viagem.' }, personality: { traits: ['curioso'] },
       },
       mainActors: [], linkedContent: [expect.objectContaining({ actorRef: 'new-player', code: 'longbow' })],
@@ -5372,10 +5440,13 @@ describe('GPT v1 persistence with real transactions', () => {
       where: { worldId_code: { worldId: persistedWorld.id, code: body.campaignRef } },
       include: { rulesetVersion: { select: { code: true, revision: true, configHash: true } } },
     });
-    expect(persistedWorld.defaultRulesetVersion).toEqual({ code: 'core-v1', revision: 'RC1.1', configHash: CORE_V1_CONFIG_HASH });
+    expect(persistedWorld.defaultRulesetVersion).toEqual({
+      code: 'core-v1.2', revision: 'RC1.2', configHash: CORE_V1_2_CONFIG_HASH,
+    });
     expect(persistedCampaign.rulesetVersionId).toBe(persistedWorld.defaultRulesetVersionId);
     expect(persistedCampaign.rulesetVersion).toEqual(persistedWorld.defaultRulesetVersion);
     await expect(prisma.rulesetVersion.count({ where: { code: 'core-v1' } })).resolves.toBe(1);
+    await expect(prisma.rulesetVersion.count({ where: { code: 'core-v1.2' } })).resolves.toBe(1);
     expect(JSON.stringify(first.body)).not.toMatch(/rulesetVersionId|defaultRulesetVersionId|configSnapshot|[0-9a-f]{8}-[0-9a-f-]{27,}/i);
     expect(JSON.stringify(first.body)).not.toMatch(/inputHash/);
 
@@ -6122,7 +6193,7 @@ describe('GPT v1 persistence with real transactions', () => {
   it('enforces mechanics constraints and cascades actor-owned state', async () => {
     const ralph = await prisma.actor.findFirstOrThrow({ where: { code: 'ralph', campaign: { code: 'main-campaign' } } });
     const strength = await prisma.actorAttribute.findUniqueOrThrow({ where: { actorId_code: { actorId: ralph.id, code: 'STRENGTH' } } });
-    await expect(prisma.actorAttribute.update({ where: { id: strength.id }, data: { earnedValue: 30 } })).rejects.toThrow();
+    await expect(prisma.actorAttribute.update({ where: { id: strength.id }, data: { earnedValue: -1 } })).rejects.toThrow();
     const hp = await prisma.actorResource.findUniqueOrThrow({ where: { actorId_type: { actorId: ralph.id, type: 'HP' } } });
     await expect(prisma.actorResource.update({ where: { id: hp.id }, data: { current: -1 } })).rejects.toThrow();
     await expect(prisma.actorDerivedSnapshot.update({ where: { actorId: ralph.id }, data: { inputHash: 'invalid' } })).rejects.toThrow();
@@ -6533,6 +6604,750 @@ describe('GPT v1 persistence with real transactions', () => {
       protagonist: { code: 'ralph', actorType: 'character' },
     });
     expect(JSON.stringify(response.body)).not.toMatch(/"id"|playerId|worldId|campaignId|actorId/);
+  });
+});
+
+describe('actor progression persistence and GPT Action', () => {
+  const zeroProgression = {
+    strength: 0, vitality: 0, agility: 0, dexterity: 0, intelligence: 0,
+    wisdom: 0, perception: 0, willpower: 0, luck: 0,
+  };
+
+  it('creates high-level actors with full or partial progression and rejects invalid entitlement atomically', async () => {
+    const fullProgression = {
+      ...zeroProgression,
+      strength: 5, vitality: 5, agility: 5, dexterity: 5,
+      intelligence: 5, wisdom: 5, perception: 5, willpower: 5,
+    };
+    const full = await post('/api/v1/actors/upsert', {
+      idempotencyKey: 'progression-create-level-five-full',
+      code: 'progression-level-five-full',
+      name: 'Veterano Completo',
+      actorType: 'npc',
+      level: 5,
+      primaryAttributes: balancedPrimaryAttributes,
+      progressionPrimaryAttributes: fullProgression,
+    });
+    expect(full.status, JSON.stringify(full.body)).toBe(200);
+    expect(full.body).toMatchObject({
+      code: 'progression-level-five-full',
+      level: 5,
+      primaryAttributes: {
+        strength: 15, vitality: 15, agility: 15, dexterity: 15,
+        intelligence: 15, wisdom: 15, perception: 15, willpower: 15, luck: 10,
+      },
+    });
+    const fullState = await post('/api/v1/actors/progression/manage', {
+      actorRef: 'progression-level-five-full', operation: 'get',
+    });
+    expect(fullState.status).toBe(200);
+    expect(fullState.body).toMatchObject({
+      actorRef: 'progression-level-five-full',
+      level: 5,
+      xpCurrent: 0,
+      basePrimaryAttributes: balancedPrimaryAttributes,
+      progressionPrimaryAttributes: fullProgression,
+      attributePointsEarned: 40,
+      attributePointsAllocated: 40,
+      attributePointsAvailable: 0,
+      totalAttributeEntitlement: 130,
+      mechanicsStateVersion: 1,
+      canLevelUp: false,
+    });
+    expect(fullState.body).not.toHaveProperty('id');
+
+    const partialProgression = { ...zeroProgression, intelligence: 10, wisdom: 5 };
+    const partial = await post('/api/v1/actors/upsert', {
+      idempotencyKey: 'progression-create-level-five-partial',
+      code: 'progression-level-five-partial',
+      name: 'Veterano Parcial',
+      actorType: 'creature',
+      level: 5,
+      primaryAttributes: balancedPrimaryAttributes,
+      progressionPrimaryAttributes: partialProgression,
+    });
+    expect(partial.status).toBe(200);
+    const partialState = await post('/api/v1/actors/progression/manage', {
+      actorRef: 'progression-level-five-partial', operation: 'get',
+    });
+    expect(partialState.body).toMatchObject({
+      level: 5,
+      attributePointsEarned: 40,
+      attributePointsAllocated: 15,
+      attributePointsAvailable: 25,
+      totalAttributeEntitlement: 130,
+    });
+
+    const excessive = await post('/api/v1/actors/upsert', {
+      idempotencyKey: 'progression-create-level-five-excessive',
+      code: 'progression-level-five-excessive',
+      name: 'Veterano Inválido',
+      actorType: 'npc',
+      level: 5,
+      primaryAttributes: balancedPrimaryAttributes,
+      progressionPrimaryAttributes: { ...fullProgression, luck: 1 },
+    });
+    expect(excessive.status).toBe(409);
+    await expect(prisma.actor.count({ where: { code: 'progression-level-five-excessive' } })).resolves.toBe(0);
+    await expect(prisma.idempotencyRecord.count({
+      where: { key: 'progression-create-level-five-excessive' },
+    })).resolves.toBe(0);
+
+    const levelOneGain = await post('/api/v1/actors/upsert', {
+      idempotencyKey: 'progression-create-level-one-gain',
+      code: 'progression-level-one-gain',
+      name: 'Novato Inválido',
+      actorType: 'companion',
+      level: 1,
+      primaryAttributes: balancedPrimaryAttributes,
+      progressionPrimaryAttributes: { ...zeroProgression, strength: 1 },
+    });
+    expect(levelOneGain.status).toBe(409);
+    await expect(prisma.actor.count({ where: { code: 'progression-level-one-gain' } })).resolves.toBe(0);
+  });
+
+  it('allocates attributes idempotently, rejects stale or excessive writes, and corrects state with audit', async () => {
+    const actorRef = 'progression-allocation-actor';
+    const created = await post('/api/v1/actors/upsert', {
+      idempotencyKey: 'progression-allocation-create',
+      code: actorRef,
+      name: 'Especialista',
+      actorType: 'spirit',
+      level: 2,
+      primaryAttributes: balancedPrimaryAttributes,
+    });
+    expect(created.status).toBe(200);
+    const allocationBody = {
+      actorRef,
+      operation: 'allocate_attributes',
+      idempotencyKey: 'progression-allocation-write',
+      expectedMechanicsStateVersion: 1,
+      attributeDeltas: { strength: 6, intelligence: 4 },
+    };
+    const allocated = await post('/api/v1/actors/progression/manage', allocationBody);
+    const replay = await post('/api/v1/actors/progression/manage', allocationBody);
+    expect(allocated.status, JSON.stringify(allocated.body)).toBe(200);
+    expect(replay.body).toEqual(allocated.body);
+    expect(allocated.body).toMatchObject({
+      operation: 'allocate_attributes',
+      changed: true,
+      mechanicsStateVersion: 2,
+      progressionPrimaryAttributes: { strength: 6, intelligence: 4 },
+      attributePointsAllocated: 10,
+      attributePointsAvailable: 0,
+    });
+    await expect(prisma.gameEvent.count({
+      where: { idempotencyKey: 'progression-allocation-write' },
+    })).resolves.toBe(1);
+
+    const stale = await post('/api/v1/actors/progression/manage', {
+      actorRef,
+      operation: 'allocate_attributes',
+      idempotencyKey: 'progression-allocation-stale',
+      expectedMechanicsStateVersion: 1,
+      attributeDeltas: { luck: 1 },
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body).toMatchObject({ error: {
+      code: 'MECHANICS_STATE_VERSION_CONFLICT',
+      retryable: false,
+      recoveryAction: 'get_actor_progression',
+      issues: [{ path: 'expectedMechanicsStateVersion', code: 'STATE_VERSION_CONFLICT' }],
+    } });
+
+    const excessive = await post('/api/v1/actors/progression/manage', {
+      actorRef,
+      operation: 'allocate_attributes',
+      idempotencyKey: 'progression-allocation-excessive',
+      expectedMechanicsStateVersion: 2,
+      attributeDeltas: { luck: 1 },
+    });
+    expect(excessive.status).toBe(422);
+    expect(excessive.body).toMatchObject({ error: {
+      code: 'INSUFFICIENT_ATTRIBUTE_POINTS',
+      retryable: false,
+      recoveryAction: 'get_actor_progression',
+    } });
+
+    const unknownAttribute = await post('/api/v1/actors/progression/manage', {
+      actorRef,
+      operation: 'allocate_attributes',
+      idempotencyKey: 'progression-allocation-unknown',
+      expectedMechanicsStateVersion: 2,
+      attributeDeltas: { courage: 1 },
+    });
+    expect(unknownAttribute.status).toBe(400);
+
+    const invalidCorrection = await post('/api/v1/actors/progression/manage', {
+      actorRef,
+      operation: 'set_progression_state',
+      idempotencyKey: 'progression-correction-invalid',
+      expectedMechanicsStateVersion: 2,
+      reason: 'Tentativa inválida para comprovar rollback.',
+      level: 1,
+    });
+    expect(invalidCorrection.status).toBe(422);
+    const afterInvalid = await post('/api/v1/actors/progression/manage', { actorRef, operation: 'get' });
+    expect(afterInvalid.body).toMatchObject({
+      level: 2,
+      mechanicsStateVersion: 2,
+      progressionPrimaryAttributes: { strength: 6, intelligence: 4 },
+    });
+    await expect(prisma.idempotencyRecord.count({
+      where: { key: 'progression-correction-invalid' },
+    })).resolves.toBe(0);
+    await expect(prisma.gameEvent.count({
+      where: { idempotencyKey: 'progression-correction-invalid' },
+    })).resolves.toBe(0);
+
+    const correctedProgression = { ...zeroProgression, intelligence: 10, wisdom: 5 };
+    const corrected = await post('/api/v1/actors/progression/manage', {
+      actorRef,
+      operation: 'set_progression_state',
+      idempotencyKey: 'progression-correction-valid',
+      expectedMechanicsStateVersion: 2,
+      reason: 'Corrigir nível e redistribuir a ficha conforme pedido do jogador.',
+      level: 5,
+      xp: 25,
+      basePrimaryAttributes: balancedPrimaryAttributes,
+      progressionPrimaryAttributes: correctedProgression,
+    });
+    expect(corrected.status).toBe(200);
+    expect(corrected.body).toMatchObject({
+      operation: 'set_progression_state',
+      level: 5,
+      xpCurrent: 25,
+      mechanicsStateVersion: 3,
+      progressionPrimaryAttributes: correctedProgression,
+      attributePointsAvailable: 25,
+    });
+    const audit = await prisma.gameEvent.findUniqueOrThrow({
+      where: { idempotencyKey: 'progression-correction-valid' },
+    });
+    expect(audit.payload).toMatchObject({
+      schemaVersion: 1,
+      operation: 'set_progression_state',
+      changed: true,
+      before: { level: 2, mechanicsStateVersion: 2 },
+      after: { level: 5, mechanicsStateVersion: 3 },
+    });
+
+    const narrativeUpdate = await api.patch(`/api/v1/actors/${actorRef}`)
+      .set('x-rpg-key', config.RPG_API_KEY)
+      .send({ ...seedScope, idempotencyKey: 'progression-narrative-patch', description: 'Descrição corrigida.' });
+    expect(narrativeUpdate.status).toBe(200);
+    const afterNarrative = await post('/api/v1/actors/progression/manage', { actorRef, operation: 'get' });
+    expect(afterNarrative.body).toMatchObject({ mechanicsStateVersion: 3, level: 5, xpCurrent: 25 });
+
+    const mechanicalUpsert = await post('/api/v1/actors/upsert', {
+      idempotencyKey: 'progression-upsert-mechanical-overwrite',
+      code: actorRef,
+      name: 'Especialista',
+      actorType: 'spirit',
+      level: 4,
+      primaryAttributes: balancedPrimaryAttributes,
+      progressionPrimaryAttributes: zeroProgression,
+    });
+    expect(mechanicalUpsert.status).toBe(409);
+    const afterUpsert = await post('/api/v1/actors/progression/manage', { actorRef, operation: 'get' });
+    expect(afterUpsert.body).toMatchObject({ mechanicsStateVersion: 3, level: 5, xpCurrent: 25 });
+  });
+
+  it('preserves current resources on maximum increases and clamps them on corrections that reduce maximums', async () => {
+    const actorRef = 'progression-resource-actor';
+    const highVitalityBase = { ...balancedPrimaryAttributes, vitality: 16, luck: 4 };
+    const created = await post('/api/v1/actors/upsert', {
+      idempotencyKey: 'progression-resource-create',
+      code: actorRef,
+      name: 'Guardião',
+      actorType: 'companion',
+      level: 5,
+      primaryAttributes: highVitalityBase,
+    });
+    expect(created.status).toBe(200);
+    const actor = await prisma.actor.findFirstOrThrow({
+      where: { code: actorRef, campaign: { code: seedScope.campaignRef } },
+    });
+    await prisma.actorResource.update({
+      where: { actorId_type: { actorId: actor.id, type: ActorResourceType.HP } },
+      data: { current: 25, stateVersion: { increment: 1 } },
+    });
+
+    const increased = await post('/api/v1/actors/progression/manage', {
+      actorRef,
+      operation: 'allocate_attributes',
+      idempotencyKey: 'progression-resource-increase',
+      expectedMechanicsStateVersion: 1,
+      attributeDeltas: { vitality: 10 },
+    });
+    expect(increased.status).toBe(200);
+    const increasedBody = bodyRecord(increased);
+    expect(increasedBody).toMatchObject({ mechanicsStateVersion: 2 });
+    expect(increasedBody.resourceChanges).toEqual(expect.arrayContaining([{
+        resource: 'hp',
+        before: { current: 25, max: 73 },
+        after: { current: 25, max: 93 },
+    }]));
+    const afterIncrease = await prisma.actorResource.findUniqueOrThrow({
+      where: { actorId_type: { actorId: actor.id, type: ActorResourceType.HP } },
+    });
+    expect(afterIncrease.current).toBe(25);
+
+    await prisma.actorResource.update({
+      where: { actorId_type: { actorId: actor.id, type: ActorResourceType.HP } },
+      data: { current: 90, stateVersion: { increment: 1 } },
+    });
+    const reduced = await post('/api/v1/actors/progression/manage', {
+      actorRef,
+      operation: 'set_progression_state',
+      idempotencyKey: 'progression-resource-reduce',
+      expectedMechanicsStateVersion: 2,
+      reason: 'Corrigir a distribuição que elevou Vitalidade indevidamente.',
+      basePrimaryAttributes: balancedPrimaryAttributes,
+      progressionPrimaryAttributes: zeroProgression,
+    });
+    expect(reduced.status).toBe(200);
+    const reducedBody = bodyRecord(reduced);
+    expect(reducedBody).toMatchObject({ mechanicsStateVersion: 3 });
+    expect(reducedBody.resourceChanges).toEqual(expect.arrayContaining([{
+        resource: 'hp',
+        before: { current: 90, max: 93 },
+        after: { current: 61, max: 61 },
+    }]));
+    const afterReduction = await prisma.actorResource.findUniqueOrThrow({
+      where: { actorId_type: { actorId: actor.id, type: ActorResourceType.HP } },
+    });
+    const snapshotAfterReduction = await prisma.actorDerivedSnapshot.findUniqueOrThrow({
+      where: { actorId: actor.id },
+    });
+    expect(afterReduction.current).toBe(61);
+    expect(afterReduction.stateVersion).toBe(afterIncrease.stateVersion + 2);
+    expect(snapshotAfterReduction).toMatchObject({ mechanicsStateVersion: 3, maxHp: 61 });
+  });
+
+  it('grants XP and levels up idempotently without healing or losing excess XP', async () => {
+    const actorRef = 'progression-xp-actor';
+    const created = await post('/api/v1/actors/upsert', {
+      idempotencyKey: 'progression-xp-create',
+      code: actorRef,
+      name: 'Aprendiz',
+      actorType: 'npc',
+      level: 1,
+      primaryAttributes: balancedPrimaryAttributes,
+    });
+    expect(created.status).toBe(200);
+    const actor = await prisma.actor.findFirstOrThrow({
+      where: { code: actorRef, campaign: { code: seedScope.campaignRef } },
+    });
+    await prisma.actorResource.update({
+      where: { actorId_type: { actorId: actor.id, type: ActorResourceType.HP } },
+      data: { current: 25, stateVersion: { increment: 1 } },
+    });
+
+    const grantBody = {
+      actorRef,
+      operation: 'grant_xp',
+      idempotencyKey: 'progression-xp-grant',
+      expectedMechanicsStateVersion: 1,
+      xpAmount: 150,
+      source: { type: 'event', ref: 'important-objective-result' },
+      reason: 'Objetivo importante concluído.',
+    };
+    const granted = await post('/api/v1/actors/progression/manage', grantBody);
+    const grantReplay = await post('/api/v1/actors/progression/manage', grantBody);
+    expect(granted.status).toBe(200);
+    expect(grantReplay.body).toEqual(granted.body);
+    expect(granted.body).toMatchObject({
+      level: 1,
+      xpCurrent: 150,
+      xpRequiredForNextLevel: 100,
+      mechanicsStateVersion: 2,
+      canLevelUp: true,
+    });
+
+    const levelBody = {
+      actorRef,
+      operation: 'level_up',
+      idempotencyKey: 'progression-xp-level-up',
+      expectedMechanicsStateVersion: 2,
+    };
+    const leveled = await post('/api/v1/actors/progression/manage', levelBody);
+    const levelReplay = await post('/api/v1/actors/progression/manage', levelBody);
+    expect(leveled.status).toBe(200);
+    expect(levelReplay.body).toEqual(leveled.body);
+    const leveledBody = bodyRecord(leveled);
+    expect(leveledBody).toMatchObject({
+      level: 2,
+      xpCurrent: 50,
+      xpRequiredForNextLevel: 140,
+      mechanicsStateVersion: 3,
+      attributePointsEarned: 10,
+      attributePointsAvailable: 10,
+      canLevelUp: false,
+    });
+    expect(leveledBody.resourceChanges).toEqual(expect.arrayContaining([{
+      resource: 'hp',
+      before: { current: 25, max: 45 },
+      after: { current: 25, max: 49 },
+    }]));
+    const hp = await prisma.actorResource.findUniqueOrThrow({
+      where: { actorId_type: { actorId: actor.id, type: ActorResourceType.HP } },
+    });
+    expect(hp.current).toBe(25);
+    await expect(prisma.gameEvent.count({
+      where: { idempotencyKey: { in: ['progression-xp-grant', 'progression-xp-level-up'] } },
+    })).resolves.toBe(2);
+
+    const insufficientRef = 'progression-xp-insufficient';
+    await post('/api/v1/actors/upsert', {
+      idempotencyKey: 'progression-xp-insufficient-create',
+      code: insufficientRef,
+      name: 'Sem Experiência',
+      actorType: 'npc',
+      primaryAttributes: balancedPrimaryAttributes,
+    });
+    const insufficient = await post('/api/v1/actors/progression/manage', {
+      actorRef: insufficientRef,
+      operation: 'level_up',
+      idempotencyKey: 'progression-xp-insufficient-level',
+      expectedMechanicsStateVersion: 1,
+    });
+    expect(insufficient.status).toBe(422);
+    expect(insufficient.body).toMatchObject({ error: {
+      code: 'INSUFFICIENT_XP',
+      retryable: false,
+      recoveryAction: 'get_actor_progression',
+    } });
+    const unchanged = await post('/api/v1/actors/progression/manage', {
+      actorRef: insufficientRef, operation: 'get',
+    });
+    expect(unchanged.body).toMatchObject({ level: 1, xpCurrent: 0, mechanicsStateVersion: 1 });
+  });
+
+  it('supports RC1.2 high levels, spends every point, levels past 20, and deduplicates XP by source', async () => {
+    const rulesetVersion = await prisma.$transaction((transaction) => ensureCurrentCoreRulesetVersion(transaction));
+    const suffix = randomUUID().slice(0, 8);
+    const scope = {
+      playerRef: `progression-v2-${suffix}`,
+      worldRef: `progression-v2-world-${suffix}`,
+      campaignRef: `progression-v2-campaign-${suffix}`,
+    };
+    const player = await prisma.player.create({ data: { slug: scope.playerRef, displayName: 'Progression V2' } });
+    const world = await prisma.world.create({
+      data: {
+        playerId: player.id,
+        defaultRulesetVersionId: rulesetVersion.id,
+        code: scope.worldRef,
+        name: 'Progression V2 World',
+      },
+    });
+    await prisma.campaign.create({
+      data: {
+        worldId: world.id,
+        rulesetVersionId: rulesetVersion.id,
+        code: scope.campaignRef,
+        name: 'Progression V2 Campaign',
+        status: CampaignStatus.ACTIVE,
+      },
+    });
+    const currentPost = (path: string, body: object) => api.post(path)
+      .set('x-rpg-key', config.RPG_API_KEY)
+      .send({ ...scope, ...body });
+
+    const level50Progression = { ...zeroProgression, intelligence: 490 };
+    const level50 = await currentPost('/api/v1/actors/upsert', {
+      idempotencyKey: `v2-level-50-full-${suffix}`,
+      code: 'level-50-full',
+      name: 'Arquimaga',
+      actorType: 'npc',
+      level: 50,
+      primaryAttributes: balancedPrimaryAttributes,
+      progressionPrimaryAttributes: level50Progression,
+    });
+    expect(level50.status, JSON.stringify(level50.body)).toBe(200);
+    expect(level50.body).toMatchObject({
+      level: 50,
+      primaryAttributes: { intelligence: 500 },
+    });
+    const level50State = await currentPost('/api/v1/actors/progression/manage', {
+      actorRef: 'level-50-full',
+      operation: 'get',
+    });
+    expect(level50State.body).toMatchObject({
+      level: 50,
+      attributePointsEarned: 490,
+      attributePointsAllocated: 490,
+      attributePointsAvailable: 0,
+      totalAttributeEntitlement: 580,
+      effectivePrimaryAttributes: { intelligence: 500 },
+    });
+
+    for (const [actorRef, level, progressionState, expectedAvailable] of [
+      ['level-50-partial', 50, { ...zeroProgression, wisdom: 100 }, 390],
+      ['level-100-empty', 100, zeroProgression, 990],
+    ] as const) {
+      const created = await currentPost('/api/v1/actors/upsert', {
+        idempotencyKey: `v2-${actorRef}-${suffix}`,
+        code: actorRef,
+        name: actorRef,
+        actorType: 'creature',
+        level,
+        primaryAttributes: balancedPrimaryAttributes,
+        progressionPrimaryAttributes: progressionState,
+      });
+      expect(created.status, JSON.stringify(created.body)).toBe(200);
+      const state = await currentPost('/api/v1/actors/progression/manage', { actorRef, operation: 'get' });
+      expect(state.body).toMatchObject({
+        level,
+        attributePointsEarned: 10 * (level - 1),
+        attributePointsAvailable: expectedAvailable,
+        totalAttributeEntitlement: 90 + 10 * (level - 1),
+      });
+    }
+
+    for (const [actorRef, level] of [['level-20-up', 20], ['level-99-up', 99]] as const) {
+      const created = await currentPost('/api/v1/actors/upsert', {
+        idempotencyKey: `v2-${actorRef}-create-${suffix}`,
+        code: actorRef,
+        name: actorRef,
+        actorType: 'npc',
+        level,
+        primaryAttributes: balancedPrimaryAttributes,
+      });
+      expect(created.status).toBe(200);
+      const required = nextCoreV12LevelXp(level);
+      if (required === null) throw new Error('High-level transition unexpectedly unavailable');
+      const granted = await currentPost('/api/v1/actors/progression/manage', {
+        actorRef,
+        operation: 'grant_xp',
+        idempotencyKey: `v2-${actorRef}-grant-${suffix}`,
+        expectedMechanicsStateVersion: 1,
+        xpAmount: required + 7,
+        source: { type: 'manual', ref: `${actorRef}-reward` },
+        reason: 'Preparar teste de level-up acima do limite antigo.',
+      });
+      expect(granted.status, JSON.stringify(granted.body)).toBe(200);
+      const leveled = await currentPost('/api/v1/actors/progression/manage', {
+        actorRef,
+        operation: 'level_up',
+        idempotencyKey: `v2-${actorRef}-level-${suffix}`,
+        expectedMechanicsStateVersion: 2,
+      });
+      expect(leveled.status, JSON.stringify(leveled.body)).toBe(200);
+      expect(leveled.body).toMatchObject({
+        level: level + 1,
+        xpCurrent: 7,
+        attributePointsEarned: 10 * level,
+        attributePointsAvailable: 10 * level,
+      });
+    }
+
+    const boundaryRef = 'technical-level-boundary';
+    const boundaryCreated = await currentPost('/api/v1/actors/upsert', {
+      idempotencyKey: `v2-boundary-create-${suffix}`,
+      code: boundaryRef,
+      name: 'Technical Boundary',
+      actorType: 'npc',
+      level: CORE_V1_2_TECHNICAL_LEVEL_MAXIMUM - 1,
+      primaryAttributes: balancedPrimaryAttributes,
+    });
+    expect(boundaryCreated.status, JSON.stringify(boundaryCreated.body)).toBe(200);
+    const boundaryRequired = nextCoreV12LevelXp(CORE_V1_2_TECHNICAL_LEVEL_MAXIMUM - 1);
+    if (boundaryRequired === null) throw new Error('The transition into the technical boundary must exist');
+    const boundaryGrant = await currentPost('/api/v1/actors/progression/manage', {
+      actorRef: boundaryRef,
+      operation: 'grant_xp',
+      idempotencyKey: `v2-boundary-grant-${suffix}`,
+      expectedMechanicsStateVersion: 1,
+      xpAmount: boundaryRequired,
+      source: { type: 'manual', ref: 'technical-boundary-reward' },
+      reason: 'Validate the final transition representable by the current storage envelope.',
+    });
+    expect(boundaryGrant.status, JSON.stringify(boundaryGrant.body)).toBe(200);
+    const boundaryLevel = await currentPost('/api/v1/actors/progression/manage', {
+      actorRef: boundaryRef,
+      operation: 'level_up',
+      idempotencyKey: `v2-boundary-level-${suffix}`,
+      expectedMechanicsStateVersion: 2,
+    });
+    expect(boundaryLevel.status, JSON.stringify(boundaryLevel.body)).toBe(200);
+    expect(boundaryLevel.body).toMatchObject({
+      level: CORE_V1_2_TECHNICAL_LEVEL_MAXIMUM,
+      xpCurrent: 0,
+      xpRequiredForNextLevel: null,
+      mechanicsStateVersion: 3,
+    });
+    const beyondBoundary = await currentPost('/api/v1/actors/progression/manage', {
+      actorRef: boundaryRef,
+      operation: 'level_up',
+      idempotencyKey: `v2-boundary-reject-${suffix}`,
+      expectedMechanicsStateVersion: 3,
+    });
+    expect(beyondBoundary.status).toBe(422);
+    expect(beyondBoundary.body).toMatchObject({ error: {
+      code: 'LEVEL_TECHNICAL_RANGE_EXCEEDED',
+      retryable: false,
+      recoveryAction: 'correct_request',
+    } });
+    const boundaryAfter = await currentPost('/api/v1/actors/progression/manage', {
+      actorRef: boundaryRef,
+      operation: 'get',
+    });
+    expect(boundaryAfter.body).toMatchObject({
+      level: CORE_V1_2_TECHNICAL_LEVEL_MAXIMUM,
+      xpCurrent: 0,
+      mechanicsStateVersion: 3,
+    });
+    await expect(prisma.idempotencyRecord.count({
+      where: { key: `v2-boundary-reject-${suffix}` },
+    })).resolves.toBe(0);
+
+    for (const actorRef of ['dedup-one', 'dedup-two']) {
+      const created = await currentPost('/api/v1/actors/upsert', {
+        idempotencyKey: `v2-${actorRef}-create-${suffix}`,
+        code: actorRef,
+        name: actorRef,
+        actorType: 'npc',
+        primaryAttributes: balancedPrimaryAttributes,
+      });
+      expect(created.status).toBe(200);
+    }
+    const duplicateBase = {
+      actorRef: 'dedup-one',
+      operation: 'grant_xp',
+      expectedMechanicsStateVersion: 1,
+      xpAmount: 100,
+      source: { type: 'encounter_consequence', ref: 'slime-result-one' },
+      reason: 'Resultado confirmado do encontro.',
+    };
+    const [first, second] = await Promise.all([
+      currentPost('/api/v1/actors/progression/manage', {
+        ...duplicateBase,
+        idempotencyKey: `v2-dedup-a-${suffix}`,
+      }),
+      currentPost('/api/v1/actors/progression/manage', {
+        ...duplicateBase,
+        idempotencyKey: `v2-dedup-b-${suffix}`,
+      }),
+    ]);
+    expect([first.status, second.status].sort()).toEqual([200, 409]);
+    const duplicate = first.status === 409 ? first : second;
+    expect(duplicate.body).toMatchObject({ error: { code: 'XP_SOURCE_ALREADY_GRANTED', retryable: false } });
+    const afterDuplicate = await currentPost('/api/v1/actors/progression/manage', {
+      actorRef: 'dedup-one',
+      operation: 'get',
+    });
+    expect(afterDuplicate.body).toMatchObject({ xpCurrent: 100, mechanicsStateVersion: 2 });
+
+    const differentSource = await currentPost('/api/v1/actors/progression/manage', {
+      ...duplicateBase,
+      idempotencyKey: `v2-dedup-different-${suffix}`,
+      expectedMechanicsStateVersion: 2,
+      source: { type: 'event', ref: 'different-result' },
+    });
+    expect(differentSource.status).toBe(200);
+    const differentActor = await currentPost('/api/v1/actors/progression/manage', {
+      ...duplicateBase,
+      actorRef: 'dedup-two',
+      idempotencyKey: `v2-dedup-other-actor-${suffix}`,
+    });
+    expect(differentActor.status).toBe(200);
+  });
+
+  it('blocks progression writes for active encounter participants without ending the encounter', async () => {
+    const firstRef = 'progression-encounter-first';
+    const secondRef = 'progression-encounter-second';
+    for (const [actorRef, actorType] of [[firstRef, 'npc'], [secondRef, 'creature']] as const) {
+      const created = await post('/api/v1/actors/upsert', {
+        idempotencyKey: `${actorRef}-create`,
+        code: actorRef,
+        name: actorRef,
+        actorType,
+        level: 2,
+        primaryAttributes: balancedPrimaryAttributes,
+      });
+      expect(created.status).toBe(200);
+    }
+    const encounterRef = 'progression-active-encounter';
+    const encounter = await post('/api/v1/encounters/manage', {
+      operation: 'create',
+      encounterRef,
+      idempotencyKey: 'progression-active-encounter-create',
+      partySideRef: 'party',
+      participants: [
+        { actorRef: firstRef, sideRef: 'party', zone: 'near' },
+        { actorRef: secondRef, sideRef: 'hostile', zone: 'near' },
+      ],
+    });
+    expect(encounter.status, JSON.stringify(encounter.body)).toBe(200);
+    const stateVersion = bodyRecord(encounter).stateVersion;
+    if (typeof stateVersion !== 'number') throw new Error('Progression encounter version must be numeric');
+    try {
+      const blockedWrites = [
+        {
+          operation: 'grant_xp',
+          idempotencyKey: 'progression-active-encounter-grant',
+          xpAmount: 100,
+          source: { type: 'manual', ref: 'active-encounter-reward' },
+          reason: 'Must remain blocked while the encounter is active.',
+        },
+        {
+          operation: 'level_up',
+          idempotencyKey: 'progression-active-encounter-level',
+        },
+        {
+          operation: 'allocate_attributes',
+          idempotencyKey: 'progression-active-encounter-allocation',
+          attributeDeltas: { strength: 10 },
+        },
+        {
+          operation: 'set_progression_state',
+          idempotencyKey: 'progression-active-encounter-correction',
+          reason: 'Must remain blocked while the encounter is active.',
+          level: 3,
+        },
+      ] as const;
+      for (const blockedWrite of blockedWrites) {
+        const blocked = await post('/api/v1/actors/progression/manage', {
+          actorRef: firstRef,
+          expectedMechanicsStateVersion: 1,
+          ...blockedWrite,
+        });
+        expect(blocked.status).toBe(409);
+        expect(blocked.body).toMatchObject({ error: {
+          code: 'ACTOR_ENCOUNTER_LOCKED',
+          retryable: false,
+          recoveryAction: 'finish_or_abandon_encounter',
+          issues: [{ code: 'ACTIVE_ENCOUNTER_PARTICIPANT' }],
+        } });
+        await expect(prisma.idempotencyRecord.count({
+          where: { key: blockedWrite.idempotencyKey },
+        })).resolves.toBe(0);
+      }
+      const blockedUpsert = await post('/api/v1/actors/upsert', {
+        idempotencyKey: 'progression-active-encounter-upsert',
+        code: firstRef,
+        name: firstRef,
+        actorType: 'npc',
+        level: 2,
+        primaryAttributes: balancedPrimaryAttributes,
+      });
+      expect(blockedUpsert.status).toBe(409);
+      expect(blockedUpsert.body).toMatchObject({ error: { code: 'ACTOR_ENCOUNTER_LOCKED' } });
+      await expect(prisma.idempotencyRecord.count({
+        where: { key: 'progression-active-encounter-upsert' },
+      })).resolves.toBe(0);
+      const persistedEncounter = await prisma.encounter.findFirstOrThrow({ where: { encounterRef } });
+      expect(ACTIVE_ENCOUNTER_LIFECYCLES).toContain(persistedEncounter.lifecycleStatus);
+    } finally {
+      const cancelled = await post('/api/v1/encounters/manage', {
+        operation: 'cancel',
+        encounterRef,
+        idempotencyKey: 'progression-active-encounter-cancel',
+        expectedStateVersion: stateVersion,
+      });
+      expect(cancelled.status).toBe(200);
+    }
   });
 });
 

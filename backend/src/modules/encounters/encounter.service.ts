@@ -15,7 +15,7 @@ import { prisma } from '../../shared/database/prisma.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import { loadActorReadiness } from '../actors/actor-readiness.service.js';
 import { recomputeActorDerivedSnapshot } from '../actors/actor-mechanics.service.js';
-import { validateCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
+import { validateSupportedCoreRulesetVersion } from '../rules/ruleset.registry.js';
 import {
   applyCoreV1EncounterIntent,
   applyCoreV1EncounterActionPlan,
@@ -1330,7 +1330,7 @@ export function createEncounterService(
             });
             if (rulesetVersion === null) throw new EncounterError('ENCOUNTER_MECHANICS_DRIFT');
             try {
-              validateCoreV1RulesetVersion(rulesetVersion);
+              validateSupportedCoreRulesetVersion(rulesetVersion);
             } catch (error) {
               throw new EncounterError('ENCOUNTER_MECHANICS_DRIFT', { cause: error });
             }
