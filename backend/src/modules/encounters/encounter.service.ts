@@ -19,6 +19,7 @@ import { validateCoreV1RulesetVersion } from '../rules/ruleset.registry.js';
 import {
   applyCoreV1EncounterIntent,
   applyCoreV1EncounterActionPlan,
+  calculateMovement,
   cancelCoreV1Encounter,
   confirmCoreV1EncounterCompletion,
   CORE_V1_MAX_ENCOUNTER_BATCH_ADVANCE,
@@ -53,6 +54,7 @@ import {
   automaticReactionResolver,
   beatComponentRejectionReason,
   consumeTriggeredBeatCapabilities,
+  deriveEncounterFleeStep,
   encounterScenePackage,
   genericEncounterAction,
   normalizeBeatComponent,
@@ -711,12 +713,15 @@ async function executeBeatPlan(
   const evaluated = components.map((component) => evaluateBeatComponentCondition(state, actorRef, component));
   const normalized = evaluated.map(({ component }) => normalizeBeatComponent(state, actorRef, component));
   const appliedComponents = normalized.map((entry) => entry.component);
+  const completedFleeIndexes = new Set(normalized.flatMap((entry, index) => (
+    entry.completedFlee === true ? [index] : []
+  )));
   const conditionalComponentIndexes = new Set(appliedComponents.flatMap((component, index) => (
     evaluated[index]?.skipScheduling === true
     || component.type === 'protect' || component.type === 'intercept' || component.type === 'prepare' ? [index] : []
   )));
   const scheduledComponentIndexes = new Set(appliedComponents.flatMap((_, index) => (
-    conditionalComponentIndexes.has(index) ? [] : [index]
+    conditionalComponentIndexes.has(index) || completedFleeIndexes.has(index) ? [] : [index]
   )));
   if (scheduledComponentIndexes.size === 0) {
     throw new EncounterError('ENCOUNTER_CORE_REJECTED', {
@@ -729,7 +734,7 @@ async function executeBeatPlan(
   }
   let sequence = state.actionSequence;
   for (const [index, component] of appliedComponents.entries()) {
-    if (evaluated[index]?.skipScheduling === true) continue;
+    if (evaluated[index]?.skipScheduling === true || completedFleeIndexes.has(index)) continue;
     const intentRef = `beat-${prefix}-${index}`;
     const action = await beatAction(transaction, loaded, state, actorRef, component, intentRef, actionCatalogSource);
     if (scheduledComponentIndexes.has(index)) {
@@ -760,6 +765,16 @@ async function executeBeatPlan(
     const component = appliedComponents[index] ?? requestedComponent;
     const modification = evaluated[index]?.modification ?? normalized[index]?.modification;
     const expected = expectedByIndex.get(index);
+    if (completedFleeIndexes.has(index) && modification !== undefined) return {
+      index,
+      type: requestedComponent.type,
+      status: 'modified' as const,
+      code: modification.code,
+      reason: modification.reason,
+      field: `intent.components.${String(index)}.${modification.field}`,
+      requested: componentSnapshot(requestedComponent),
+      applied: componentSnapshot(component),
+    };
     if (evaluated[index]?.skipScheduling === true && evaluated[index]?.modification !== undefined) return {
       index,
       type: component.type,
@@ -781,7 +796,7 @@ async function executeBeatPlan(
     };
     if (expected === undefined) return {
       index,
-      type: component.type,
+      type: requestedComponent.type,
       status: 'conditional' as const,
       code: 'TRIGGER_PENDING',
       reason: 'The conditional component was stored but its trigger has not fired.',
@@ -800,7 +815,7 @@ async function executeBeatPlan(
         : modification === undefined ? 'accepted' as const : 'modified' as const;
     return {
       index,
-      type: component.type,
+      type: requestedComponent.type === 'flee' ? 'flee' : component.type,
       status,
       ...(!wasResolved ? {
         ...rejectedComponentDetails(rejectedReason, index),
@@ -824,7 +839,10 @@ async function executeBeatPlan(
     report,
     results,
     appliedComponents,
-    skippedComponentIndexes: new Set(evaluated.flatMap((entry, index) => entry.omitFromApplied ? [index] : [])),
+    skippedComponentIndexes: new Set([
+      ...evaluated.flatMap((entry, index) => entry.omitFromApplied ? [index] : []),
+      ...completedFleeIndexes,
+    ]),
     prepared: prepared.filter(({ index }) => results[index]?.status === 'conditional'),
     resolvedConsumables: expectedActions.flatMap(({ actionRef, component }) => (
       component.type === 'use_item' && resolved.has(actionRef)
@@ -1016,6 +1034,17 @@ function automaticPolicyStop(
   if (actor === undefined || actor.combatState === 'removed' || actor.resources.hp.current === 0) {
     return { reason: 'primary_actor_incapacitated', alternatives: ['Choose another active actor or end the encounter.'] };
   }
+  if (policy.strategy === 'escape' && policy.resourcePolicy.allowFlee) {
+    const flee = deriveEncounterFleeStep(actor.zone, 'out_of_range');
+    if (flee.status === 'completed') return { reason: 'flee_completed', alternatives: [] };
+    const movement = calculateMovement(actor.zone, flee.to, flee.movementKind, 'normal');
+    if (actor.resources.sp.current < movement.conceptualSpCost) {
+      return {
+        reason: 'flee_blocked_insufficient_sp',
+        alternatives: ['Recover enough SP for the next run step.', 'Choose a different explicit action.'],
+      };
+    }
+  }
   if (percentAtOrBelow(actor.resources.hp.current, actor.resources.hp.maximum, policy.resourcePolicy.stopBelowHpPercent)) {
     return { reason: 'hp_policy_threshold', alternatives: ['Choose a safer plan, healing action, or explicit continuation.'] };
   }
@@ -1043,7 +1072,15 @@ function selectAutomaticComponent(
   | { readonly component: EncounterBeatComponent }
   | { readonly stopReason: string; readonly alternatives: readonly string[] } {
   const actor = state.participants.find((participant) => participant.actorRef === policy.actorRef);
-  if (actor === undefined || actions === undefined) {
+  if (actor === undefined) {
+    return { stopReason: 'no_valid_action', alternatives: ['Choose another active participant.'] };
+  }
+  if (policy.strategy === 'escape') {
+    return policy.resourcePolicy.allowFlee
+      ? { component: { type: 'flee', destination: 'out_of_range' } }
+      : { stopReason: 'flee_requires_authorization', alternatives: ['Authorize fleeing or choose another strategy.'] };
+  }
+  if (actions === undefined) {
     return { stopReason: 'no_valid_action', alternatives: ['Choose another active participant.'] };
   }
   const relationTo = (targetRef: string) => state.relations.find((relation) => (
@@ -1134,11 +1171,6 @@ function selectAutomaticComponent(
         },
       };
     }
-  }
-  if (policy.strategy === 'escape') {
-    return policy.resourcePolicy.allowFlee
-      ? { component: { type: 'flee', destination: 'out_of_range' } }
-      : { stopReason: 'flee_requires_authorization', alternatives: ['Authorize fleeing or choose another strategy.'] };
   }
   if (policy.strategy === 'protect_target') {
     const protectedRef = policy.protectedActorRefs.find((ref) => state.participants.some((actorValue) => actorValue.actorRef === ref));
@@ -1672,16 +1704,52 @@ export function createEncounterService(
         let actionCatalogSource: EncounterActionCatalogSource | undefined;
 
         if (input.intent !== undefined) {
-          const one = await executeOneResolvedBeat(
-            transaction, loaded, current, input.intent, input.npcDirectives ?? [], prefix, recorder,
-          );
-          current = one.state;
-          reports.push(...one.reports);
-          resolvedConsumables.push(...one.resolvedConsumables);
-          beatSummary = one.beatSummary;
-          beatsProcessed = 1;
-          stopCategory = current.status === 'completed' ? 'terminal' : 'decision';
-          decisionReason = current.status === 'completed' ? null : 'plan_completed';
+          const normalizedComponents = input.intent.components.map((component) => (
+            normalizeBeatComponent(current, input.intent?.actorRef ?? '', component)
+          ));
+          const fleeAlreadyComplete = normalizedComponents.length > 0
+            && input.intent.components.every((component) => component.type === 'flee' && component.when === undefined)
+            && normalizedComponents.every((component) => component.completedFlee === true);
+          if (fleeAlreadyComplete) {
+            current = { ...current, stateVersion: current.stateVersion + 1 };
+            beatSummary = {
+              externalTransitions: 1,
+              resolutionPolicy: input.intent.resolutionPolicy,
+              partialResolutionApplied: false,
+              actorsActed: [],
+              componentResults: input.intent.components.map((component, index) => {
+                const normalized = normalizedComponents[index];
+                if (normalized?.modification === undefined) {
+                  throw new EncounterError('ENCOUNTER_INTERNAL');
+                }
+                return {
+                  index,
+                  type: component.type,
+                  status: 'modified' as const,
+                  code: normalized.modification.code,
+                  reason: normalized.modification.reason,
+                  field: `intent.components.${String(index)}.${normalized.modification.field}`,
+                  requested: componentSnapshot(component),
+                  applied: componentSnapshot(normalized.component),
+                };
+              }),
+              npcActions: [],
+              npcResults: [],
+              requiresPlayerDecision: true,
+            };
+            decisionReason = 'flee_completed';
+          } else {
+            const one = await executeOneResolvedBeat(
+              transaction, loaded, current, input.intent, input.npcDirectives ?? [], prefix, recorder,
+            );
+            current = one.state;
+            reports.push(...one.reports);
+            resolvedConsumables.push(...one.resolvedConsumables);
+            beatSummary = one.beatSummary;
+            beatsProcessed = 1;
+            stopCategory = current.status === 'completed' ? 'terminal' : 'decision';
+            decisionReason = current.status === 'completed' ? null : 'plan_completed';
+          }
         } else if (input.policy !== undefined) {
           actionCatalogSource = await loadEncounterActionCatalogSource(transaction, loaded);
           const automaticActorRefs = new Set([input.policy.actorRef]);

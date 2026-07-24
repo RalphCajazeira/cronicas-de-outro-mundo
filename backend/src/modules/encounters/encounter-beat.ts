@@ -1,10 +1,13 @@
 import {
+  calculateMovement,
   resolveCoreV1DeterministicReactionOutcome,
+  zoneDistance,
   type CoreV1EncounterActionDefinition,
   type CoreV1EncounterActionIntent,
   type CoreV1EncounterBatchResult,
   type CoreV1EncounterState,
   type CoreV1EncounterTargetingContext,
+  type CombatZone,
   type ReactionOutcomeResolver,
 } from '../rules/core-v1/index.js';
 import type { PersistedEncounterAuthority } from './encounter-state-loader.js';
@@ -31,6 +34,51 @@ export const ENCOUNTER_GENERIC_ACTIONS: readonly EncounterGenericAction[] = [
 export const ENCOUNTER_COMMON_SCENE_TARGET_BYTES = 65_536;
 export const ENCOUNTER_GROUP_SCENE_TARGET_BYTES = 131_072;
 export const ENCOUNTER_MAX_SCENE_RESPONSE_BYTES = 262_144;
+
+const encounterZoneOrder = ['engaged', 'near', 'medium', 'far', 'out_of_range'] as const;
+
+export type EncounterFleeDestination = 'far' | 'out_of_range';
+
+export type EncounterFleeStep =
+  | {
+    readonly status: 'completed';
+    readonly from: CombatZone;
+    readonly desiredDestination: EncounterFleeDestination;
+  }
+  | {
+    readonly status: 'step';
+    readonly from: CombatZone;
+    readonly to: CombatZone;
+    readonly desiredDestination: EncounterFleeDestination;
+    readonly movementKind: 'run' | 'disengage';
+    readonly transitions: number;
+    readonly reachesDestination: boolean;
+  };
+
+export function deriveEncounterFleeStep(
+  currentZone: CombatZone,
+  desiredDestination: EncounterFleeDestination = 'out_of_range',
+): EncounterFleeStep {
+  const currentIndex = encounterZoneOrder.indexOf(currentZone);
+  const desiredIndex = encounterZoneOrder.indexOf(desiredDestination);
+  if (currentIndex >= desiredIndex) {
+    return { status: 'completed', from: currentZone, desiredDestination };
+  }
+  const destinationIndex = currentZone === 'engaged'
+    ? encounterZoneOrder.indexOf('near')
+    : Math.min(currentIndex + 2, desiredIndex);
+  const to = encounterZoneOrder[destinationIndex];
+  if (to === undefined) throw new TypeError('Flee destination is outside the encounter zone model');
+  return {
+    status: 'step',
+    from: currentZone,
+    to,
+    desiredDestination,
+    movementKind: currentZone === 'engaged' ? 'disengage' : 'run',
+    transitions: zoneDistance(currentZone, to),
+    reachesDestination: to === desiredDestination,
+  };
+}
 
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -171,12 +219,23 @@ export function encounterScenePackage(
         hostiles: relationRows.filter((entry) => entry.relation === 'hostile').map((entry) => entry.actorRef),
         neutrals: relationRows.filter((entry) => entry.relation === 'neutral').map((entry) => entry.actorRef),
       };
-      const zones = ['engaged', 'near', 'medium', 'far', 'out_of_range'] as const;
-      const movements = zones.filter((zone) => zone !== participant.zone).map((destination) => {
-        const kind = movementKind(participant.zone, destination);
-        const distance = Math.abs(zones.indexOf(participant.zone) - zones.indexOf(destination));
+      const movements = encounterZoneOrder.filter((zone) => zone !== participant.zone).map((destination) => {
+        const fleeStep = destination === 'far' || destination === 'out_of_range'
+          ? deriveEncounterFleeStep(participant.zone, destination)
+          : undefined;
+        const kind = fleeStep?.status === 'step' && fleeStep.to === destination
+          ? fleeStep.movementKind
+          : movementKind(participant.zone, destination);
+        const distance = zoneDistance(participant.zone, destination);
         const maximum = kind === 'run' ? 2 : 1;
-        const blockers = distance <= maximum ? [] : ['destination_too_far_for_one_movement'];
+        const movement = distance <= maximum
+          ? calculateMovement(participant.zone, destination, kind, 'normal')
+          : undefined;
+        const blockers = [
+          ...(distance <= maximum ? [] : ['destination_too_far_for_one_movement']),
+          ...(movement !== undefined && participant.resources.sp.current < movement.conceptualSpCost
+            ? ['insufficient_sp'] : []),
+        ];
         return {
           destination,
           movementKind: kind,
@@ -304,8 +363,7 @@ function movementKind(
 ): 'approach' | 'retreat' | 'run' | 'disengage' {
   if (from === 'engaged' && to !== 'engaged') return 'disengage';
   if (to === 'out_of_range') return 'run';
-  const order = ['engaged', 'near', 'medium', 'far', 'out_of_range'];
-  return order.indexOf(to) > order.indexOf(from) ? 'retreat' : 'approach';
+  return encounterZoneOrder.indexOf(to) > encounterZoneOrder.indexOf(from) ? 'retreat' : 'approach';
 }
 
 export function beatComponentRejectionReason(
@@ -317,13 +375,25 @@ export function beatComponentRejectionReason(
   if (component.type !== 'move' && component.type !== 'flee') return fallback;
   const actor = state.participants.find((participant) => participant.actorRef === actorRef);
   if (actor === undefined) return fallback;
-  const destination = component.type === 'move' ? component.destination : component.destination ?? 'out_of_range';
-  const order = ['engaged', 'near', 'medium', 'far', 'out_of_range'] as const;
-  const transitions = Math.abs(order.indexOf(actor.zone) - order.indexOf(destination));
-  const kind = component.type === 'move' && component.movementKind !== undefined
-    ? component.movementKind : movementKind(actor.zone, destination);
-  const maximumTransitions = kind === 'run' ? 2 : 1;
-  return transitions < 1 || transitions > maximumTransitions ? 'distance_incompatible' : fallback;
+  let destination: CombatZone;
+  let kind: 'approach' | 'retreat' | 'run' | 'disengage';
+  if (component.type === 'flee') {
+    const step = deriveEncounterFleeStep(actor.zone, component.destination ?? 'out_of_range');
+    if (step.status === 'completed') return fallback;
+    destination = step.to;
+    kind = step.movementKind;
+  } else {
+    destination = component.destination;
+    kind = component.movementKind ?? movementKind(actor.zone, destination);
+  }
+  try {
+    const movement = calculateMovement(actor.zone, destination, kind, 'normal');
+    return actor.resources.sp.current < movement.conceptualSpCost
+      ? 'resource_below_required'
+      : fallback;
+  } catch {
+    return 'distance_incompatible';
+  }
 }
 
 export function normalizeBeatComponent(
@@ -333,6 +403,7 @@ export function normalizeBeatComponent(
 ): {
   readonly component: EncounterBeatComponent;
   readonly modification?: { readonly code: string; readonly reason: string; readonly field: string };
+  readonly completedFlee?: true;
 } {
   const actor = state.participants.find((participant) => participant.actorRef === actorRef);
   if (actor === undefined) return { component };
@@ -347,14 +418,50 @@ export function normalizeBeatComponent(
       },
     };
   }
-  if (component.type === 'flee' && component.destination === undefined) {
+  if (component.type === 'flee') {
+    const desiredDestination = component.destination ?? 'out_of_range';
+    const step = deriveEncounterFleeStep(actor.zone, desiredDestination);
+    if (step.status === 'completed') {
+      return {
+        component: { ...component, destination: desiredDestination },
+        completedFlee: true,
+        modification: {
+          code: 'FLEE_ALREADY_COMPLETE',
+          reason: `The actor is already at or beyond the requested ${desiredDestination} escape destination.`,
+          field: 'destination',
+        },
+      };
+    }
+    const applied: EncounterBeatComponent = {
+      type: 'move',
+      destination: step.to,
+      movementKind: step.movementKind,
+      ...(component.essential === undefined ? {} : { essential: component.essential }),
+      ...(component.when === undefined ? {} : { when: component.when }),
+      ...(component.fallback === undefined ? {} : { fallback: component.fallback }),
+    };
+    if (!step.reachesDestination) {
+      return {
+        component: applied,
+        modification: {
+          code: 'FLEE_STAGED',
+          reason: `Flee toward ${desiredDestination} was staged as a legal ${step.movementKind} step to ${step.to}.`,
+          field: 'destination',
+        },
+      };
+    }
+    if (component.destination === undefined) {
+      return {
+        component: applied,
+        modification: {
+          code: 'FLEE_DESTINATION_DEFAULTED',
+          reason: 'Flee destination was defaulted to out_of_range.',
+          field: 'destination',
+        },
+      };
+    }
     return {
-      component: { ...component, destination: 'out_of_range' },
-      modification: {
-        code: 'FLEE_DESTINATION_DEFAULTED',
-        reason: 'Flee destination was defaulted to out_of_range.',
-        field: 'destination',
-      },
+      component: applied,
     };
   }
   return { component };

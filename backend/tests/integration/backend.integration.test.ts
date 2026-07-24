@@ -1625,6 +1625,566 @@ describe('Phase 1L-B transactional encounter adapter', () => {
     }
   });
 
+  it('stages manual flee by zone with the same movement, cost and time as the equivalent move', async () => {
+    const hero = await prisma.actor.findFirstOrThrow({
+      where: { code: 'ralph', campaign: { code: seedScope.campaignRef, world: { code: seedScope.worldRef } } },
+      include: { resources: true },
+    });
+    const sp = hero.resources.find((resource) => resource.type === ActorResourceType.SP);
+    if (sp === undefined) throw new Error('Flee matrix requires the protagonist SP resource');
+    const attributes = getInitialAttributePreset('balanced');
+    const secondary = calculateSecondaryAttributes({
+      attributes, weaponFamilyRank: 0, magicSchoolRank: 0,
+      accuracyRank: 0, evasionRank: 0, encumbrancePenalty: 0,
+    });
+    const resetSp = async (current = sp.current) => {
+      await prisma.actorResource.update({
+        where: { actorId_type: { actorId: hero.id, type: ActorResourceType.SP } },
+        data: { current, stateVersion: { increment: 1 } },
+      });
+    };
+    const ephemeral = (actorRef: string, zone: 'engaged' | 'near' | 'medium' | 'far' | 'out_of_range') => ({
+      bindingKind: 'ephemeral' as const,
+      ephemeralKind: 'ephemeral_creature' as const,
+      participant: {
+        actorRef,
+        sideRef: 'hostile',
+        actorStateVersion: 1,
+        mechanicsStateVersion: 1,
+        inventoryStateVersion: 1,
+        effectsStateVersion: 1,
+        zone,
+        combatState: 'ready' as const,
+        primaryAttributes: attributes,
+        resources: {
+          hp: { current: 100, maximum: 100 },
+          mana: { current: 0, maximum: 0 },
+          sp: { current: 20, maximum: 20 },
+          customResources: [],
+        },
+        secondaryAttributes: secondary,
+        activeEffects: [],
+        reactionCapabilities: [],
+        equipmentContext: {
+          inventory: { entries: [] },
+          loadout: createCoreV1EmptyEquipmentLoadout(),
+          requirements: {
+            level: 1,
+            primaryAttributes: attributes,
+            knownContentRefs: [],
+            equippedWeaponTags: [],
+            equippedEquipmentTags: [],
+            rulesetCode: 'core-v1' as const,
+          },
+        },
+        initiative: { tieBreak: 50, surprised: false },
+      },
+    });
+    const cases = [
+      { from: 'engaged', desired: 'out_of_range', to: 'near', movementKind: 'disengage', code: 'FLEE_STAGED' },
+      { from: 'near', desired: 'out_of_range', to: 'far', movementKind: 'run', code: 'FLEE_STAGED' },
+      { from: 'medium', desired: 'out_of_range', to: 'out_of_range', movementKind: 'run', code: undefined },
+      { from: 'far', desired: 'out_of_range', to: 'out_of_range', movementKind: 'run', code: undefined },
+      { from: 'engaged', desired: 'far', to: 'near', movementKind: 'disengage', code: 'FLEE_STAGED' },
+      { from: 'near', desired: 'far', to: 'far', movementKind: 'run', code: undefined },
+    ] as const;
+    for (const [index, entry] of cases.entries()) {
+      const run = async (kind: 'flee' | 'move') => {
+        await resetSp();
+        const suffix = `${String(index)}-${kind}`;
+        const encounterRef = `flee-zone-${suffix}`;
+        const created = await encounterService.create({
+          ...seedScope,
+          encounterRef,
+          idempotencyKey: `flee-zone-${suffix}-create`,
+          partySideRef: 'party',
+          participants: [
+            { bindingKind: 'persisted_actor', actorRef: hero.code, sideRef: 'party', zone: entry.from },
+            ephemeral(`flee-phantom-${suffix}`, entry.from),
+          ],
+          relations: [
+            { leftActorRef: hero.code, rightActorRef: hero.code, relation: 'self' },
+            { leftActorRef: hero.code, rightActorRef: `flee-phantom-${suffix}`, relation: 'hostile' },
+            { leftActorRef: `flee-phantom-${suffix}`, rightActorRef: `flee-phantom-${suffix}`, relation: 'self' },
+          ],
+        });
+        const resolved = await encounterService.resolveBeat({
+          ...seedScope,
+          encounterRef,
+          idempotencyKey: `flee-zone-${suffix}-resolve`,
+          expectedStateVersion: created.stateVersion,
+          intent: {
+            actorRef: hero.code,
+            objective: kind === 'flee' ? 'escape' : 'equivalent_movement',
+            narrative: kind === 'flee' ? 'O herói foge em uma etapa legal.' : 'O herói executa o movimento equivalente.',
+            resolutionPolicy: 'atomic',
+            components: kind === 'flee'
+              ? [
+                { type: 'flee', destination: entry.desired },
+                { type: 'protect', targetRef: hero.code },
+              ]
+              : [
+                { type: 'move', destination: entry.to, movementKind: entry.movementKind },
+                { type: 'protect', targetRef: hero.code },
+              ],
+          },
+          npcDirectives: [{ actorRef: `flee-phantom-${suffix}`, strategy: 'defensive' }],
+        });
+        const participant = resolved.participants.find((candidate) => candidate.actorRef === hero.code);
+        expect(participant?.zone).toBe(entry.to);
+        expect(resolved.beatSummary?.componentResults[0]).toMatchObject({
+          index: 0,
+          type: kind,
+          status: kind === 'flee' && entry.code !== undefined ? 'modified' : 'accepted',
+          ...(kind === 'flee' && entry.code !== undefined ? { code: entry.code } : {}),
+        });
+        expect(JSON.stringify(resolved.beatSummary)).not.toContain('DISTANCE_INCOMPATIBLE');
+        await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } }))
+          .resolves.toBe(2);
+        await encounterService.cancel({
+          ...seedScope,
+          encounterRef,
+          idempotencyKey: `flee-zone-${suffix}-cancel`,
+          expectedStateVersion: resolved.stateVersion,
+        });
+        return {
+          tickDelta: (BigInt(resolved.currentTick) - BigInt(created.currentTick)).toString(10),
+          sp: participant?.resources.sp.current,
+          movementEvents: resolved.transitionSummary?.events.filter((event) => event.category === 'movement_resolved').length,
+        };
+      };
+      const flee = await run('flee');
+      const move = await run('move');
+      expect(flee).toEqual(move);
+    }
+
+    await resetSp();
+    const completedRef = 'flee-zone-already-complete';
+    const completed = await encounterService.create({
+      ...seedScope,
+      encounterRef: completedRef,
+      idempotencyKey: 'flee-zone-already-complete-create',
+      partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: hero.code, sideRef: 'party', zone: 'out_of_range' },
+        ephemeral('flee-complete-phantom', 'far'),
+      ],
+      relations: [
+        { leftActorRef: hero.code, rightActorRef: hero.code, relation: 'self' },
+        { leftActorRef: hero.code, rightActorRef: 'flee-complete-phantom', relation: 'hostile' },
+        { leftActorRef: 'flee-complete-phantom', rightActorRef: 'flee-complete-phantom', relation: 'self' },
+      ],
+    });
+    const completedResult = await encounterService.resolveBeat({
+      ...seedScope,
+      encounterRef: completedRef,
+      idempotencyKey: 'flee-zone-already-complete-resolve',
+      expectedStateVersion: completed.stateVersion,
+      intent: {
+        actorRef: hero.code,
+        objective: 'confirm_escape',
+        narrative: 'O herói já está fora do alcance.',
+        resolutionPolicy: 'atomic',
+        components: [{ type: 'flee', destination: 'out_of_range' }],
+      },
+      npcDirectives: [],
+    });
+    expect(completedResult).toMatchObject({
+      batchSummary: {
+        beatsProcessed: 0,
+        actionsResolved: 0,
+        stopReason: 'flee_completed',
+        stopCategory: 'decision',
+        requiresPlayerDecision: true,
+      },
+      beatSummary: {
+        actorsActed: [],
+        componentResults: [{ type: 'flee', status: 'modified', code: 'FLEE_ALREADY_COMPLETE' }],
+      },
+    });
+    expect(completedResult.participants.find((candidate) => candidate.actorRef === hero.code)).toMatchObject({
+      zone: 'out_of_range',
+      resources: { sp: { current: sp.current } },
+    });
+    await encounterService.cancel({
+      ...seedScope,
+      encounterRef: completedRef,
+      idempotencyKey: 'flee-zone-already-complete-cancel',
+      expectedStateVersion: completedResult.stateVersion,
+    });
+
+    await resetSp(2);
+    const blockedRef = 'flee-zone-insufficient-sp';
+    const blocked = await encounterService.create({
+      ...seedScope,
+      encounterRef: blockedRef,
+      idempotencyKey: 'flee-zone-insufficient-sp-create',
+      partySideRef: 'party',
+      participants: [
+        { bindingKind: 'persisted_actor', actorRef: hero.code, sideRef: 'party', zone: 'near' },
+        ephemeral('flee-blocked-phantom', 'near'),
+      ],
+      relations: [
+        { leftActorRef: hero.code, rightActorRef: hero.code, relation: 'self' },
+        { leftActorRef: hero.code, rightActorRef: 'flee-blocked-phantom', relation: 'hostile' },
+        { leftActorRef: 'flee-blocked-phantom', rightActorRef: 'flee-blocked-phantom', relation: 'self' },
+      ],
+    });
+    await expect(encounterService.resolveBeat({
+      ...seedScope,
+      encounterRef: blockedRef,
+      idempotencyKey: 'flee-zone-insufficient-sp-resolve',
+      expectedStateVersion: blocked.stateVersion,
+      intent: {
+        actorRef: hero.code,
+        objective: 'blocked_escape',
+        narrative: 'O herói tenta correr sem SP suficiente.',
+        resolutionPolicy: 'atomic',
+        components: [{ type: 'flee', destination: 'out_of_range' }],
+      },
+      npcDirectives: [],
+    })).rejects.toMatchObject({
+      code: 'ENCOUNTER_BEAT_ATOMIC_REJECTED',
+      issues: [expect.objectContaining({ code: 'RESOURCE_BELOW_REQUIRED' })],
+    });
+    await expect(prisma.idempotencyRecord.count({
+      where: { key: 'encounter:flee-zone-insufficient-sp-resolve' },
+    })).resolves.toBe(0);
+    await expect(encounterService.load({ ...seedScope, encounterRef: blockedRef })).resolves.toMatchObject({
+      stateVersion: blocked.stateVersion,
+      participants: [expect.anything(), expect.objectContaining({ actorRef: hero.code, zone: 'near' })],
+    });
+    await encounterService.cancel({
+      ...seedScope,
+      encounterRef: blockedRef,
+      idempotencyKey: 'flee-zone-insufficient-sp-cancel',
+      expectedStateVersion: blocked.stateVersion,
+    });
+    await resetSp();
+  });
+
+  it('continues automatic escape through legal steps, stops on completion and replays far without rollback', async () => {
+    const hero = await prisma.actor.findFirstOrThrow({
+      where: { code: 'ralph', campaign: { code: seedScope.campaignRef, world: { code: seedScope.worldRef } } },
+      include: { resources: true },
+    });
+    const sp = hero.resources.find((resource) => resource.type === ActorResourceType.SP);
+    if (sp === undefined) throw new Error('Automatic flee requires the protagonist SP resource');
+    const attributes = getInitialAttributePreset('balanced');
+    const secondary = calculateSecondaryAttributes({
+      attributes, weaponFamilyRank: 0, magicSchoolRank: 0,
+      accuracyRank: 0, evasionRank: 0, encumbrancePenalty: 0,
+    });
+    const resetSp = async (current = sp.current) => {
+      await prisma.actorResource.update({
+        where: { actorId_type: { actorId: hero.id, type: ActorResourceType.SP } },
+        data: { current, stateVersion: { increment: 1 } },
+      });
+    };
+    const policy = (maximumBeats: number) => ({
+      actorRef: hero.code,
+      mode: 'bounded' as const,
+      strategy: 'escape' as const,
+      objective: 'Escape through authoritative legal movement.',
+      targetPriority: 'nearest_hostile' as const,
+      protectedActorRefs: [],
+      maximumBeats,
+      resourcePolicy: {
+        allowCommonConsumables: false,
+        allowRareConsumables: false,
+        allowLimitedAbilities: false,
+        preserveManaPercent: 50,
+        preserveSpPercent: 0,
+        stopBelowHpPercent: 0,
+        stopIfProtectedActorBelowHpPercent: 0,
+        allowFlee: true,
+        allowTargetSwitch: true,
+        allowEnvironmentalInteraction: false,
+      },
+    });
+    const create = async (
+      suffix: string,
+      zone: 'engaged' | 'near' | 'medium' | 'far' | 'out_of_range',
+    ) => {
+      const phantomRef = `auto-flee-phantom-${suffix}`;
+      const encounterRef = `auto-flee-${suffix}`;
+      const created = await encounterService.create({
+        ...seedScope,
+        encounterRef,
+        idempotencyKey: `auto-flee-${suffix}-create`,
+        partySideRef: 'party',
+        participants: [
+          { bindingKind: 'persisted_actor', actorRef: hero.code, sideRef: 'party', zone },
+          {
+            bindingKind: 'ephemeral',
+            ephemeralKind: 'ephemeral_creature',
+            participant: {
+              actorRef: phantomRef,
+              sideRef: 'hostile',
+              actorStateVersion: 1,
+              mechanicsStateVersion: 1,
+              inventoryStateVersion: 1,
+              effectsStateVersion: 1,
+              zone,
+              combatState: 'ready',
+              primaryAttributes: attributes,
+              resources: {
+                hp: { current: 100, maximum: 100 },
+                mana: { current: 0, maximum: 0 },
+                sp: { current: 20, maximum: 20 },
+                customResources: [],
+              },
+              secondaryAttributes: secondary,
+              activeEffects: [],
+              reactionCapabilities: [],
+              equipmentContext: {
+                inventory: { entries: [] },
+                loadout: createCoreV1EmptyEquipmentLoadout(),
+                requirements: {
+                  level: 1,
+                  primaryAttributes: attributes,
+                  knownContentRefs: [],
+                  equippedWeaponTags: [],
+                  equippedEquipmentTags: [],
+                  rulesetCode: 'core-v1',
+                },
+              },
+              initiative: { tieBreak: 50, surprised: false },
+            },
+          },
+        ],
+        relations: [
+          { leftActorRef: hero.code, rightActorRef: hero.code, relation: 'self' },
+          { leftActorRef: hero.code, rightActorRef: phantomRef, relation: 'hostile' },
+          { leftActorRef: phantomRef, rightActorRef: phantomRef, relation: 'self' },
+        ],
+      });
+      return { encounterRef, created };
+    };
+
+    await resetSp();
+    const granular = await create('granular', 'engaged');
+    let granularResult = granular.created;
+    let granularMovementEvents = 0;
+    for (let beatIndex = 0; beatIndex < 3; beatIndex += 1) {
+      granularResult = await encounterService.resolveBeat({
+        ...seedScope,
+        encounterRef: granular.encounterRef,
+        idempotencyKey: `auto-flee-granular-${String(beatIndex)}`,
+        expectedStateVersion: granularResult.stateVersion,
+        intent: {
+          actorRef: hero.code,
+          objective: 'escape_granularly',
+          narrative: 'O herói continua a fuga granular.',
+          resolutionPolicy: 'atomic',
+          components: [{ type: 'flee', destination: 'out_of_range' }],
+        },
+        npcDirectives: [],
+      });
+      granularMovementEvents += granularResult.transitionSummary?.events
+        .filter((event) => event.category === 'movement_resolved').length ?? 0;
+    }
+    expect(granularResult.participants.find((candidate) => candidate.actorRef === hero.code)?.zone)
+      .toBe('out_of_range');
+    const granularSignature = {
+      tickDelta: (BigInt(granularResult.currentTick) - BigInt(granular.created.currentTick)).toString(10),
+      stateVersionDelta: granularResult.stateVersion - granular.created.stateVersion,
+      sp: granularResult.participants.find((candidate) => candidate.actorRef === hero.code)?.resources.sp.current,
+      movementEvents: granularMovementEvents,
+    };
+    await encounterService.cancel({
+      ...seedScope,
+      encounterRef: granular.encounterRef,
+      idempotencyKey: 'auto-flee-granular-cancel',
+      expectedStateVersion: granularResult.stateVersion,
+    });
+
+    await resetSp();
+    const engaged = await create('engaged', 'engaged');
+    const engagedInput = {
+      ...seedScope,
+      encounterRef: engaged.encounterRef,
+      idempotencyKey: 'auto-flee-engaged-resolve',
+      expectedStateVersion: engaged.created.stateVersion,
+      policy: policy(12),
+    };
+    const escaped = await encounterService.resolveBeat(engagedInput);
+    expect(escaped).toMatchObject({
+      lifecycleStatus: 'awaiting_intent',
+      batchSummary: {
+        mode: 'automatic',
+        beatsProcessed: 3,
+        stopReason: 'flee_completed',
+        stopCategory: 'decision',
+        requiresPlayerDecision: true,
+        decisionReason: 'flee_completed',
+      },
+    });
+    expect(escaped.participants.find((candidate) => candidate.actorRef === hero.code)).toMatchObject({
+      zone: 'out_of_range',
+      combatState: 'ready',
+      resources: { sp: { current: sp.current - 6 } },
+    });
+    expect(escaped.completionCandidate).toBeNull();
+    expect(escaped.transitionSummary?.events.filter((event) => event.category === 'movement_resolved'))
+      .toHaveLength(3);
+    expect({
+      tickDelta: (BigInt(escaped.currentTick) - BigInt(engaged.created.currentTick)).toString(10),
+      stateVersionDelta: escaped.stateVersion - engaged.created.stateVersion,
+      sp: escaped.participants.find((candidate) => candidate.actorRef === hero.code)?.resources.sp.current,
+      movementEvents: escaped.transitionSummary?.events
+        .filter((event) => event.category === 'movement_resolved').length,
+    }).toEqual(granularSignature);
+    const escapedReplay = await encounterService.resolveBeat(engagedInput);
+    expect(escapedReplay).toEqual(escaped);
+    await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef: engaged.encounterRef } } }))
+      .resolves.toBe(2);
+    await encounterService.cancel({
+      ...seedScope,
+      encounterRef: engaged.encounterRef,
+      idempotencyKey: 'auto-flee-engaged-cancel',
+      expectedStateVersion: escaped.stateVersion,
+    });
+
+    await resetSp();
+    const far = await create('far', 'far');
+    const farInput = {
+      ...seedScope,
+      encounterRef: far.encounterRef,
+      idempotencyKey: 'auto-flee-far-resolve',
+      expectedStateVersion: far.created.stateVersion,
+      policy: policy(12),
+    };
+    const farEscaped = await encounterService.resolveBeat(farInput);
+    expect(farEscaped).toMatchObject({
+      batchSummary: {
+        beatsProcessed: 1,
+        stopReason: 'flee_completed',
+        stopCategory: 'decision',
+      },
+    });
+    expect(farEscaped.batchSummary?.actionsResolved).toBeGreaterThan(0);
+    expect(farEscaped.participants.find((candidate) => candidate.actorRef === hero.code)).toMatchObject({
+      zone: 'out_of_range',
+      resources: { sp: { current: sp.current - 3 } },
+    });
+    expect(JSON.stringify(farEscaped)).not.toContain('DISTANCE_INCOMPATIBLE');
+    await expect(encounterService.resolveBeat(farInput)).resolves.toEqual(farEscaped);
+    await encounterService.cancel({
+      ...seedScope,
+      encounterRef: far.encounterRef,
+      idempotencyKey: 'auto-flee-far-cancel',
+      expectedStateVersion: farEscaped.stateVersion,
+    });
+
+    await resetSp();
+    const bounded = await create('budget', 'engaged');
+    const firstBudget = await encounterService.resolveBeat({
+      ...seedScope,
+      encounterRef: bounded.encounterRef,
+      idempotencyKey: 'auto-flee-budget-first',
+      expectedStateVersion: bounded.created.stateVersion,
+      policy: policy(1),
+    });
+    expect(firstBudget).toMatchObject({
+      batchSummary: {
+        beatsProcessed: 1,
+        stopReason: 'processing_limit',
+        stopCategory: 'technical',
+        requiresPlayerDecision: false,
+      },
+    });
+    expect(firstBudget.participants.find((candidate) => candidate.actorRef === hero.code)?.zone).toBe('near');
+    const completedBudget = await encounterService.resolveBeat({
+      ...seedScope,
+      encounterRef: bounded.encounterRef,
+      idempotencyKey: 'auto-flee-budget-second',
+      expectedStateVersion: firstBudget.stateVersion,
+      policy: policy(2),
+    });
+    expect(completedBudget).toMatchObject({
+      batchSummary: {
+        beatsProcessed: 2,
+        stopReason: 'flee_completed',
+        stopCategory: 'decision',
+      },
+    });
+    expect(completedBudget.participants.find((candidate) => candidate.actorRef === hero.code)?.zone)
+      .toBe('out_of_range');
+    await encounterService.cancel({
+      ...seedScope,
+      encounterRef: bounded.encounterRef,
+      idempotencyKey: 'auto-flee-budget-cancel',
+      expectedStateVersion: completedBudget.stateVersion,
+    });
+
+    await resetSp(2);
+    const blocked = await create('blocked', 'near');
+    const blockedResult = await encounterService.resolveBeat({
+      ...seedScope,
+      encounterRef: blocked.encounterRef,
+      idempotencyKey: 'auto-flee-blocked-resolve',
+      expectedStateVersion: blocked.created.stateVersion,
+      policy: policy(12),
+    });
+    expect(blockedResult).toMatchObject({
+      batchSummary: {
+        beatsProcessed: 0,
+        actionsResolved: 0,
+        stopReason: 'flee_blocked_insufficient_sp',
+        stopCategory: 'decision',
+        requiresPlayerDecision: true,
+        decisionReason: 'flee_blocked_insufficient_sp',
+        availableAlternatives: [
+          'Recover enough SP for the next run step.',
+          'Choose a different explicit action.',
+        ],
+      },
+    });
+    expect(blockedResult.participants.find((candidate) => candidate.actorRef === hero.code)).toMatchObject({
+      zone: 'near',
+      resources: { sp: { current: 2 } },
+    });
+    await encounterService.cancel({
+      ...seedScope,
+      encounterRef: blocked.encounterRef,
+      idempotencyKey: 'auto-flee-blocked-cancel',
+      expectedStateVersion: blockedResult.stateVersion,
+    });
+
+    await resetSp(4);
+    const blockedAfterStep = await create('blocked-after-step', 'near');
+    const blockedAfterStepInput = {
+      ...seedScope,
+      encounterRef: blockedAfterStep.encounterRef,
+      idempotencyKey: 'auto-flee-blocked-after-step-resolve',
+      expectedStateVersion: blockedAfterStep.created.stateVersion,
+      policy: policy(12),
+    };
+    const blockedAfterStepResult = await encounterService.resolveBeat(blockedAfterStepInput);
+    expect(blockedAfterStepResult).toMatchObject({
+      batchSummary: {
+        beatsProcessed: 1,
+        stopReason: 'flee_blocked_insufficient_sp',
+        stopCategory: 'decision',
+        requiresPlayerDecision: true,
+      },
+    });
+    expect(blockedAfterStepResult.participants.find((candidate) => candidate.actorRef === hero.code))
+      .toMatchObject({
+        zone: 'far',
+        resources: { sp: { current: 1 } },
+      });
+    await expect(encounterService.resolveBeat(blockedAfterStepInput)).resolves.toEqual(blockedAfterStepResult);
+    await encounterService.cancel({
+      ...seedScope,
+      encounterRef: blockedAfterStep.encounterRef,
+      idempotencyKey: 'auto-flee-blocked-after-step-cancel',
+      expectedStateVersion: blockedAfterStepResult.stateVersion,
+    });
+    await resetSp();
+  });
+
   it('keeps the 1-12 automatic matrix integral with canonical replay at every checkpoint', async () => {
     const fixture = await createBeatNpcFixture('automatic-matrix', 1, async ({ world, campaign, hero }) => {
       const code = 'automatic-matrix-sustain';

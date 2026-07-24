@@ -5,7 +5,9 @@ import {
   createCoreV1EncounterActionSlots,
   createCoreV1EncounterState,
   getInitialAttributePreset,
+  resolveCoreV1EncounterTargets,
   validateCoreV1ContentProfile,
+  type CombatZone,
   type CoreV1EncounterParticipantInput,
   type CoreV1EncounterState,
 } from '../rules/core-v1/index.js';
@@ -13,8 +15,10 @@ import {
   applyBeatGuardCapabilities,
   automaticReactionResolver,
   beatComponentRejectionReason,
+  deriveEncounterFleeStep,
   ENCOUNTER_MAX_SCENE_RESPONSE_BYTES,
   encounterScenePackage,
+  encounterTargetingContext,
   genericEncounterAction,
   normalizeBeatComponent,
   selectNpcBeatComponent,
@@ -34,7 +38,7 @@ const secondary = calculateSecondaryAttributes({
   accuracyRank: 0, evasionRank: 0, encumbrancePenalty: 0,
 });
 
-function participant(actorRef: string, sideRef: string, zone: 'engaged' | 'near' | 'medium' | 'far'): CoreV1EncounterParticipantInput {
+function participant(actorRef: string, sideRef: string, zone: CombatZone): CoreV1EncounterParticipantInput {
   return {
     actorRef, sideRef, actorStateVersion: 1, mechanicsStateVersion: 1,
     inventoryStateVersion: 1, effectsStateVersion: 1, zone, combatState: 'ready',
@@ -58,10 +62,10 @@ function participant(actorRef: string, sideRef: string, zone: 'engaged' | 'near'
   };
 }
 
-function state() {
+function state(heroZone: CombatZone = 'near') {
   const created = createCoreV1EncounterState({
     encounterRef: 'beat-test', partySideRef: 'party', currentTick: 0n, status: 'active',
-    participants: [participant('hero', 'party', 'near'), participant('ally', 'party', 'near'), participant('enemy', 'hostile', 'far')],
+    participants: [participant('hero', 'party', heroZone), participant('ally', 'party', 'near'), participant('enemy', 'hostile', 'far')],
     relations: [
       { leftActorRef: 'ally', rightActorRef: 'ally', relation: 'self' },
       { leftActorRef: 'ally', rightActorRef: 'enemy', relation: 'hostile' },
@@ -226,9 +230,129 @@ describe('encounter beat orchestration primitives', () => {
       });
     expect(normalizeBeatComponent(state(), 'hero', { type: 'flee' }))
       .toMatchObject({
-        component: { type: 'flee', destination: 'out_of_range' },
-        modification: { code: 'FLEE_DESTINATION_DEFAULTED', field: 'destination' },
+        component: { type: 'move', destination: 'far', movementKind: 'run' },
+        modification: { code: 'FLEE_STAGED', field: 'destination' },
       });
+  });
+
+  it('derives one legal canonical flee step from every zone without teleporting', () => {
+    expect([
+      deriveEncounterFleeStep('engaged', 'out_of_range'),
+      deriveEncounterFleeStep('near', 'out_of_range'),
+      deriveEncounterFleeStep('medium', 'out_of_range'),
+      deriveEncounterFleeStep('far', 'out_of_range'),
+      deriveEncounterFleeStep('out_of_range', 'out_of_range'),
+    ]).toEqual([
+      {
+        status: 'step', from: 'engaged', to: 'near', desiredDestination: 'out_of_range',
+        movementKind: 'disengage', transitions: 1, reachesDestination: false,
+      },
+      {
+        status: 'step', from: 'near', to: 'far', desiredDestination: 'out_of_range',
+        movementKind: 'run', transitions: 2, reachesDestination: false,
+      },
+      {
+        status: 'step', from: 'medium', to: 'out_of_range', desiredDestination: 'out_of_range',
+        movementKind: 'run', transitions: 2, reachesDestination: true,
+      },
+      {
+        status: 'step', from: 'far', to: 'out_of_range', desiredDestination: 'out_of_range',
+        movementKind: 'run', transitions: 1, reachesDestination: true,
+      },
+      { status: 'completed', from: 'out_of_range', desiredDestination: 'out_of_range' },
+    ]);
+    expect(deriveEncounterFleeStep('engaged', 'far')).toMatchObject({
+      status: 'step', to: 'near', movementKind: 'disengage', reachesDestination: false,
+    });
+    expect(deriveEncounterFleeStep('near', 'far')).toMatchObject({
+      status: 'step', to: 'far', movementKind: 'run', reachesDestination: true,
+    });
+    expect(deriveEncounterFleeStep('far', 'far')).toEqual({
+      status: 'completed', from: 'far', desiredDestination: 'far',
+    });
+  });
+
+  it('normalizes staged flee into the same legal movement primitive used by the Core', () => {
+    const cases = [
+      ['engaged', 'near', 'disengage', 'FLEE_STAGED'],
+      ['near', 'far', 'run', 'FLEE_STAGED'],
+      ['medium', 'out_of_range', 'run', undefined],
+      ['far', 'out_of_range', 'run', undefined],
+    ] as const;
+    for (const [from, to, movementKindValue, modificationCode] of cases) {
+      const encounter = state(from);
+      const normalized = normalizeBeatComponent(encounter, 'hero', {
+        type: 'flee', destination: 'out_of_range',
+      });
+      expect(normalized.component).toMatchObject({
+        type: 'move', destination: to, movementKind: movementKindValue,
+      });
+      expect(normalized.modification?.code).toBe(modificationCode);
+      expect(beatComponentRejectionReason(encounter, 'hero', normalized.component, 'fallback'))
+        .toBe('fallback');
+      expect(genericEncounterAction(
+        encounter, 'hero', normalized.component, `flee-${from}`, 'secondary',
+      ).definition.movement).toEqual({
+        kind: movementKindValue, from, to, terrain: 'normal',
+      });
+    }
+    expect(normalizeBeatComponent(state('out_of_range'), 'hero', {
+      type: 'flee', destination: 'out_of_range',
+    })).toMatchObject({
+      completedFlee: true,
+      component: { type: 'flee', destination: 'out_of_range' },
+      modification: { code: 'FLEE_ALREADY_COMPLETE' },
+    });
+  });
+
+  it('keeps self targeting independent from the actor absolute zone', () => {
+    for (const zone of ['engaged', 'near', 'medium', 'far', 'out_of_range'] as const) {
+      const encounter = state(zone);
+      const resolved = resolveCoreV1EncounterTargets({
+        encounter,
+        sourceActorRef: 'hero',
+        targeting: { type: 'self', rangeBand: 'self' },
+        selector: 'self',
+        requestedTargetRefs: [],
+        allowedRelations: ['self'],
+        context: encounterTargetingContext(encounter, 'hero'),
+      });
+      expect(resolved).toMatchObject({
+        ok: true,
+        value: [{ targetRef: 'hero' }],
+      });
+    }
+  });
+
+  it('projects the canonical run step and its SP blocker without changing movement limits', () => {
+    const nearScene = encounterScenePackage(state('near'), new Map());
+    expect(nearScene.participants.find((entry) => entry.actorRef === 'hero')?.usableActions.movements)
+      .toEqual(expect.arrayContaining([
+        { destination: 'far', movementKind: 'run', canUse: true },
+        {
+          destination: 'out_of_range',
+          movementKind: 'run',
+          canUse: false,
+          blockers: ['destination_too_far_for_one_movement'],
+        },
+      ]));
+    const lowSp = {
+      ...state('near'),
+      participants: state('near').participants.map((entry) => entry.actorRef !== 'hero' ? entry : {
+        ...entry,
+        resources: { ...entry.resources, sp: { ...entry.resources.sp, current: 2 } },
+      }),
+    };
+    expect(encounterScenePackage(lowSp, new Map()).participants
+      .find((entry) => entry.actorRef === 'hero')?.usableActions.movements)
+      .toEqual(expect.arrayContaining([
+        {
+          destination: 'far',
+          movementKind: 'run',
+          canUse: false,
+          blockers: ['insufficient_sp'],
+        },
+      ]));
   });
 
   it('represents defend, protect and intercept as one-use encounter reaction capabilities without abilities', () => {

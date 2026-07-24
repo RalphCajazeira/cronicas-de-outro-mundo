@@ -1,5 +1,26 @@
 # Decision Log
 
+## 2026-07-23 — Fuga em etapas canônicas sem teleporte
+
+Decisão:
+
+- tratar `flee` como intenção de destino `far|out_of_range` e derivar somente o próximo movimento legal;
+- centralizar a regra em `deriveEncounterFleeStep`, reutilizada por normalização, rejeição, projeção e política automática;
+- usar `engaged → near` por `disengage`; fora de `engaged`, usar `run` com no máximo duas transições;
+- marcar passos intermediários como `FLEE_STAGED`, preservando solicitado/aplicado no relatório;
+- fazer `escape` priorizar fuga e continuar por beats até destino, bloqueio, decisão, terminalidade ou budget;
+- parar em `out_of_range` sem novo evento, custo ou loop e sem remover participante, declarar derrota/morte ou criar candidato terminal;
+- manter targeting self, Core de alcance, limites de movimento, hard max 12, timeout, OpenAPI, Prisma e schema inalterados.
+
+Evidência:
+
+- `far → out_of_range` isolado já era legal (`run`, uma transição, 3 SP, 700 ticks);
+- a falha remota ocorria na iteração seguinte, que tentava `out_of_range → out_of_range`, recebia rejeição por zero transições e revertia atomicamente o passo legal anterior;
+- a matriz por zona, equivalência com `move`, budget continuável, replay, bloqueio por SP e PostgreSQL real passam com a regra em etapas;
+- ações self-targeted continuam selecionando exclusivamente o próprio ator em qualquer zona, sem ampliar alcance contra terceiros.
+
+Status: implementada e validada localmente; sem migration, commit, push, deploy, staging ou GPT Builder
+
 ## 2026-07-23 — Autonomia alta e classificação explícita das 20 GPT Actions
 
 Contexto:

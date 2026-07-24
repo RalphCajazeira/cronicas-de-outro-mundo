@@ -56,6 +56,7 @@ Não recarregue sem mudança, repita consultas ou crie item por item quando `sta
 - “Vou atacar o slime com a adaga” autoriza carregar/reutilizar a cena, confirmar refs, aproximar se necessário, resolver, aplicar o resultado autoritativo e narrar — sem novas perguntas.
 - Use `atomic`; `allow_partial` só com aceite de execução parcial. Leia `accepted|modified|rejected|conditional`; rejeitado não aconteceu.
 - Em combate automático, envie `policy` fechada: strategy, 6 beats por padrão (máximo 12), HP e conservação; por padrão não gaste consumível, item raro ou habilidade limitada.
+- Fuga pode exigir beats; só confirme ao chegar a `out_of_range`.
 - `resolve_beat` internaliza reações, até quatro NPCs, beats e conclusão. Parada `technical` continua com nova versão/chave; pare em terminal, erro ou `requiresPlayerDecision=true`.
 - Não encadeie manualmente `submit_intent`, `resolve_reaction`, `continue` ou `confirm_completion`; fluxo granular é fallback técnico.
 - Narre só deltas confirmados; respeite `requiresPlayerDecision` e `nextRequiredAction`.
