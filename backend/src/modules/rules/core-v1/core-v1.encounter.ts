@@ -1745,7 +1745,7 @@ export function compileCoreV1EncounterAction(
     events.push(eventFor(source, `${actionRef}-started`, sequence++, 'action_started', startTick, { actionRef }));
     let lastEffectTick = effectTick;
     const combo = input.definition.combo;
-    if (combo !== undefined) {
+    if (input.definition.actionSource !== 'wait' && combo !== undefined) {
       const validatedCombo = validateMultiTargetAction(combo);
       if (validatedCombo.comboSteps.length > CORE_V1_MAX_COMBO_STEPS
         || validatedCombo.maxComboEvents > Math.min(CORE_V1_MAX_COMBO_EVENTS, CORE_V1_MAX_ENCOUNTER_COMBO_EVENTS)) {
@@ -1760,7 +1760,7 @@ export function compileCoreV1EncounterAction(
           actionRef, targetRef: target.targetRef, targetOrdinal: target.targetOrdinal, comboStepRef: step.stepRef,
         }));
       }
-    } else {
+    } else if (input.definition.actionSource !== 'wait') {
       for (const target of targets.value) {
         const tick = addTicks(effectTick, target.effectTickOffset, 'target effect tick');
         lastEffectTick = tick > lastEffectTick ? tick : lastEffectTick;
@@ -2802,6 +2802,10 @@ export function processNextCoreV1EncounterEvent(
         readyActors.push(actorRef);
       }
       if (event.actionRef !== undefined) {
+        const activeAction = next.activeActions.find((candidate) => candidate.actionRef === event.actionRef);
+        if (activeAction?.actionKind === 'wait' && activeAction.state === 'active') {
+          next = updateAction(next, activeAction.actionRef, (current) => ({ ...current, state: 'resolved' }));
+        }
         const action = next.activeActions.find((candidate) => candidate.actionRef === event.actionRef);
         if (action !== undefined && ['resolved', 'interrupted', 'invalidated'].includes(action.state)) {
           if (action.state !== 'invalidated') resolvedActions.push(action.actionRef);

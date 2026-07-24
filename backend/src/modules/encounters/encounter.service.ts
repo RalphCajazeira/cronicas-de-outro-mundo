@@ -53,8 +53,8 @@ import {
   applyBeatGuardCapabilities,
   automaticReactionResolver,
   beatComponentRejectionReason,
-  consumeTriggeredBeatCapabilities,
   deriveEncounterFleeStep,
+  expireBeatGuardCapabilities,
   encounterScenePackage,
   genericEncounterAction,
   normalizeBeatComponent,
@@ -579,6 +579,8 @@ function mechanicalBeatIntent(
       ? { weaponEntryRef: component.inventoryEntryRef } : { contentRef: component.contentRef }),
     ...(component.type === 'attack' && component.versatileMode !== undefined
       ? { versatileMode: component.versatileMode } : {}),
+    ...(component.type === 'attack'
+      ? { reactionPolicy: { mode: 'allow' as const, allowCounterAttack: false } } : {}),
   };
 }
 
@@ -685,7 +687,7 @@ function evaluateBeatComponentCondition(
   }
   return {
     component: { type: 'defend', ...(component.essential === undefined ? {} : { essential: component.essential }) },
-    skipScheduling: true,
+    skipScheduling: false,
     omitFromApplied: false,
     modification: {
       code: 'CONDITION_FALLBACK',
@@ -716,9 +718,8 @@ async function executeBeatPlan(
   const completedFleeIndexes = new Set(normalized.flatMap((entry, index) => (
     entry.completedFlee === true ? [index] : []
   )));
-  const conditionalComponentIndexes = new Set(appliedComponents.flatMap((component, index) => (
-    evaluated[index]?.skipScheduling === true
-    || component.type === 'protect' || component.type === 'intercept' || component.type === 'prepare' ? [index] : []
+  const conditionalComponentIndexes = new Set(appliedComponents.flatMap((_, index) => (
+    evaluated[index]?.skipScheduling === true ? [index] : []
   )));
   const scheduledComponentIndexes = new Set(appliedComponents.flatMap((_, index) => (
     conditionalComponentIndexes.has(index) || completedFleeIndexes.has(index) ? [] : [index]
@@ -817,6 +818,10 @@ async function executeBeatPlan(
       index,
       type: requestedComponent.type === 'flee' ? 'flee' : component.type,
       status,
+      ...(status === 'accepted' && ['defend', 'protect', 'intercept'].includes(component.type) ? {
+        code: 'GUARD_PREPARED',
+        reason: 'The authoritative guard capability was prepared for this beat; a reaction is reported only if it is actually resolved.',
+      } : {}),
       ...(!wasResolved ? {
         ...rejectedComponentDetails(rejectedReason, index),
         reason: rejectedReason,
@@ -843,7 +848,7 @@ async function executeBeatPlan(
       ...evaluated.flatMap((entry, index) => entry.omitFromApplied ? [index] : []),
       ...completedFleeIndexes,
     ]),
-    prepared: prepared.filter(({ index }) => results[index]?.status === 'conditional'),
+    prepared: prepared.filter(({ index }) => results[index]?.status !== 'rejected'),
     resolvedConsumables: expectedActions.flatMap(({ actionRef, component }) => (
       component.type === 'use_item' && resolved.has(actionRef)
         ? [{ actionRef, actorRef, entryRef: component.inventoryEntryRef }] : []
@@ -1001,7 +1006,7 @@ async function executeOneResolvedBeat(
   );
   current = triggered.state;
   reports.push(...triggered.reports);
-  for (const report of reports) current = consumeTriggeredBeatCapabilities(current, report);
+  current = expireBeatGuardCapabilities(current);
   const terminal = current.completionCandidate !== null;
   if (terminal) current = coreValue(confirmCoreV1EncounterCompletion(current));
   return {

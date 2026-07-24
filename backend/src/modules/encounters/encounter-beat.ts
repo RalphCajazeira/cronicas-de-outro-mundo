@@ -4,7 +4,6 @@ import {
   zoneDistance,
   type CoreV1EncounterActionDefinition,
   type CoreV1EncounterActionIntent,
-  type CoreV1EncounterBatchResult,
   type CoreV1EncounterState,
   type CoreV1EncounterTargetingContext,
   type CombatZone,
@@ -560,18 +559,9 @@ export function applyBeatGuardCapabilities(
   return changed ? { ...state, stateVersion: state.stateVersion + 1, participants } : state;
 }
 
-export function consumeTriggeredBeatCapabilities(
-  state: CoreV1EncounterState,
-  batch: CoreV1EncounterBatchResult,
-): CoreV1EncounterState {
-  const reactors = new Set(batch.processedEvents.flatMap((event) => (
-    event.type === 'reaction_resolved' || event.type === 'counter_attack_started'
-      ? [event.targetRef ?? event.timelineEvent.actorRef] : []
-  )));
-  if (reactors.size === 0) return state;
+export function expireBeatGuardCapabilities(state: CoreV1EncounterState): CoreV1EncounterState {
   let changed = false;
   const participants = state.participants.map((participant) => {
-    if (!reactors.has(participant.actorRef)) return participant;
     const reactionCapabilities = participant.reactionCapabilities.filter((capability) => !capability.capabilityRef.startsWith('beat-'));
     if (reactionCapabilities.length === participant.reactionCapabilities.length) return participant;
     changed = true;

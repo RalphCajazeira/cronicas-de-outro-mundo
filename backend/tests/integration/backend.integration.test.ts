@@ -2930,8 +2930,8 @@ describe('Phase 1L-B transactional encounter adapter', () => {
           {
             index: 0, type: 'move', status: 'modified', code: 'MOVEMENT_KIND_INFERRED',
           },
-          { index: 1, type: 'protect', status: 'conditional' },
-          { index: 2, type: 'prepare', status: 'conditional' },
+          { index: 1, type: 'protect', status: 'accepted', code: 'GUARD_PREPARED' },
+          { index: 2, type: 'prepare', status: 'accepted' },
         ],
         },
       });
@@ -3064,7 +3064,7 @@ describe('Phase 1L-B transactional encounter adapter', () => {
         issues: [
           expect.objectContaining({ path: 'intent.components.0', code: 'ATOMIC_ROLLBACK' }),
           expect.objectContaining({ path: 'intent.components.1', code: 'DISTANCE_INCOMPATIBLE' }),
-          expect.objectContaining({ path: 'intent.components.2', code: 'ATOMIC_ROLLBACK' }),
+          expect.objectContaining({ path: 'intent.components.2', code: 'COMPONENT_NOT_RESOLVED' }),
         ],
       });
       await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } })).resolves.toBe(1);
@@ -3093,14 +3093,14 @@ describe('Phase 1L-B transactional encounter adapter', () => {
         componentResults: [
           { index: 0, status: 'modified', code: 'MOVEMENT_KIND_INFERRED' },
           { index: 1, status: 'rejected', code: 'DISTANCE_INCOMPATIBLE' },
-          { index: 2, status: 'conditional', code: 'TRIGGER_PENDING' },
+          { index: 2, status: 'rejected', code: 'COMPONENT_NOT_RESOLVED' },
         ],
-        npcResults: [{ actorRef: 'lyra', status: 'rejected', reason: 'no_valid_target' }],
+        npcResults: [{ actorRef: 'lyra', status: 'acted' }],
       });
       expect(partial.scene?.participants.find((entry) => entry.actorRef === 'ralph'))
         .toMatchObject({ zone: 'medium' });
-      expect(partial.scene?.participants.find((entry) => entry.actorRef === 'ralph')?.preparedActionRefs)
-        .toEqual(expect.arrayContaining([expect.stringContaining('prepared-enemy-attacks-')]));
+      expect(partial.scene?.participants.find((entry) => entry.actorRef === 'ralph'))
+        .not.toHaveProperty('preparedActionRefs');
       await expect(prisma.encounterOperation.count({ where: { encounter: { encounterRef } } })).resolves.toBe(2);
     } finally {
       const persisted = await prisma.encounter.findFirst({ where: { encounterRef }, select: { lifecycleStatus: true, stateVersion: true } });
@@ -7230,5 +7230,22 @@ describe('resolve_beat mechanical vertical slice', () => {
       await expect(prisma.actorResource.findUniqueOrThrow({ where: { id: sourceHp.id } }))
         .resolves.toMatchObject({ current: sourceMaxHp });
     });
+
+    const genericComponents = [
+      ['defend', { type: 'defend' }],
+      ['protect', { type: 'protect', targetRef: source.code }],
+      ['intercept', { type: 'intercept', targetRef: source.code }],
+      ['prepare', {
+        type: 'prepare', contentRef: { scope: 'campaign', contentType: 'spell', code: 'seed-mark-spell', versionNumber: 1 },
+        trigger: 'enemy_attacks', targetRefs: [target.code],
+      }],
+      ['assist', { type: 'assist', targetRef: source.code }],
+      ['observe', { type: 'observe' }],
+      ['interact', { type: 'interact', targetRef: source.code, description: 'inspect the ward' }],
+      ['improvise', { type: 'improvise', description: 'take cover' }],
+    ] as const;
+    for (const [suffix, component] of genericComponents) {
+      await resolve(suffix, component, () => Promise.resolve());
+    }
   });
 });

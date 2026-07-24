@@ -19,6 +19,7 @@ import {
   ENCOUNTER_MAX_SCENE_RESPONSE_BYTES,
   encounterScenePackage,
   encounterTargetingContext,
+  expireBeatGuardCapabilities,
   genericEncounterAction,
   normalizeBeatComponent,
   selectNpcBeatComponent,
@@ -218,6 +219,24 @@ describe('encounter beat orchestration primitives', () => {
       .toBe('fallback');
   });
 
+  it('maps generic temporal actions to the canonical profile-less wait primitive', () => {
+    const encounter = state();
+    const components = [
+      { type: 'defend' }, { type: 'protect', targetRef: 'ally' }, { type: 'intercept', targetRef: 'ally' },
+      { type: 'prepare', contentRef: { scope: 'world', contentType: 'skill', code: 'strike', versionNumber: 1 }, trigger: 'enemy_attacks' },
+      { type: 'assist', targetRef: 'ally' }, { type: 'observe' }, { type: 'interact', targetRef: 'ally' },
+      { type: 'improvise', description: 'take cover' },
+    ] as const;
+    for (const [index, component] of components.entries()) {
+      const action = genericEncounterAction(encounter, 'hero', component, `generic-${String(index)}`, 'secondary');
+      expect(action.intent).toMatchObject({ actionSource: 'wait' });
+      expect(action.definition).toMatchObject({
+        actionSource: 'wait', actionKind: 'wait', actionTags: ['minor'], fullPrimaryAction: false, effectRefs: [],
+      });
+      expect(action.definition.profile).toBeUndefined();
+    }
+  });
+
   it('reports deterministic movement and flee normalization as explicit modifications', () => {
     expect(normalizeBeatComponent(state(), 'hero', { type: 'move', destination: 'medium' }))
       .toEqual({
@@ -373,6 +392,9 @@ describe('encounter beat orchestration primitives', () => {
       action: {} as never,
       reactorActorRef: 'hero', reactionKind: 'block', currentTick: guarded.currentTick,
     })).toMatchObject({ kind: 'block', success: true });
+    const expired = expireBeatGuardCapabilities(guarded);
+    expect(expired.participants.every((participant) => participant.reactionCapabilities
+      .every((capability) => !capability.capabilityRef.startsWith('beat-')))).toBe(true);
   });
 
   it('chooses deterministic hostile and allied fallbacks from relations and actor tactics', () => {

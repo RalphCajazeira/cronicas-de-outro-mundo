@@ -1025,6 +1025,38 @@ describe('core-v1 action compile, timeline and effects composition', () => {
     }), 'UNKNOWN_FIELD');
   });
 
+  it('resolves a profile-less wait through action_started and actor_ready without an effect event', () => {
+    const { state, context } = setup();
+    const waitIntent: CoreV1EncounterActionIntent = {
+      intentRef: 'wait-intent', sourceActorRef: 'hero', slotRef: 'primary', actionSource: 'wait',
+      targetSelector: 'self', requestedTargetRefs: [],
+    };
+    const waitDefinition: CoreV1EncounterActionDefinition = {
+      actionSource: 'wait', actionKind: 'wait', actionTags: ['wait'], fullPrimaryAction: true,
+      allowedRelations: ['self'], effectRefs: [], defenses: {}, interruptible: false,
+      blockable: false, dodgeable: false, canRetargetBeforeEffect: false,
+    };
+    const wait = expectOk(compileCoreV1EncounterAction({
+      encounter: state,
+      intent: waitIntent,
+      definition: waitDefinition,
+      targetingContext: context,
+    }));
+    expect(wait).toMatchObject({ preparationTicks: 0n, recoveryTicks: 100n, executionPlan: { effectRefs: [] } });
+    expect(wait.executionPlan.profile).toBeUndefined();
+    expect(wait.internalEvents.map((event) => event.type)).toEqual(['action_started', 'actor_ready']);
+
+    const started = expectOk(processNextCoreV1EncounterEvent(expectOk(scheduleCoreV1EncounterAction(state, wait)), runtime));
+    expect(started.encounterAfter.activeActions).toEqual([expect.objectContaining({ actionRef: wait.actionRef, state: 'active' })]);
+    const ready = expectOk(processNextCoreV1EncounterEvent(started.encounterAfter, runtime));
+    expect(ready.resolvedActions).toEqual([wait.actionRef]);
+    expect(ready.effectResolutions).toEqual([]);
+    expect(ready.encounterAfter.activeActions).toEqual([]);
+    expect(ready.encounterAfter.participants.find((entry) => entry.actorRef === 'hero')).toMatchObject({
+      combatState: 'ready', actionSlots: [expect.objectContaining({ slotRef: 'primary', nextActionAtTick: wait.nextActionAtTick })],
+    });
+  });
+
   it('matches authoritative content refs by identity instead of property insertion order', () => {
     const { state, context } = setup();
     const reorderedContentRef = {

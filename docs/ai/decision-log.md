@@ -718,3 +718,23 @@ Evidência:
 - auto-12 permanece em 118 queries e 8.567 bytes no fixture de budget, com uma carga de catálogo e uma cápsula final.
 
 Status: correção local validada com PostgreSQL real; sem migration, commit, push, deploy, limpeza remota ou alteração do GPT Builder
+
+## 2026-07-23 — `wait` temporal sem efeito mecânico
+
+Decisão:
+
+- tratar `wait` como primitiva temporal profile-less: ela agenda `action_started` e `actor_ready`, mas nunca `action_effect`;
+- resolver o `wait` em `actor_ready`, preservando o audit de ação resolvida, slot ocupado e recuperação canônica de 100 ticks;
+- reutilizar essa primitiva para `defend`, `protect`, `intercept`, `prepare`, `assist`, `observe`, `interact` e `improvise`, sem profile artificial, dano, status ou alteração de targeting;
+- fazer `protect`, `intercept` e `prepare` consumirem a janela temporal antes de preparar a capability/plano; o fallback fechado `defend` também passa pelo mesmo agendamento;
+- expirar toda capability `beat-*` ao final do beat que a criou, tenha ela reagido ou não.
+- usar o campo público já versionado de resultado do componente para marcar `GUARD_PREPARED`; bloquear só é narrável quando o Core confirmar uma reação.
+- permitir reações automáticas somente para o primitive de ataque mecânico; `cast` e `use_item` preservam sua política existente para não transformar cura, buff ou consumível em gatilho defensivo global.
+
+Evidência:
+
+- o compilador aceitava `wait` sem profile e calculava custo zero, mas ainda criava `action_effect`; o processador exigia profile nesse evento e o traduzia para `no_valid_target`, projetado publicamente como `BEAT_REJECTED`/`NO_VALID_TARGET`;
+- o teste Core confirma eventos `action_started`/`actor_ready`, nenhuma resolução de efeito e ação resolvida no tick de readiness;
+- as suites unitária e PostgreSQL cobrem as ações genéricas, o NPC defensivo, fallback, plano composto, replay e rollback, sem migration ou configuração remota.
+
+Status: correção local em revisão pré-commit; sem commit, push, deploy, staging, produção ou GPT Builder
