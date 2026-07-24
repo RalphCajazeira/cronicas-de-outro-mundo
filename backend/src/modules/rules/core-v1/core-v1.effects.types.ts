@@ -182,6 +182,8 @@ export interface CoreV1DamageApplicationInput {
   readonly addDamage?: boolean;
   readonly relevantRank?: number;
   readonly situationalHitModifiersBps?: number;
+  readonly criticalChanceModifierBps?: number;
+  readonly forcedCritical?: boolean;
   readonly rolls: CoreV1InjectedRolls;
   readonly targeting: CoreV1TargetResolutionContext;
   readonly defense: CoreV1DamageDefenseContext;
@@ -284,6 +286,9 @@ export interface CoreV1EffectSequenceInput {
   readonly weaponDamageComponents?: readonly DamageComponentDefinition[];
   readonly costModifiers?: CoreV1CostModifierSet;
   readonly maximumPrimaryAttribute?: number;
+  readonly situationalHitModifiersBps?: number;
+  readonly criticalChanceModifierBps?: number;
+  readonly forcedCritical?: boolean;
 }
 
 export interface CoreV1EffectSequenceResult {

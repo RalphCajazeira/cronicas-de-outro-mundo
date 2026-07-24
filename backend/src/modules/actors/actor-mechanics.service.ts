@@ -13,6 +13,7 @@ import {
   CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM,
   CORE_V1_2_TECHNICAL_LEVEL_MAXIMUM,
   CORE_V1_2_VERSION_CODE,
+  CORE_V1_3_VERSION_CODE,
   CORE_V1_PRIMARY_ATTRIBUTES,
   calculateEffectiveAttributes,
   calculateInventoryEncumbrance,
@@ -36,8 +37,8 @@ import {
   type InventoryMechanicalInputsClient,
 } from '../inventory/inventory-mechanical-inputs.js';
 import {
-  validateCoreV12RulesetVersion,
   validateCoreV1RulesetVersion,
+  validateSupportedCoreRulesetVersion,
 } from '../rules/ruleset.registry.js';
 import {
   loadActorActiveEffectMechanicalInputs,
@@ -66,7 +67,9 @@ export const ACTOR_ATTRIBUTE_POINTS_PER_ADDITIONAL_LEVEL = 10;
 export type ActorProgressionPolicy = 'legacy_core_v1' | 'unbounded_core_v1_2';
 
 export function actorProgressionPolicy(rulesetVersionCode: string): ActorProgressionPolicy {
-  if (rulesetVersionCode === CORE_V1_2_VERSION_CODE) return 'unbounded_core_v1_2';
+  if (rulesetVersionCode === CORE_V1_2_VERSION_CODE || rulesetVersionCode === CORE_V1_3_VERSION_CODE) {
+    return 'unbounded_core_v1_2';
+  }
   if (rulesetVersionCode === CORE_V1_RULESET_ID) return 'legacy_core_v1';
   throw new Error('Actor ruleset version is not supported');
 }
@@ -323,6 +326,7 @@ function groupMechanicalModifiers(modifiers: readonly {
     actorPhysicalPower: 'physicalPower', actorMagicalPower: 'magicalPower',
     physicalDefense: 'physicalFlatDefense', magicalDefense: 'magicalFlatDefense',
     accuracy: 'accuracy', evasion: 'evasion', attackSpeedBps: 'attackSpeedBps', castingSpeedBps: 'castingSpeedBps',
+    stealth: 'stealth', detection: 'detection',
     criticalChanceBps: 'criticalChanceBps', criticalDamageBps: 'criticalDamageBps', movementSpeed: 'movementSpeed',
     carryingCapacity: 'carryingCapacity', physicalResistanceBps: 'physicalResistanceBps',
     magicalResistanceBps: 'magicalResistanceBps', elementalResistanceBps: 'elementalResistanceBps',
@@ -349,7 +353,7 @@ function groupMechanicalModifiers(modifiers: readonly {
 function calculateMechanicalState(record: MechanicalStateRecord): MechanicalCalculation {
   const policy = actorProgressionPolicy(record.campaign.rulesetVersion.code);
   const ruleset = policy === 'unbounded_core_v1_2'
-    ? validateCoreV12RulesetVersion(record.campaign.rulesetVersion)
+    ? validateSupportedCoreRulesetVersion(record.campaign.rulesetVersion)
     : validateCoreV1RulesetVersion(record.campaign.rulesetVersion);
   const maximumPrimaryAttribute = policy === 'unbounded_core_v1_2'
     ? CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM
@@ -450,6 +454,8 @@ function snapshotMatches(
     && snapshot.magicalDefense === secondary.magicalDefense
     && snapshot.accuracy === secondary.accuracy
     && snapshot.evasion === secondary.evasion
+    && snapshot.stealth === secondary.stealth
+    && snapshot.detection === secondary.detection
     && snapshot.baseAttackSpeedBps === secondary.baseAttackSpeedBps
     && snapshot.baseCastingSpeedBps === secondary.baseCastingSpeedBps
     && snapshot.criticalChanceBps === secondary.criticalChanceBps
@@ -555,6 +561,8 @@ export function projectActorMechanicalSheet(record: MechanicalStateRecord): Acto
       magicalDefense: snapshot.magicalDefense,
       accuracy: snapshot.accuracy,
       evasion: snapshot.evasion,
+      stealth: snapshot.stealth,
+      detection: snapshot.detection,
       baseAttackSpeedBps: snapshot.baseAttackSpeedBps,
       baseCastingSpeedBps: snapshot.baseCastingSpeedBps,
       criticalChanceBps: snapshot.criticalChanceBps,
@@ -597,6 +605,8 @@ export async function recomputeActorDerivedSnapshot(
     magicalDefense: secondary.magicalDefense,
     accuracy: secondary.accuracy,
     evasion: secondary.evasion,
+    stealth: secondary.stealth,
+    detection: secondary.detection,
     baseAttackSpeedBps: secondary.baseAttackSpeedBps,
     baseCastingSpeedBps: secondary.baseCastingSpeedBps,
     criticalChanceBps: secondary.criticalChanceBps,

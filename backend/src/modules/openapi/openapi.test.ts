@@ -6,7 +6,12 @@ import {
 } from '../rules/core-v1/core-v1.content-mechanics.config.js';
 import { ACTIVE_API_ROUTES, getOfficialContract } from './openapi.routes.js';
 import { manageEncounterSchema } from '../encounters/encounter-http.schemas.js';
-import { manageActorInventorySchema, manageActorProgressionSchema, upsertActorSchema } from '../gpt/gpt.schemas.js';
+import {
+  manageActorInventorySchema,
+  manageActorProgressionSchema,
+  startGameSchema,
+  upsertActorSchema,
+} from '../gpt/gpt.schemas.js';
 import { coreV1ContentProfileSchema, inventorySpecSchema } from '../content/content.schemas.js';
 
 interface Operation { operationId?: string; security?: unknown; tags?: string[]; parameters?: Array<Schema & { name?: string; in?: string; required?: boolean }>; requestBody?: { content?: { 'application/json'?: { schema?: Schema; examples?: Record<string, { value?: unknown }> } } }; description?: string; responses?: Record<string, unknown>; 'x-openai-isConsequential'?: unknown }
@@ -418,8 +423,7 @@ describe('official OpenAPI contract', () => {
   it('routes existing-game requests before creation in Instructions and Knowledge', () => {
     expect(gptInstructions).toContain('Listar, mostrar, consultar, localizar, carregar ou continuar algo existente usa só Actions read-only');
     expect(gptInstructions).toContain('nunca `startGame`, criação rápida ou escrita');
-    expect(gptInstructions).toContain('Para mostrar mundos/campanhas, use `listPlayerWorlds` e depois `listWorldCampaigns`');
-    expect(gptInstructions).toContain('Para carregar, continuar ou mostrar o personagem atual');
+    expect(gptInstructions).toContain('Mundos/campanhas: `listPlayerWorlds` e `listWorldCampaigns`; carregar/continuar: `loadGame`');
     expect(continuityKnowledge).toContain('“Mostre meus mundos e campanhas” lista Worlds e suas Campaigns');
     expect(continuityKnowledge).toContain('“Quero continuar jogando” descobre o escopo e usa `loadGame`');
     expect(gptInstructions).toContain('Descubra encontro ativo só por `loadGame.activeEncounter`');
@@ -433,12 +437,12 @@ describe('official OpenAPI contract', () => {
   });
 
   it('keeps high autonomy explicit without weakening backend authority', () => {
-    expect(gptInstructions).toContain('Com intenção clara, execute as Actions rotineiras necessárias sem nova confirmação');
+    expect(gptInstructions).toContain('Com intenção clara, execute sem nova confirmação');
     expect(gptInstructions).toContain('O backend autentica, valida, calcula e persiste');
     expect(gptInstructions).toContain('Não invente dano, custo, acerto, equipamento, recompensa, persistência ou `stateVersion`');
-    expect(gptInstructions).toContain('Prefira `startGame` completo, `loadGame` uma vez, `resolve_beat` por decisão');
+    expect(gptInstructions).toContain('Prefira `startGame` completo, `loadGame` uma vez e `resolve_beat` por decisão');
     expect(gptInstructions).toContain('Execute `recoveryAction` explícita');
-    expect(gptInstructions.length).toBeLessThanOrEqual(7_600);
+    expect(gptInstructions.length).toBeLessThanOrEqual(7_450);
   });
 
   it('documents the autonomy behavior cases and conversational confirmation boundaries', () => {
@@ -460,7 +464,7 @@ describe('official OpenAPI contract', () => {
   it('starts creation only explicitly and handles empty discovery or missing identity without a questionnaire', () => {
     expect(gptInstructions).toContain('Criação Rápida, Guiada ou Livre exige pedido explícito de novo jogo/aventura');
     expect(gptInstructions).toContain('Consulta vazia ou `NOT_FOUND`: informe que nada foi encontrado, ofereça criar e aguarde escolha explícita');
-    expect(gptInstructions).toContain('Se faltar numa consulta, pergunte só “Qual nome você usou para salvar suas aventuras?”');
+    expect(gptInstructions).toContain('Se faltar, pergunte só “Qual nome você usou para salvar suas aventuras?”');
     expect(gptInstructions).not.toContain('- Primeiro pergunte “Como você gostaria de ser chamado nesta aventura?”');
     expect(continuityKnowledge).toContain('“Quero começar uma nova aventura” pode iniciar a criação');
     expect(continuityKnowledge).toContain('ofereça criar uma aventura e aguarde aceitação explícita');
@@ -468,14 +472,20 @@ describe('official OpenAPI contract', () => {
   });
 
   it('keeps quick creation bounded and publishes mechanically valid starter blueprints', () => {
-    expect(gptInstructions).toContain('Criação Rápida faz 3–5 perguntas essenciais (máximo 5');
-    expect(gptInstructions).toContain('uma ação inicial utilizável');
+    expect(gptInstructions).toContain('Criação Rápida faz até 8 perguntas essenciais');
+    expect(gptInstructions).toContain('uma aprovação final');
+    expect(gptInstructions).toContain('ação ofensiva utilizável');
+    expect(gptInstructions).toContain('`starterBlueprint` sem profile/inventorySpec');
+    expect(gptInstructions).toContain('`readiness.canBeginMechanically=true`');
+    expect(continuityKnowledge).toContain('nunca mais de 8');
     const blueprints = [...readinessKnowledge.matchAll(/```json\s*([\s\S]*?)```/g)]
       .map((match) => JSON.parse(match[1] as string) as { profile: unknown; inventorySpec?: unknown });
-    expect(blueprints).toHaveLength(5);
+    expect(blueprints).toHaveLength(7);
     for (const blueprint of blueprints) {
-      const profile = coreV1ContentProfileSchema.safeParse(blueprint.profile);
-      expect(profile.success, profile.success ? '' : JSON.stringify(profile.error.issues)).toBe(true);
+      if (blueprint.profile !== null) {
+        const profile = coreV1ContentProfileSchema.safeParse(blueprint.profile);
+        expect(profile.success, profile.success ? '' : JSON.stringify(profile.error.issues)).toBe(true);
+      }
       if (blueprint.inventorySpec !== undefined) {
         expect(inventorySpecSchema.safeParse(blueprint.inventorySpec).success).toBe(true);
       }
@@ -483,11 +493,9 @@ describe('official OpenAPI contract', () => {
     expect(readinessKnowledge).toContain('`body` ocupa traje/armadura de corpo inteiro');
     expect(readinessKnowledge).toContain('`chest` é reservado a peitoral');
     expect(gptInstructions).toContain('Slots: use o solicitado se válido');
-    expect(gptInstructions).toContain('só corrija para slot declarado pelo backend');
-    expect(gptInstructions).toContain('`body` e `chest` não são equivalentes');
-    expect(gptInstructions).toContain('traje integral fica em `body`');
-    expect(gptInstructions).toContain('peitoral/couraça, em `chest`');
-    expect(gptInstructions).toContain('nunca a intenção');
+    expect(gptInstructions).toContain('`body` é traje integral');
+    expect(gptInstructions).toContain('`chest`, peitoral');
+    expect(gptInstructions).toContain('nunca intenção');
     expect(gptInstructions).not.toMatch(/slot (?:alternativo )?equivalente|slot mais próximo|body`? (?:para|como) `?chest|chest`? (?:para|como) `?body/i);
   });
 
@@ -519,6 +527,26 @@ describe('official OpenAPI contract', () => {
     expect(start.properties?.initialContentPackages?.maxItems).toBe(24);
     expect(start.properties?.initialInventory?.maxItems).toBe(256);
     expect(start.properties?.initialPremise?.maxLength).toBe(1000);
+    expect(contract.components.schemas.InitialContentDefinition?.properties?.starterBlueprint?.enum).toEqual([
+      'simple_melee_weapon', 'simple_ranged_weapon', 'simple_magic_focus',
+      'basic_offensive_spell', 'basic_mobility_skill', 'basic_healing_spell',
+      'basic_healing_consumable', 'starter_body_armor',
+      'secondary_modifier_equipment', 'shadow_wrapped_status',
+      'veil_of_darkness_spell', 'detect_hidden_skill',
+    ]);
+    const operation = operations().find((item) => item.operation.operationId === 'startGame')?.operation;
+    const examples = operation?.requestBody?.content?.['application/json']?.examples ?? {};
+    expect(Object.keys(examples).sort()).toEqual(['quick_hybrid', 'quick_magical', 'quick_physical']);
+    for (const example of Object.values(examples)) {
+      expect(startGameSchema.safeParse(example.value).success).toBe(true);
+    }
+    expect(contract.components.schemas.InitialContentDefinition?.properties?.blueprintOptions)
+      .toMatchObject({ type: 'object', additionalProperties: false });
+    expect(contract.components.schemas.InitialContentDefinition?.properties?.blueprintOptions
+      ?.properties?.secondaryModifiers).toMatchObject({ type: 'object', additionalProperties: false });
+    expect(JSON.stringify(examples.quick_hybrid?.value)).toContain('"starterBlueprint":"secondary_modifier_equipment"');
+    expect(JSON.stringify(examples.quick_hybrid?.value)).toContain('"starterBlueprint":"veil_of_darkness_spell"');
+    expect(JSON.stringify(examples.quick_hybrid?.value)).toContain('"starterBlueprint":"detect_hidden_skill"');
   });
 
   it('publishes one closed manageEncounter Action with resolve_beat and Zod-valid examples', () => {
@@ -542,15 +570,25 @@ describe('official OpenAPI contract', () => {
       'create', 'create_assisted', 'load',
       'resolve_automatic_safe',
       'resolve_beat_after_component_limit', 'resolve_beat_after_component_rejection',
-      'resolve_beat_attack', 'resolve_beat_cast', 'resolve_beat_idempotent_replay',
+      'resolve_beat_attack', 'resolve_beat_cast', 'resolve_beat_hide',
+      'resolve_beat_idempotent_replay',
       'resolve_beat_impossible', 'resolve_beat_move_protect_prepare', 'resolve_beat_npc_limit',
-      'resolve_beat_use_item', 'resolve_beat_version_conflict', 'resolve_reaction', 'submit_intent',
+      'resolve_beat_sneak_move', 'resolve_beat_surprise_attack', 'resolve_beat_use_item',
+      'resolve_beat_version_conflict', 'resolve_reaction', 'submit_intent',
     ]);
     for (const example of Object.values(examples)) expect(manageEncounterSchema.safeParse(example.value).success).toBe(true);
     const intent = contract.components.schemas.EncounterIntentInput;
     expect(intent?.required).toContain('targetSelector');
     expect(intent?.properties).toHaveProperty('targetSelector');
     expect(intent?.properties).not.toHaveProperty('selector');
+    expect(contract.components.schemas.EncounterAssistedEnvironment?.properties?.lighting?.enum)
+      .toEqual(['bright', 'normal', 'dim', 'dark', 'magical_darkness']);
+    expect(contract.components.schemas.EncounterScenePackage?.properties?.genericActions?.items?.enum)
+      .toEqual(expect.arrayContaining(['hide', 'sneak_move']));
+    expect(contract.components.schemas.EncounterPublicStealthState)
+      .toMatchObject({ type: 'object', additionalProperties: false });
+    expect(contract.components.schemas.EncounterPublicObserverAwareness?.properties)
+      .not.toHaveProperty('margin');
   });
 
   it('keeps confirmAuthorityDrift required only for abandon in both OpenAPI and Zod', () => {
@@ -611,6 +649,16 @@ describe('official OpenAPI contract', () => {
       'starter_action_requirements_unmet', 'starter_action_targeting_unsupported',
       'mechanical_content_incomplete',
     ]);
+    expect(contract.components.schemas.ActorReadiness?.required).toEqual(expect.arrayContaining([
+      'canBeginMechanically', 'canStartEncounter', 'hasUsableOffensiveAction',
+      'hasDefensiveAlternative', 'hasUtilityCapability', 'hasStealthCapability',
+      'hasDetectionCapability', 'hasInformationalContent',
+      'inventoryValid', 'equipmentValid', 'narrativeInventoryItemRefs',
+    ]));
+    expect(contract.components.schemas.SecondaryAttributes?.required)
+      .toEqual(expect.arrayContaining(['stealth', 'detection']));
+    expect(contract.components.schemas.ContentEffect?.properties?.secondaryCode?.enum)
+      .toEqual(expect.arrayContaining(['stealth', 'detection']));
     expect(contract.components.schemas.EncounterNextRequiredAction?.properties?.actors?.minItems).toBe(1);
     expect(contract.components.schemas.EncounterResult?.properties?.participants?.minItems).toBe(1);
     expect(contract.components.schemas.EncounterResult?.required).toContain('operation');

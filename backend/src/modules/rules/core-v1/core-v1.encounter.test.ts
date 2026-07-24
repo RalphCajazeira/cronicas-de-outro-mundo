@@ -461,6 +461,26 @@ describe('core-v1 encounter state and initiative', () => {
     }), 'RELATION_COVERAGE');
   });
 
+  it('rejects persisted stealth awareness that drifts from its authoritative margin band', () => {
+    const state = expectOk(createCoreV1EncounterState(encounterInput([
+      participant('hero', 'party'), participant('enemy', 'hostile'),
+    ])));
+    const withDrift = {
+      ...state,
+      participants: state.participants.map((entry) => entry.actorRef === 'hero' ? {
+        ...entry,
+        stealthState: {
+          visibility: 'hidden' as const,
+          observerAwareness: [{
+            observerActorRef: 'enemy', awareness: 'unaware' as const,
+            margin: 0, marginTier: 'high_success' as const,
+          }],
+        },
+      } : entry),
+    };
+    expectInvalid(validateCoreV1EncounterState(withDrift), 'OBSERVER_AWARENESS');
+  });
+
   it('calculates balanced, fast, slow and surprise initiative and orders same-tick ties deterministically', () => {
     const fast = { ...balanced, agility: 15, perception: 15 };
     const slow = { ...balanced, agility: 6, perception: 6 };

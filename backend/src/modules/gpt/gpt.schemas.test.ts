@@ -45,6 +45,33 @@ function createSkill(code = 'quiet-step') {
   };
 }
 
+function createStarterBlueprint(
+  starterBlueprint: 'simple_melee_weapon' | 'basic_offensive_spell' | 'basic_mobility_skill' = 'simple_melee_weapon',
+  code = 'starter-blueprint',
+) {
+  const contentType = starterBlueprint === 'simple_melee_weapon'
+    ? 'weapon' as const
+    : starterBlueprint === 'basic_offensive_spell' ? 'spell' as const : 'skill' as const;
+  return {
+    definition: {
+      mode: 'create' as const,
+      scope: 'world' as const,
+      starterBlueprint,
+      contentType,
+      code,
+      name: 'Blueprint inicial',
+      description: 'Conteúdo inicial materializado pelo backend.',
+      presentation: {},
+      tags: ['starter'],
+      status: 'active' as const,
+      metadata: {},
+    },
+    ...(contentType === 'weapon' ? {} : {
+      protagonistLink: { state: 'known' as const, rank: 0, progress: 0, mastery: 0, metadata: {} },
+    }),
+  };
+}
+
 describe('GPT API schemas', () => {
   it('requires explicit scope and accepts normalized enums', () => {
     const actor = upsertActorSchema.parse({ ...scope, idempotencyKey: 'actor-schema-001', code: 'lyra', name: 'Lyra', actorType: 'spirit', primaryAttributes });
@@ -153,6 +180,42 @@ describe('GPT API schemas', () => {
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [{ ...reuse, definition: { ...reuse.definition, scope: 'campaign' } }] }).success).toBe(false);
   });
 
+  it('accepts closed starter blueprints and rejects structural overrides or incompatible kinds', () => {
+    const base = validStartGame();
+    const weapon = createStarterBlueprint();
+    expect(startGameSchema.safeParse({ ...base, initialContentPackages: [weapon] }).success).toBe(true);
+    expect(startGameSchema.safeParse({
+      ...base,
+      initialContentPackages: [{
+        ...weapon,
+        definition: { ...weapon.definition, profile: skillPublicationInput().profile },
+      }],
+    }).success).toBe(false);
+    expect(startGameSchema.safeParse({
+      ...base,
+      initialContentPackages: [{
+        ...weapon,
+        definition: { ...weapon.definition, contentType: 'spell' },
+      }],
+    }).success).toBe(false);
+    const spell = createStarterBlueprint('basic_offensive_spell', 'starter-frost');
+    expect(startGameSchema.safeParse({
+      ...base,
+      initialContentPackages: [{
+        ...spell,
+        definition: { ...spell.definition, blueprintOptions: { damageElement: 'ice' } },
+      }],
+    }).success).toBe(true);
+    const skill = createStarterBlueprint('basic_mobility_skill', 'starter-step');
+    expect(startGameSchema.safeParse({
+      ...base,
+      initialContentPackages: [{
+        ...skill,
+        definition: { ...skill.definition, blueprintOptions: { damageElement: 'fire' } },
+      }],
+    }).success).toBe(false);
+  });
+
   it('rejects duplicate packages, obsolete physical link fields and unmet known requirements', () => {
     const base = validStartGame();
     const skill = createSkill();
@@ -173,6 +236,28 @@ describe('GPT API schemas', () => {
       } },
     } };
     expect(startGameSchema.safeParse({ ...base, initialContentPackages: [dependent] }).success).toBe(false);
+  });
+
+  it('requires one aggregated initial inventory grant per content reference', () => {
+    const base = validStartGame();
+    const weapon = createStarterBlueprint();
+    const item = {
+      scope: 'world' as const,
+      contentType: 'weapon' as const,
+      code: weapon.definition.code,
+      quantity: 1,
+      entryRefs: ['starter-blueprint-1'],
+    };
+    expect(startGameSchema.safeParse({
+      ...base,
+      initialContentPackages: [weapon],
+      initialInventory: [item],
+    }).success).toBe(true);
+    expect(startGameSchema.safeParse({
+      ...base,
+      initialContentPackages: [weapon],
+      initialInventory: [item, { ...item, entryRefs: ['starter-blueprint-2'] }],
+    }).success).toBe(false);
   });
 
   it('validates override placement and duplicate narrative arrays', () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { CORE_V1_VERSION_CODE } from '../rules/core-v1/core-v1.manifest.js';
 import {
   calculateSecondaryAttributes,
   createCoreV1EmptyEquipmentLoadout,
@@ -219,6 +220,25 @@ describe('encounter beat orchestration primitives', () => {
       .toBe('fallback');
   });
 
+  it('maps hiding to a bounded wait and sneak movement to a legal authoritative transition', () => {
+    const encounter = state('medium');
+    const hiding = genericEncounterAction(encounter, 'hero', { type: 'hide' }, 'beat-hide', 'secondary');
+    expect(hiding.intent.actionSource).toBe('wait');
+    expect(hiding.definition).toMatchObject({ actionKind: 'wait', effectRefs: [] });
+
+    const sneaking = genericEncounterAction(
+      encounter,
+      'hero',
+      { type: 'sneak_move', destination: 'near', pace: 'careful' },
+      'beat-sneak',
+      'secondary',
+    );
+    expect(sneaking.intent.actionSource).toBe('movement');
+    expect(sneaking.definition.movement).toMatchObject({
+      from: 'medium', to: 'near', kind: 'approach', terrain: 'normal',
+    });
+  });
+
   it('maps generic temporal actions to the canonical profile-less wait primitive', () => {
     const encounter = state();
     const components = [
@@ -374,6 +394,36 @@ describe('encounter beat orchestration primitives', () => {
       ]));
   });
 
+  it('projects observer-specific concealment without exposing rolls or numeric margins', () => {
+    const baseState = state();
+    const concealed: CoreV1EncounterState = {
+      ...baseState,
+      participants: baseState.participants.map((entry) => entry.actorRef === 'hero' ? {
+        ...entry,
+        stealthState: {
+          visibility: 'obscured',
+          observerAwareness: [{
+            observerActorRef: 'enemy',
+            awareness: 'suspicious',
+            margin: -4,
+            marginTier: 'failure',
+          }],
+        },
+      } : entry),
+    };
+    const scene = encounterScenePackage(concealed, new Map());
+    expect(scene.participants.find((entry) => entry.actorRef === 'hero')?.stealth).toEqual({
+      visibility: 'obscured',
+      observers: [{
+        observerActorRef: 'enemy',
+        awareness: 'suspicious',
+        marginTier: 'failure',
+      }],
+    });
+    expect(JSON.stringify(scene)).not.toContain('"margin":');
+    expect(JSON.stringify(scene)).not.toContain('Roll');
+  });
+
   it('represents defend, protect and intercept as one-use encounter reaction capabilities without abilities', () => {
     const guarded = applyBeatGuardCapabilities(state(), 'hero', [
       { type: 'defend' }, { type: 'protect', targetRef: 'ally' }, { type: 'intercept', targetRef: 'ally' },
@@ -439,6 +489,11 @@ describe('encounter beat orchestration primitives', () => {
       maximumSceneBytes: ENCOUNTER_MAX_SCENE_RESPONSE_BYTES,
       maximumTransactionDurationMs: 30_000,
     });
+  });
+
+  it('does not advertise RC1.3 stealth actions to an historical encounter scene', () => {
+    const scene = encounterScenePackage(state(), new Map(), { rulesetVersionCode: CORE_V1_VERSION_CODE });
+    expect(scene.genericActions).not.toEqual(expect.arrayContaining(['hide', 'sneak_move']));
   });
 
   it('keeps a maximum projected action capsule within the deterministic scene byte budget', () => {

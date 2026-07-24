@@ -54,8 +54,8 @@ import {
   ensureCoreV1RulesetVersion,
   ensureCurrentCoreRulesetVersion,
 } from '../../src/modules/rules/ruleset.registry.js';
-import { CORE_V1_CONFIG_HASH, CORE_V1_CONFIG_SNAPSHOT } from '../../src/modules/rules/core-v1/core-v1.manifest.js';
-import { CORE_V1_2_CONFIG_HASH } from '../../src/modules/rules/core-v1/core-v1.progression-v2.manifest.js';
+import { CORE_V1_CONFIG_HASH, CORE_V1_CONFIG_SNAPSHOT, CORE_V1_VERSION_CODE } from '../../src/modules/rules/core-v1/core-v1.manifest.js';
+import { CORE_V1_3_CONFIG_HASH } from '../../src/modules/rules/core-v1/core-v1.progression-v3.manifest.js';
 import {
   calculateSecondaryAttributes,
   cancelCoreV1Encounter,
@@ -365,6 +365,126 @@ function structuredStart(prefix: string, genre = 'fantasy') {
       entryRefs: [`${cyberpunk ? 'smart-pistol' : 'longbow'}-1`], equip: { targetSlotRef: 'main_hand' },
     }],
     initialPremise: cyberpunk ? 'Um sinal clandestino chega ao protagonista.' : 'Um dragão desperta além da fronteira.',
+  };
+}
+
+function starterBlueprintPackage(
+  starterBlueprint: 'simple_melee_weapon' | 'simple_magic_focus' | 'basic_offensive_spell'
+    | 'basic_mobility_skill' | 'basic_healing_spell' | 'basic_healing_consumable' | 'starter_body_armor'
+    | 'secondary_modifier_equipment' | 'shadow_wrapped_status' | 'veil_of_darkness_spell'
+    | 'detect_hidden_skill',
+  contentType: 'weapon' | 'spell' | 'skill' | 'consumable' | 'armor' | 'status_effect',
+  code: string,
+  name: string,
+  linked = false,
+) {
+  const tags = starterBlueprint === 'shadow_wrapped_status'
+    ? ['shadow_wrapped', 'stealth']
+    : starterBlueprint === 'veil_of_darkness_spell'
+      ? ['shadow', 'stealth']
+      : starterBlueprint === 'detect_hidden_skill'
+        ? ['detect_hidden', 'informational']
+        : ['starter'];
+  return {
+    definition: {
+      mode: 'create', scope: 'world', starterBlueprint, contentType, code, name,
+      description: `${name} inicial seguro.`, presentation: { summary: `${name} pronto para uso.` },
+      tags, status: 'active', metadata: {},
+    },
+    ...(linked ? {
+      protagonistLink: { state: 'known', rank: 0, progress: 0, mastery: 0, metadata: {} },
+    } : {}),
+  };
+}
+
+function richBlueprintStart(prefix: string, style: 'physical' | 'magical' | 'hybrid') {
+  const body = structuredStart(prefix);
+  const physical = style !== 'magical';
+  const magical = style !== 'physical';
+  const packages: object[] = [];
+  const initialInventory: object[] = [];
+  if (physical) {
+    packages.push(starterBlueprintPackage('simple_melee_weapon', 'weapon', `${prefix}-blade`, 'Lâmina Inicial'));
+    initialInventory.push({
+      scope: 'world', contentType: 'weapon', code: `${prefix}-blade`, quantity: 1,
+      entryRefs: [`${prefix}-blade-1`], equip: { targetSlotRef: 'main_hand' },
+    });
+  }
+  if (magical) {
+    packages.push({
+      ...starterBlueprintPackage('basic_offensive_spell', 'spell', `${prefix}-bolt`, 'Raio Arcano', true),
+      definition: {
+        ...starterBlueprintPackage('basic_offensive_spell', 'spell', `${prefix}-bolt`, 'Raio Arcano', true).definition,
+        blueprintOptions: { damageElement: 'arcane' },
+      },
+    });
+    packages.push(starterBlueprintPackage('basic_healing_spell', 'spell', `${prefix}-mend`, 'Recompor', true));
+  } else {
+    packages.push(starterBlueprintPackage('basic_mobility_skill', 'skill', `${prefix}-step`, 'Passo Ágil', true));
+  }
+  packages.push(starterBlueprintPackage(
+    'basic_healing_consumable', 'consumable', `${prefix}-potion`, 'Poção de Cura',
+  ));
+  initialInventory.push({
+    scope: 'world', contentType: 'consumable', code: `${prefix}-potion`, quantity: 2,
+    entryRefs: [`${prefix}-potions`],
+  });
+  packages.push(starterBlueprintPackage(
+    'shadow_wrapped_status', 'status_effect', `${prefix}-shadow-wrapped`, 'Envolto em Sombras',
+  ));
+  packages.push({
+    ...starterBlueprintPackage(
+      'veil_of_darkness_spell', 'spell', `${prefix}-veil`, 'Véu das Trevas', true,
+    ),
+    definition: {
+      ...starterBlueprintPackage(
+        'veil_of_darkness_spell', 'spell', `${prefix}-veil`, 'Véu das Trevas', true,
+      ).definition,
+      blueprintOptions: { linkedStatusCode: `${prefix}-shadow-wrapped` },
+    },
+  });
+  packages.push(starterBlueprintPackage(
+    'detect_hidden_skill', 'skill', `${prefix}-detect-hidden`, 'Percepção de Ocultos', true,
+  ));
+  packages.push({
+    ...starterBlueprintPackage(
+      'secondary_modifier_equipment', 'armor', `${prefix}-elven-boots`, 'Bota Élfica',
+    ),
+    definition: {
+      ...starterBlueprintPackage(
+        'secondary_modifier_equipment', 'armor', `${prefix}-elven-boots`, 'Bota Élfica',
+      ).definition,
+      blueprintOptions: {
+        equipmentSlot: 'feet',
+        unitWeight: 1,
+        secondaryModifiers: {
+          evasion: 2,
+          movementSpeed: 1,
+          physicalDefense: 2,
+          magicalDefense: 5,
+        },
+      },
+    },
+  });
+  initialInventory.push({
+    scope: 'world', contentType: 'armor', code: `${prefix}-elven-boots`, quantity: 1,
+    entryRefs: [`${prefix}-elven-boots-1`], equip: { targetSlotRef: 'feet' },
+  });
+  packages.push({
+    definition: {
+      mode: 'create', scope: 'world', contentType: 'other', code: `${prefix}-journal`, name: 'Diário de Viagem',
+      description: 'Item narrativo sem bônus e não equipável.', profile: null,
+      inventorySpec: uniqueInventorySpec(1), presentation: {}, tags: ['narrative'], status: 'active', metadata: {},
+    },
+  });
+  initialInventory.push({
+    scope: 'world', contentType: 'other', code: `${prefix}-journal`, quantity: 1,
+    entryRefs: [`${prefix}-journal-1`],
+  });
+  return {
+    ...body,
+    initialContentPackages: packages,
+    initialInventory,
   };
 }
 
@@ -1313,7 +1433,7 @@ describe('encounter persistence constraints', () => {
     };
     await expect(prisma.encounter.create({ data: { ...base, encounterRef: 'invalid-version', stateVersion: 0 } })).rejects.toThrow();
     await expect(prisma.encounter.create({ data: { ...base, encounterRef: 'invalid-tick', currentTick: -1n } })).rejects.toThrow();
-    await expect(prisma.encounter.create({ data: { ...base, encounterRef: 'invalid-schema', snapshotSchemaVersion: 2 } })).rejects.toThrow();
+    await expect(prisma.encounter.create({ data: { ...base, encounterRef: 'invalid-schema', snapshotSchemaVersion: 3 } })).rejects.toThrow();
     await expect(prisma.encounter.create({ data: { ...base, encounterRef: 'invalid-hash', stateHash: 'A'.repeat(64) } })).rejects.toThrow();
   });
 
@@ -3076,6 +3196,194 @@ describe('Phase 1L-B transactional encounter adapter', () => {
     }
   });
 
+  it('persists hide and sneak awareness per observer, replays safely, and reveals on attack', async () => {
+    const stealthService = createEncounterService(
+      prisma,
+      (executionRef) => new RecordingEncounterRollProvider({ nextBps: () => 1 }, executionRef),
+    );
+    const quickStart = richBlueprintStart('stealth-resolution', 'physical');
+    const started = await post('/api/v1/game/start', quickStart);
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    const stealthScope = {
+      playerRef: quickStart.playerRef,
+      worldRef: quickStart.worldRef,
+      campaignRef: quickStart.campaignRef,
+    };
+    const stealthActorRef = quickStart.protagonist.code;
+    const observerRef = 'stealth-resolution-observer';
+    const stealthCampaign = await prisma.campaign.findFirstOrThrow({
+      where: { code: stealthScope.campaignRef, world: { code: stealthScope.worldRef } },
+      select: { id: true, rulesetVersion: { select: { code: true } } },
+    });
+    expect(stealthCampaign.rulesetVersion.code).toBe('core-v1.3');
+    await createMechanicalActor({
+      campaignId: stealthCampaign.id,
+      code: observerRef,
+      name: 'Observador da Galeria',
+      actorType: ActorType.NPC,
+    });
+    const encounterRef = 'phase-stealth-resolution';
+    let cleanupNeeded = true;
+    try {
+      const created = await stealthService.create({
+        ...stealthScope,
+        idempotencyKey: 'phase-stealth-create-0001',
+        encounterRef,
+        partySideRef: 'party',
+        participants: [
+          { bindingKind: 'persisted_actor', actorRef: stealthActorRef, sideRef: 'party', zone: 'near' },
+          { bindingKind: 'persisted_actor', actorRef: observerRef, sideRef: 'hostile', zone: 'engaged' },
+        ],
+        relations: [
+          { leftActorRef: observerRef, rightActorRef: observerRef, relation: 'self' },
+          { leftActorRef: observerRef, rightActorRef: stealthActorRef, relation: 'hostile' },
+          { leftActorRef: stealthActorRef, rightActorRef: stealthActorRef, relation: 'self' },
+        ],
+        context: {
+          schemaVersion: 1,
+          setupMode: 'explicit',
+          encounterKind: 'combat',
+          objective: 'Aproximar-se furtivamente e atacar.',
+          engagementPreference: 'ambush',
+          protectedActorRefs: [],
+          environment: {
+            summary: 'Galeria escura e silenciosa com cobertura.',
+            tags: ['dark-gallery'],
+            lighting: 'dark',
+            cover: 'full',
+            ambientNoise: 'silent',
+          },
+        },
+      });
+      const hideInput = {
+        ...stealthScope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-hide-0001',
+        expectedStateVersion: created.stateVersion,
+        intent: {
+          actorRef: stealthActorRef,
+          objective: 'hide',
+          narrative: 'Ralph se oculta nas sombras.',
+          resolutionPolicy: 'atomic' as const,
+          components: [{ type: 'hide' as const }],
+        },
+        npcDirectives: [{ actorRef: observerRef, strategy: 'defensive' as const }],
+      };
+      const hidden = await stealthService.resolveBeat(hideInput);
+      expect(hidden.beatSummary?.componentResults[0]).toMatchObject({
+        type: 'hide',
+        status: 'accepted',
+        stealth: {
+          visibility: 'hidden',
+          observerResults: [{
+            observerActorRef: observerRef,
+            awareness: 'unaware',
+            marginTier: 'high_success',
+          }],
+        },
+      });
+      expect(hidden.scene?.participants.find((entry) => entry.actorRef === stealthActorRef)?.stealth)
+        .toEqual({
+          visibility: 'hidden',
+          observers: [{
+            observerActorRef: observerRef,
+            awareness: 'unaware',
+            marginTier: 'high_success',
+          }],
+        });
+      const rollsAfterHide = await prisma.encounterRoll.count({
+        where: {
+          encounter: { encounterRef },
+          kind: { in: [EncounterRollKind.STEALTH, EncounterRollKind.DETECTION] },
+        },
+      });
+      expect(rollsAfterHide).toBe(2);
+      await expect(stealthService.resolveBeat(hideInput)).resolves.toEqual(hidden);
+      await expect(prisma.encounterRoll.count({
+        where: {
+          encounter: { encounterRef },
+          kind: { in: [EncounterRollKind.STEALTH, EncounterRollKind.DETECTION] },
+        },
+      })).resolves.toBe(rollsAfterHide);
+
+      const sneaked = await stealthService.resolveBeat({
+        ...stealthScope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-sneak-0001',
+        expectedStateVersion: hidden.stateVersion,
+        intent: {
+          actorRef: stealthActorRef,
+          objective: 'approach_hidden',
+          narrative: 'Ralph se aproxima cuidadosamente.',
+          resolutionPolicy: 'atomic',
+          components: [{ type: 'sneak_move', destination: 'engaged', pace: 'careful' }],
+        },
+        npcDirectives: [{ actorRef: observerRef, strategy: 'defensive' }],
+      });
+      expect(sneaked.beatSummary?.componentResults[0]).toMatchObject({
+        type: 'sneak_move',
+        status: 'accepted',
+        stealth: { visibility: 'hidden' },
+      });
+      expect(sneaked.scene?.participants.find((entry) => entry.actorRef === stealthActorRef))
+        .toMatchObject({ zone: 'engaged', stealth: { visibility: 'hidden' } });
+
+      const attacked = await stealthService.resolveBeat({
+        ...stealthScope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-attack-0001',
+        expectedStateVersion: sneaked.stateVersion,
+        intent: {
+          actorRef: stealthActorRef,
+          objective: 'surprise_attack',
+          narrative: 'Ralph ataca a partir da ocultação.',
+          resolutionPolicy: 'atomic',
+          components: [{
+            type: 'attack',
+            inventoryEntryRef: 'stealth-resolution-blade-1',
+            targetRefs: [observerRef],
+          }],
+        },
+        npcDirectives: [{ actorRef: observerRef, strategy: 'defensive' }],
+      });
+      expect(attacked.scene?.participants.find((entry) => entry.actorRef === stealthActorRef)?.stealth)
+        .toEqual({
+          visibility: 'exposed',
+          observers: [{
+            observerActorRef: observerRef,
+            awareness: 'tracking',
+            marginTier: 'critical_failure',
+          }],
+        });
+      await stealthService.cancel({
+        ...stealthScope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-cancel-0001',
+        expectedStateVersion: attacked.stateVersion,
+      });
+      cleanupNeeded = false;
+    } finally {
+      if (cleanupNeeded) {
+        const persisted = await prisma.encounter.findFirst({
+          where: { encounterRef },
+          select: { lifecycleStatus: true, stateVersion: true },
+        });
+        if (persisted !== null && !new Set<EncounterLifecycleStatus>([
+          EncounterLifecycleStatus.COMPLETED,
+          EncounterLifecycleStatus.FAILED,
+          EncounterLifecycleStatus.CANCELLED,
+        ]).has(persisted.lifecycleStatus)) {
+          await stealthService.cancel({
+            ...stealthScope,
+            encounterRef,
+            idempotencyKey: 'phase-stealth-cleanup-0001',
+            expectedStateVersion: persisted.stateVersion,
+          });
+        }
+      }
+    }
+  });
+
   it('requires explicit partial policy and rolls back essential failures without hidden mutations', async () => {
     const encounterRef = 'phase-beat-partial-policy';
     const created = await encounterService.create({
@@ -3298,6 +3606,21 @@ describe('Phase 1L-B transactional encounter adapter', () => {
       stateVersion: 1, lifecycleStatus: 'processing_paused',
     });
     expect(canonicalJson(created)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}|stateHash|stateSnapshot/i);
+    const historicalPersisted = await prisma.encounter.findUniqueOrThrow({
+      where: { campaignId_encounterRef: {
+        campaignId: (await prisma.campaign.findFirstOrThrow({ where: { code: seedScope.campaignRef } })).id,
+        encounterRef: createInput.encounterRef,
+      } },
+      select: { snapshotSchemaVersion: true, stateSnapshot: true, stateHash: true, rulesetVersion: { select: { code: true } } },
+    });
+    expect(historicalPersisted.rulesetVersion.code).toBe(CORE_V1_VERSION_CODE);
+    expect(historicalPersisted.snapshotSchemaVersion).toBe(1);
+    expect(canonicalJson(historicalPersisted.stateSnapshot)).not.toMatch(/"stealth"|"detection"|"stealthState"/);
+    expect(createCoreV1EncounterSnapshotHash(historicalPersisted.stateSnapshot, CORE_V1_VERSION_CODE))
+      .toBe(historicalPersisted.stateHash);
+    expect(parseCoreV1EncounterSnapshot(historicalPersisted.stateSnapshot, CORE_V1_VERSION_CODE)
+      .participants.every((participant) => participant.stealthState === undefined)).toBe(true);
+    const historicalSnapshotBeforeReplay = canonicalJson(historicalPersisted.stateSnapshot);
 
     const replay = await encounterService.create({
       ...createInput,
@@ -3309,6 +3632,15 @@ describe('Phase 1L-B transactional encounter adapter', () => {
       )),
     });
     expect(replay).toEqual(created);
+    const replayPersisted = await prisma.encounter.findUniqueOrThrow({
+      where: { campaignId_encounterRef: {
+        campaignId: (await prisma.campaign.findFirstOrThrow({ where: { code: seedScope.campaignRef } })).id,
+        encounterRef: createInput.encounterRef,
+      } },
+      select: { stateSnapshot: true, stateHash: true },
+    });
+    expect(canonicalJson(replayPersisted.stateSnapshot)).toBe(historicalSnapshotBeforeReplay);
+    expect(replayPersisted.stateHash).toBe(historicalPersisted.stateHash);
     expect(await prisma.encounterOperation.count({
       where: { encounter: { encounterRef: createInput.encounterRef } },
     })).toBe(1);
@@ -3340,6 +3672,16 @@ describe('Phase 1L-B transactional encounter adapter', () => {
 
     const loaded = await encounterService.load({ ...seedScope, encounterRef: createInput.encounterRef });
     expect(loaded).toMatchObject({ operation: 'load', stateVersion: 1 });
+    expect(loaded.scene?.genericActions).not.toEqual(expect.arrayContaining(['hide', 'sneak_move']));
+    const loadedPersisted = await prisma.encounter.findUniqueOrThrow({
+      where: { campaignId_encounterRef: {
+        campaignId: (await prisma.campaign.findFirstOrThrow({ where: { code: seedScope.campaignRef } })).id,
+        encounterRef: createInput.encounterRef,
+      } },
+      select: { stateSnapshot: true, stateHash: true },
+    });
+    expect(canonicalJson(loadedPersisted.stateSnapshot)).toBe(historicalSnapshotBeforeReplay);
+    expect(loadedPersisted.stateHash).toBe(historicalPersisted.stateHash);
     expect(await prisma.encounterOperation.count({
       where: { encounter: { encounterRef: createInput.encounterRef } },
     })).toBe(1);
@@ -3690,10 +4032,10 @@ describe('Phase 1L-B transactional encounter adapter', () => {
       include: { operations: { orderBy: { nextStateVersion: 'desc' }, take: 1 } },
     });
     const candidate = {
-      ...parseCoreV1EncounterSnapshot(record.stateSnapshot),
+      ...parseCoreV1EncounterSnapshot(record.stateSnapshot, CORE_V1_VERSION_CODE),
       stateVersion: 2,
       completionCandidate: 'party_victory_candidate' as const,
-      participants: parseCoreV1EncounterSnapshot(record.stateSnapshot).participants.map((participant) => (
+      participants: parseCoreV1EncounterSnapshot(record.stateSnapshot, CORE_V1_VERSION_CODE).participants.map((participant) => (
         participant.actorRef === 'lyra' ? {
           ...participant,
           combatState: 'incapacitated_candidate' as const,
@@ -3701,8 +4043,8 @@ describe('Phase 1L-B transactional encounter adapter', () => {
         } : participant
       )),
     };
-    const snapshot = serializeCoreV1EncounterState(candidate);
-    const hash = createCoreV1EncounterSnapshotHash(snapshot);
+    const snapshot = serializeCoreV1EncounterState(candidate, CORE_V1_VERSION_CODE);
+    const hash = createCoreV1EncounterSnapshotHash(snapshot, CORE_V1_VERSION_CODE);
     const idempotency = await prisma.idempotencyRecord.create({
       data: {
         key: 'phase-1l-b-confirm-preparation', operation: 'encounter.continue', requestHash: 'a'.repeat(64),
@@ -4266,12 +4608,12 @@ describe('Phase 1L-B transactional encounter adapter', () => {
       where: { encounterRef }, include: { operations: { orderBy: { nextStateVersion: 'desc' }, take: 1 } },
     });
     const candidate = {
-      ...parseCoreV1EncounterSnapshot(encounter.stateSnapshot),
+      ...parseCoreV1EncounterSnapshot(encounter.stateSnapshot, CORE_V1_VERSION_CODE),
       stateVersion: encounter.stateVersion + 1,
       completionCandidate: 'stalemate_candidate' as const,
     };
-    const snapshot = serializeCoreV1EncounterState(candidate);
-    const stateHash = createCoreV1EncounterSnapshotHash(snapshot);
+    const snapshot = serializeCoreV1EncounterState(candidate, CORE_V1_VERSION_CODE);
+    const stateHash = createCoreV1EncounterSnapshotHash(snapshot, CORE_V1_VERSION_CODE);
     const idempotency = await prisma.idempotencyRecord.create({
       data: { key: 'phase-1m-a-confirm-cancel-preparation', operation: 'encounter.continue', requestHash: 'd'.repeat(64) },
     });
@@ -4866,7 +5208,7 @@ describe('Phase 1L-C encounter HTTP integration', () => {
     const persistedBefore = await prisma.encounter.findUniqueOrThrow({
       where: { campaignId_encounterRef: { campaignId: campaign.id, encounterRef } },
     });
-    const stateBefore = parseCoreV1EncounterSnapshot(persistedBefore.stateSnapshot);
+    const stateBefore = parseCoreV1EncounterSnapshot(persistedBefore.stateSnapshot, CORE_V1_VERSION_CODE);
     expect(stateBefore.scheduledEvents).toHaveLength(4);
     expect(stateBefore.scheduledEvents.map((event) => event.type)).toEqual([
       'actor_ready', 'actor_ready', 'actor_ready', 'actor_ready',
@@ -4913,7 +5255,7 @@ describe('Phase 1L-C encounter HTTP integration', () => {
     expect(persistedAfter.operations.map((operation) => operation.operation)).toEqual([
       EncounterOperationKind.CREATE, EncounterOperationKind.CONTINUE,
     ]);
-    expect(parseCoreV1EncounterSnapshot(persistedAfter.stateSnapshot).scheduledEvents).toEqual([]);
+    expect(parseCoreV1EncounterSnapshot(persistedAfter.stateSnapshot, CORE_V1_VERSION_CODE).scheduledEvents).toEqual([]);
     await expect(prisma.campaign.findUniqueOrThrow({ where: { id: campaign.id } }))
       .resolves.toMatchObject({ engineTick: expectedTick });
 
@@ -4959,10 +5301,10 @@ describe('Phase 1L-C encounter HTTP integration', () => {
     const encounter = await prisma.encounter.findFirstOrThrow({
       where: { encounterRef }, include: { operations: { orderBy: { nextStateVersion: 'desc' }, take: 1 } },
     });
-    const cancelled = cancelCoreV1Encounter(parseCoreV1EncounterSnapshot(encounter.stateSnapshot));
+    const cancelled = cancelCoreV1Encounter(parseCoreV1EncounterSnapshot(encounter.stateSnapshot, CORE_V1_VERSION_CODE));
     if (!cancelled.ok) throw new Error('Legacy terminal fixture cancellation failed');
-    const snapshot = serializeCoreV1EncounterState(cancelled.value);
-    const stateHash = createCoreV1EncounterSnapshotHash(snapshot);
+    const snapshot = serializeCoreV1EncounterState(cancelled.value, CORE_V1_VERSION_CODE);
+    const stateHash = createCoreV1EncounterSnapshotHash(snapshot, CORE_V1_VERSION_CODE);
     const idempotency = await prisma.idempotencyRecord.create({
       data: { key: 'phase-1m-a-legacy-terminal-operation', operation: 'encounter.cancel', requestHash: 'c'.repeat(64) },
     });
@@ -5416,7 +5758,7 @@ describe('GPT v1 persistence with real transactions', () => {
         code: 'new-player', actorType: 'character', level: 1, xp: 0,
         primaryAttributes: balancedPrimaryAttributes,
         resources: { hp: { current: 45, max: 45 }, mana: { current: 35, max: 35 }, sp: { current: 35, max: 35 } },
-        mechanicsStateVersion: 3, ruleset: { code: 'core-v1.2', revision: 'RC1.2' },
+        mechanicsStateVersion: 3, ruleset: { code: 'core-v1.3', revision: 'RC1.3' },
         appearance: { summary: 'Manto de viagem.' }, personality: { traits: ['curioso'] },
       },
       mainActors: [], linkedContent: [expect.objectContaining({ actorRef: 'new-player', code: 'longbow' })],
@@ -5441,12 +5783,13 @@ describe('GPT v1 persistence with real transactions', () => {
       include: { rulesetVersion: { select: { code: true, revision: true, configHash: true } } },
     });
     expect(persistedWorld.defaultRulesetVersion).toEqual({
-      code: 'core-v1.2', revision: 'RC1.2', configHash: CORE_V1_2_CONFIG_HASH,
+      code: 'core-v1.3', revision: 'RC1.3', configHash: CORE_V1_3_CONFIG_HASH,
     });
     expect(persistedCampaign.rulesetVersionId).toBe(persistedWorld.defaultRulesetVersionId);
     expect(persistedCampaign.rulesetVersion).toEqual(persistedWorld.defaultRulesetVersion);
     await expect(prisma.rulesetVersion.count({ where: { code: 'core-v1' } })).resolves.toBe(1);
     await expect(prisma.rulesetVersion.count({ where: { code: 'core-v1.2' } })).resolves.toBe(1);
+    await expect(prisma.rulesetVersion.count({ where: { code: 'core-v1.3' } })).resolves.toBe(1);
     expect(JSON.stringify(first.body)).not.toMatch(/rulesetVersionId|defaultRulesetVersionId|configSnapshot|[0-9a-f]{8}-[0-9a-f-]{27,}/i);
     expect(JSON.stringify(first.body)).not.toMatch(/inputHash/);
 
@@ -5458,6 +5801,139 @@ describe('GPT v1 persistence with real transactions', () => {
     });
     expect(arrayOrderConflict.status).toBe(409);
     expect(responseErrorMessage(arrayOrderConflict)).toBe('Idempotency key already used');
+  });
+
+  it.each(['physical', 'magical', 'hybrid'] as const)(
+    'materializes a rich %s quick-start package with valid ownership and explicit readiness',
+    async (style) => {
+      const body = richBlueprintStart(`quick-${style}`, style);
+      const created = await post('/api/v1/game/start', body);
+      const replay = await post('/api/v1/game/start', body);
+      expect(created.status, JSON.stringify(created.body)).toBe(200);
+      expect(replay.body).toEqual(created.body);
+      expect(created.body).toMatchObject({
+        protagonist: {
+          level: 1,
+          primaryAttributes: balancedPrimaryAttributes,
+          readiness: {
+            status: 'ready',
+            canBeginMechanically: true,
+            canStartEncounter: true,
+            hasUsableOffensiveAction: true,
+            inventoryValid: true,
+            equipmentValid: true,
+            hasStealthCapability: true,
+            hasDetectionCapability: true,
+            hasInformationalContent: true,
+            blockingReasons: [],
+            narrativeInventoryItemRefs: [`quick-${style}-journal-1`],
+          },
+        },
+      });
+      const state = bodyRecord(created);
+      const protagonist = bodyRecord({ body: state.protagonist });
+      const readiness = bodyRecord({ body: protagonist.readiness });
+      expect(readiness.usableActions).toEqual(expect.arrayContaining([
+        style === 'magical'
+          ? { source: 'known_content', ref: `quick-${style}-bolt`, action: 'cast' }
+          : { source: 'equipped_weapon', ref: `quick-${style}-blade-1`, action: 'attack' },
+        { source: 'consumable', ref: `quick-${style}-potions`, action: 'use_item' },
+      ]));
+      const actor = await prisma.actor.findFirstOrThrow({
+        where: { code: body.playerRef, campaign: { code: body.campaignRef } },
+      });
+      await expect(prisma.actorContent.count({ where: { actorId: actor.id } }))
+        .resolves.toBe(style === 'physical' ? 3 : 4);
+      await expect(prisma.inventoryEntry.count({ where: { actorId: actor.id } }))
+        .resolves.toBe(style === 'magical' ? 3 : 4);
+    },
+  );
+
+  it('reproduces invalid smoke profiles and succeeds once with corrected built-in blueprints and a new key', async () => {
+    const body = structuredStart('quick-smoke-profile');
+    const invalidProfile = (contentKind: 'skill' | 'talent', code: string, name: string) => ({
+      schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical',
+      contentKind, code, name, tier: 1, rarity: 'common',
+      activation: { type: 'passive' }, cost: { type: 'none' },
+    });
+    const invalid = {
+      ...body,
+      initialContentPackages: [
+        {
+          definition: {
+            mode: 'create', scope: 'world', contentType: 'skill', code: 'arcane-reading', name: 'Leitura Arcana',
+            description: 'Tentativa incompleta observada no smoke.',
+            profile: invalidProfile('skill', 'arcane-reading', 'Leitura Arcana'),
+            presentation: {}, tags: ['starter'], status: 'active', metadata: {},
+          },
+          protagonistLink: { state: 'known', rank: 0, progress: 0, mastery: 0, metadata: {} },
+        },
+        {
+          definition: {
+            mode: 'create', scope: 'world', contentType: 'talent', code: 'meticulous-memory', name: 'Memória Meticulosa',
+            description: 'Segunda tentativa incompleta observada no smoke.',
+            profile: invalidProfile('talent', 'meticulous-memory', 'Memória Meticulosa'),
+            presentation: {}, tags: ['starter'], status: 'active', metadata: {},
+          },
+          protagonistLink: { state: 'known', rank: 0, progress: 0, mastery: 0, metadata: {} },
+        },
+      ],
+      initialInventory: [],
+    };
+    const rejected = await post('/api/v1/game/start', invalid);
+    expect(rejected.status).toBe(400);
+    expect(rejected.body).toMatchObject({ error: { code: 'INVALID_INPUT' } });
+    expect(JSON.stringify(rejected.body)).toMatch(/Mechanical content must declare at least one recognized capability/);
+    await expectNoCreatedIntent(invalid);
+
+    const corrected = {
+      ...body,
+      idempotencyKey: 'integration-start-quick-smoke-profile-corrected-002',
+      initialContentPackages: [
+        starterBlueprintPackage('basic_offensive_spell', 'spell', 'arcane-dart', 'Dardo Arcano', true),
+        starterBlueprintPackage('detect_hidden_skill', 'skill', 'detect-hidden', 'Percepção de Ocultos', true),
+      ],
+      initialInventory: [],
+    };
+    const created = await post('/api/v1/game/start', corrected);
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+    expect(created.body).toMatchObject({ protagonist: { readiness: {
+      status: 'ready', hasUsableOffensiveAction: true, canBeginMechanically: true,
+      hasDetectionCapability: true, hasInformationalContent: true,
+    } } });
+    expect(JSON.stringify(created.body)).not.toContain('basic_mobility_skill');
+    await expect(prisma.contentDefinition.count({
+      where: { code: { in: ['arcane-reading', 'meticulous-memory'] } },
+    })).resolves.toBe(0);
+  });
+
+  it('rejects fragmented duplicate initial grants and accepts one aggregated grant', async () => {
+    const body = richBlueprintStart('quick-smoke-inventory', 'physical');
+    const potion = body.initialInventory.find((item) => (
+      (item as { contentType?: unknown }).contentType === 'consumable'
+    ));
+    if (potion === undefined) throw new Error('Quick-start potion fixture is required');
+    const invalid = {
+      ...body,
+      initialInventory: [
+        ...body.initialInventory,
+        { ...potion, quantity: 1, entryRefs: ['quick-smoke-inventory-potions-duplicate'] },
+      ],
+    };
+    const rejected = await post('/api/v1/game/start', invalid);
+    expect(rejected.status).toBe(400);
+    expect(JSON.stringify(rejected.body)).toContain('Initial inventory must aggregate each content reference into one grant');
+    await expectNoCreatedIntent(invalid);
+
+    const corrected = {
+      ...body,
+      idempotencyKey: 'integration-start-quick-smoke-inventory-corrected-002',
+    };
+    const created = await post('/api/v1/game/start', corrected);
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+    expect(created.body).toMatchObject({ protagonist: { readiness: {
+      status: 'ready', inventoryValid: true, equipmentValid: true,
+    } } });
   });
 
   it('keeps full startGame and loadGame within a coarse SQL round-trip budget', async () => {

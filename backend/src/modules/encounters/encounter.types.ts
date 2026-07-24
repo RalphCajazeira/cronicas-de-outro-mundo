@@ -97,6 +97,9 @@ export interface EncounterContextV1 {
   readonly environment: {
     readonly summary: string | null;
     readonly tags: readonly string[];
+    readonly lighting?: 'bright' | 'normal' | 'dim' | 'dark' | 'magical_darkness';
+    readonly cover?: 'none' | 'partial' | 'substantial' | 'full';
+    readonly ambientNoise?: 'silent' | 'low' | 'normal' | 'loud';
   };
 }
 
@@ -127,6 +130,12 @@ export type EncounterBeatComponent = (
   | { readonly type: 'assist'; readonly targetRef: string }
   | { readonly type: 'flee'; readonly destination?: 'far' | 'out_of_range' }
   | { readonly type: 'observe'; readonly targetRef?: string }
+  | { readonly type: 'hide' }
+  | {
+    readonly type: 'sneak_move';
+    readonly destination: CombatZone;
+    readonly pace?: 'careful' | 'normal' | 'fast';
+  }
   | { readonly type: 'interact'; readonly targetRef: string; readonly description?: string }
   | { readonly type: 'improvise'; readonly description: string; readonly targetRef?: string }
   | { readonly type: 'use_item'; readonly inventoryEntryRef: string; readonly targetRefs?: readonly string[] }
@@ -209,7 +218,7 @@ export interface EncounterParticipantDto {
 
 export type EncounterGenericAction =
   | 'move' | 'defend' | 'protect' | 'prepare' | 'intercept' | 'assist' | 'flee'
-  | 'observe' | 'interact' | 'improvise' | 'use_item' | 'attack' | 'cast';
+  | 'observe' | 'hide' | 'sneak_move' | 'interact' | 'improvise' | 'use_item' | 'attack' | 'cast';
 
 export interface EncounterScenePackageDto {
   readonly schemaVersion: 2;
@@ -240,6 +249,11 @@ export interface EncounterScenePackageDto {
     readonly zoneModel: 'abstract_bands';
     readonly summary: string | null;
     readonly tags: readonly string[];
+    readonly stealthContext: {
+      readonly lighting: 'bright' | 'normal' | 'dim' | 'dark' | 'magical_darkness';
+      readonly cover: 'none' | 'partial' | 'substantial' | 'full';
+      readonly ambientNoise: 'silent' | 'low' | 'normal' | 'loud';
+    };
     readonly notes: readonly string[];
   };
   readonly participants: readonly {
@@ -266,6 +280,14 @@ export interface EncounterScenePackageDto {
       readonly stacks: number;
       readonly durationType: string;
     }[];
+    readonly stealth?: {
+      readonly visibility: 'exposed' | 'obscured' | 'hidden';
+      readonly observers: readonly {
+        readonly observerActorRef: string;
+        readonly awareness: 'unaware' | 'suspicious' | 'detected' | 'tracking';
+        readonly marginTier: 'high_success' | 'success' | 'failure' | 'critical_failure';
+      }[];
+    };
     readonly preparedActionRefs?: readonly string[];
     readonly validThreatRefs: readonly string[];
     readonly usableActions: {
@@ -386,6 +408,14 @@ export interface EncounterBeatSummaryDto {
     readonly alternative?: string;
     readonly requested?: string;
     readonly applied?: string;
+    readonly stealth?: {
+      readonly visibility: 'exposed' | 'obscured' | 'hidden';
+      readonly observerResults: readonly {
+        readonly observerActorRef: string;
+        readonly awareness: 'unaware' | 'suspicious' | 'detected' | 'tracking';
+        readonly marginTier: 'critical_failure' | 'failure' | 'success' | 'high_success';
+      }[];
+    };
   }[];
   readonly npcActions: readonly {
     readonly actorRef: string;
@@ -573,6 +603,10 @@ const transitionCategories = new Set<EncounterTransitionCategory>([
 ]);
 const genericActions = new Set<EncounterGenericAction>([
   'move', 'defend', 'protect', 'prepare', 'intercept', 'assist', 'flee',
+  'observe', 'hide', 'sneak_move', 'interact', 'improvise', 'use_item', 'attack', 'cast',
+]);
+const legacyGenericActions = new Set<EncounterGenericAction>([
+  'move', 'defend', 'protect', 'prepare', 'intercept', 'assist', 'flee',
   'observe', 'interact', 'improvise', 'use_item', 'attack', 'cast',
 ]);
 
@@ -585,13 +619,18 @@ function parseScenePackage(value: unknown, participantRefs: ReadonlySet<string>,
     'schemaVersion', 'encounterRef', 'stateVersion', 'lifecycleStatus', 'objective', 'genericActions',
     'processingLimits', 'mandatoryStopConditions', 'catalogProjection', 'environment', 'participants',
   ], '$.scene');
+  const sceneGenericActions = denseArray(scene.genericActions, genericActions.size)
+    ? scene.genericActions : null;
   if (scene.schemaVersion !== 2 || !isPublicRef(scene.encounterRef) || scene.stateVersion !== stateVersion
     || typeof scene.lifecycleStatus !== 'string' || !lifecycleStatuses.has(scene.lifecycleStatus)
     || (scene.objective !== null && (typeof scene.objective !== 'string' || scene.objective.length > 240))
-    || !denseArray(scene.genericActions, genericActions.size)
-    || scene.genericActions.length !== genericActions.size
-    || new Set(scene.genericActions).size !== scene.genericActions.length
-    || scene.genericActions.some((action) => !genericActions.has(action as EncounterGenericAction))
+    || sceneGenericActions === null
+    || new Set(sceneGenericActions).size !== sceneGenericActions.length
+    || sceneGenericActions.some((action) => !genericActions.has(action as EncounterGenericAction))
+    || ![genericActions, legacyGenericActions].some((allowed) => (
+      sceneGenericActions.length === allowed.size
+      && sceneGenericActions.every((action) => allowed.has(action as EncounterGenericAction))
+    ))
     || !denseArray(scene.participants, 64) || scene.participants.length !== participantRefs.size) {
     throw new TypeError('Encounter scene package is invalid');
   }
@@ -632,12 +671,24 @@ function parseScenePackage(value: unknown, participantRefs: ReadonlySet<string>,
         || catalogProjection.summarizedActorRefs.length > 0))) {
     throw new TypeError('Encounter scene catalog projection is invalid');
   }
-  const environment = closedRecord(scene.environment, ['zoneModel', 'summary', 'tags', 'notes'], '$.scene.environment');
+  const environment = closedRecord(
+    scene.environment,
+    ['zoneModel', 'summary', 'tags', 'stealthContext', 'notes'],
+    '$.scene.environment',
+  );
+  const stealthContext = closedRecord(
+    environment.stealthContext,
+    ['lighting', 'cover', 'ambientNoise'],
+    '$.scene.environment.stealthContext',
+  );
   if (environment.zoneModel !== 'abstract_bands' || !denseArray(environment.notes, 16)
     || environment.notes.some((note) => typeof note !== 'string' || note.length > 500)
     || (environment.summary !== null && (typeof environment.summary !== 'string' || environment.summary.length > 500))
     || !denseArray(environment.tags, 12)
-    || environment.tags.some((tag) => !isPublicRef(tag))) {
+    || environment.tags.some((tag) => !isPublicRef(tag))
+    || !['bright', 'normal', 'dim', 'dark', 'magical_darkness'].includes(stealthContext.lighting as string)
+    || !['none', 'partial', 'substantial', 'full'].includes(stealthContext.cover as string)
+    || !['silent', 'low', 'normal', 'loud'].includes(stealthContext.ambientNoise as string)) {
     throw new TypeError('Encounter scene environment is invalid');
   }
   const seen = new Set<string>();
@@ -646,7 +697,7 @@ function parseScenePackage(value: unknown, participantRefs: ReadonlySet<string>,
       'actorRef', 'role', 'sideRef', 'relations', 'zone', 'combatState', 'resources',
       'validThreatRefs', 'usableActions',
     ], [
-      'equippedEntryRefs', 'knownContentRefs', 'activeEffects', 'preparedActionRefs', 'tacticalProfile',
+      'equippedEntryRefs', 'knownContentRefs', 'activeEffects', 'preparedActionRefs', 'stealth', 'tacticalProfile',
     ], '$.scene.participants');
     if (!isPublicRef(participant.actorRef) || !participantRefs.has(participant.actorRef) || seen.has(participant.actorRef)
       || (participant.role !== null && (typeof participant.role !== 'string' || participant.role.length > 160))
@@ -709,6 +760,31 @@ function parseScenePackage(value: unknown, participantRefs: ReadonlySet<string>,
     for (const contentValue of participant.knownContentRefs ?? []) {
       const content = closedRecord(contentValue, ['contentType', 'code'], '$.scene.participants.knownContentRefs');
       if (!isPublicRef(content.contentType) || !isPublicRef(content.code)) throw new TypeError('Encounter scene content is invalid');
+    }
+    if (participant.stealth !== undefined) {
+      const stealth = closedRecord(
+        participant.stealth,
+        ['visibility', 'observers'],
+        '$.scene.participants.stealth',
+      );
+      if (!['exposed', 'obscured', 'hidden'].includes(stealth.visibility as string)
+        || !denseArray(stealth.observers, 64)) {
+        throw new TypeError('Encounter scene stealth state is invalid');
+      }
+      for (const observerValue of stealth.observers) {
+        const observer = closedRecord(
+          observerValue,
+          ['observerActorRef', 'awareness', 'marginTier'],
+          '$.scene.participants.stealth.observers',
+        );
+        if (!isPublicRef(observer.observerActorRef)
+          || !participantRefs.has(observer.observerActorRef)
+          || observer.observerActorRef === participant.actorRef
+          || !['unaware', 'suspicious', 'detected', 'tracking'].includes(observer.awareness as string)
+          || !['high_success', 'success', 'failure', 'critical_failure'].includes(observer.marginTier as string)) {
+          throw new TypeError('Encounter scene observer awareness is invalid');
+        }
+      }
     }
     if (participant.tacticalProfile !== undefined) {
       const tactical = closedOptionalRecord(
@@ -865,7 +941,7 @@ function parseBeatSummary(value: unknown, participantRefs: ReadonlySet<string>):
   }
   for (const resultValue of summary.componentResults) {
     const result = closedOptionalRecord(resultValue, ['index', 'type', 'status'], [
-      'code', 'reason', 'field', 'alternative', 'requested', 'applied',
+      'code', 'reason', 'field', 'alternative', 'requested', 'applied', 'stealth',
     ], '$.beatSummary.componentResults');
     if (!Number.isSafeInteger(result.index) || (result.index as number) < 0 || (result.index as number) > 2
       || !genericActions.has(result.type as EncounterGenericAction)
@@ -874,6 +950,30 @@ function parseBeatSummary(value: unknown, participantRefs: ReadonlySet<string>):
         result[field] !== undefined && (typeof result[field] !== 'string' || result[field].length > 500)
       ))) {
       throw new TypeError('Encounter beat component result is invalid');
+    }
+    if (result.stealth !== undefined) {
+      const stealth = closedRecord(
+        result.stealth,
+        ['visibility', 'observerResults'],
+        '$.beatSummary.componentResults.stealth',
+      );
+      if (!['exposed', 'obscured', 'hidden'].includes(stealth.visibility as string)
+        || !denseArray(stealth.observerResults, 64)) {
+        throw new TypeError('Encounter beat stealth result is invalid');
+      }
+      for (const observerValue of stealth.observerResults) {
+        const observer = closedRecord(
+          observerValue,
+          ['observerActorRef', 'awareness', 'marginTier'],
+          '$.beatSummary.componentResults.stealth.observerResults',
+        );
+        if (!isPublicRef(observer.observerActorRef)
+          || !participantRefs.has(observer.observerActorRef)
+          || !['unaware', 'suspicious', 'detected', 'tracking'].includes(observer.awareness as string)
+          || !['critical_failure', 'failure', 'success', 'high_success'].includes(observer.marginTier as string)) {
+          throw new TypeError('Encounter beat observer result is invalid');
+        }
+      }
     }
     if (result.status === 'modified' && ['code', 'reason', 'field', 'requested', 'applied']
       .some((field) => typeof result[field] !== 'string')) throw new TypeError('Modified component result is incomplete');

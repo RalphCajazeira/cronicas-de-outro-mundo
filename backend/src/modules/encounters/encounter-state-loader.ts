@@ -11,9 +11,11 @@ import { observeOperationStage } from '../../shared/observability/operation-obse
 import { loadActorActiveEffectMechanicalInputs } from '../effects/active-effect-mechanical-inputs.js';
 import { loadActorInventoryMechanicalInputs } from '../inventory/inventory-mechanical-inputs.js';
 import type { CoreV1EncounterState } from '../rules/core-v1/index.js';
+import { CORE_V1_3_VERSION_CODE } from '../rules/core-v1/index.js';
 import { validateSupportedCoreRulesetVersion } from '../rules/ruleset.registry.js';
 import {
   createCoreV1EncounterSnapshotHash,
+  encounterSnapshotSchemaVersionForRulesetVersionCode,
   parseCoreV1EncounterSnapshot,
 } from './encounter-state-snapshot.js';
 import {
@@ -116,7 +118,9 @@ export function encounterDenormalizedMismatchCategories(
   state: CoreV1EncounterState,
 ): readonly string[] {
   const mismatches: string[] = [];
-  if (record.snapshotSchemaVersion !== 1) mismatches.push('snapshotSchemaVersion');
+  if (record.snapshotSchemaVersion !== encounterSnapshotSchemaVersionForRulesetVersionCode(record.rulesetVersion.code)) {
+    mismatches.push('snapshotSchemaVersion');
+  }
   if (record.stateVersion !== state.stateVersion) mismatches.push('stateVersion');
   if (record.currentTick !== state.currentTick) mismatches.push('currentTick');
   if (record.completionCandidate !== databaseCompletionCandidate(state.completionCandidate)) {
@@ -408,17 +412,6 @@ export async function validateLoadedEncounter(
   record: EncounterRecord,
   options: { readonly skipCurrentAuthorities?: boolean } = {},
 ): Promise<LoadedEncounter> {
-  let state: CoreV1EncounterState;
-  try {
-    if (createCoreV1EncounterSnapshotHash(record.stateSnapshot) !== record.stateHash) {
-      throw new EncounterError('ENCOUNTER_SNAPSHOT_HASH_INVALID');
-    }
-    state = parseCoreV1EncounterSnapshot(record.stateSnapshot);
-  } catch (error) {
-    if (error instanceof EncounterError) throw error;
-    throw new EncounterError('ENCOUNTER_SNAPSHOT_INVALID', { cause: error });
-  }
-  assertEncounterDenormalized(record, state);
   if (record.rulesetVersionId !== record.campaign.rulesetVersionId) {
     throw new EncounterError('ENCOUNTER_DENORMALIZED_DRIFT');
   }
@@ -427,6 +420,17 @@ export async function validateLoadedEncounter(
   } catch (error) {
     throw new EncounterError('ENCOUNTER_MECHANICS_DRIFT', { cause: error });
   }
+  let state: CoreV1EncounterState;
+  try {
+    if (createCoreV1EncounterSnapshotHash(record.stateSnapshot, record.rulesetVersion.code) !== record.stateHash) {
+      throw new EncounterError('ENCOUNTER_SNAPSHOT_HASH_INVALID');
+    }
+    state = parseCoreV1EncounterSnapshot(record.stateSnapshot, record.rulesetVersion.code);
+  } catch (error) {
+    if (error instanceof EncounterError) throw error;
+    throw new EncounterError('ENCOUNTER_SNAPSHOT_INVALID', { cause: error });
+  }
+  assertEncounterDenormalized(record, state);
   const closed = new Set<EncounterLifecycleStatus>([
     EncounterLifecycleStatus.COMPLETED,
     EncounterLifecycleStatus.CANCELLED,
@@ -532,12 +536,19 @@ export async function validateLoadedEncounter(
       ...authority.sheet.secondaryAttributes,
       elementalResistanceBps: authority.sheet.secondaryAttributes.elementalResistanceBps.default ?? 0,
     };
+    const projectSecondaryForRuleset = (secondary: object): Record<string, unknown> => (
+      record.rulesetVersion.code === CORE_V1_3_VERSION_CODE
+        ? Object.fromEntries(Object.entries(secondary))
+        : Object.fromEntries(Object.entries(secondary).filter(([key]) => key !== 'stealth' && key !== 'detection'))
+    );
+    const projectedSecondary = projectSecondaryForRuleset(projected.secondaryAttributes);
+    const comparableAuthoritativeSecondary = projectSecondaryForRuleset(authoritativeSecondary);
     if (projected.actorStateVersion !== expected.mechanicsStateVersion
       || projected.mechanicsStateVersion !== expected.mechanicsStateVersion
       || canonicalEncounterMechanicalJson(projected.primaryAttributes)
         !== canonicalEncounterMechanicalJson(authority.sheet.primaryAttributes)
-      || canonicalEncounterMechanicalJson(projected.secondaryAttributes)
-        !== canonicalEncounterMechanicalJson(authoritativeSecondary)) {
+      || canonicalEncounterMechanicalJson(projectedSecondary)
+        !== canonicalEncounterMechanicalJson(comparableAuthoritativeSecondary)) {
       throw new EncounterError('ENCOUNTER_MECHANICS_DRIFT');
     }
     if (projected.inventoryStateVersion !== expected.inventoryStateVersion

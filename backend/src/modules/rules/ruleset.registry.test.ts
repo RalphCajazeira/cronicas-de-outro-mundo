@@ -17,9 +17,19 @@ import {
   CORE_V1_2_VERSION_CODE,
 } from './core-v1/core-v1.progression-v2.js';
 import {
+  CORE_V1_3_CONFIG_HASH,
+  CORE_V1_3_CONFIG_SNAPSHOT,
+} from './core-v1/core-v1.progression-v3.manifest.js';
+import {
+  CORE_V1_3_REVISION,
+  CORE_V1_3_SCHEMA_VERSION,
+  CORE_V1_3_VERSION_CODE,
+} from './core-v1/core-v1.progression-v3.js';
+import {
   CORE_RULESET_VERSION_DRIFT,
   CoreRulesetVersionDriftError,
   ensureCoreV1RulesetVersion,
+  validateCoreV13RulesetVersion,
   validateCoreV12RulesetVersion,
   validateCoreV1RulesetVersion,
   type CoreRulesetVersion,
@@ -154,6 +164,20 @@ describe('core-v1 ruleset registry', () => {
     expect(validateCoreV12RulesetVersion(current)).toBe(current);
     expect(CORE_V1_CONFIG_HASH).toBe('2cfe9c45585ef51f3a06f2c9dc11e5cd6a5274d3eb77f96271daf2613fc1e4df');
     expect(CORE_V1_2_CONFIG_HASH).not.toBe(CORE_V1_CONFIG_HASH);
+  });
+
+  it('validates the separate RC1.3 stealth publication without mutating RC1.1 or RC1.2', () => {
+    const current = officialVersion({
+      code: CORE_V1_3_VERSION_CODE,
+      revision: CORE_V1_3_REVISION,
+      schemaVersion: CORE_V1_3_SCHEMA_VERSION,
+      configHash: CORE_V1_3_CONFIG_HASH,
+      configSnapshot: JSON.parse(JSON.stringify(CORE_V1_3_CONFIG_SNAPSHOT)) as Prisma.JsonValue,
+    });
+    expect(validateCoreV13RulesetVersion(current)).toBe(current);
+    expect(CORE_V1_3_CONFIG_SNAPSHOT.inheritedMechanics.baseVersionCode).toBe(CORE_V1_2_VERSION_CODE);
+    expect(CORE_V1_3_CONFIG_HASH).not.toBe(CORE_V1_2_CONFIG_HASH);
+    expect(CORE_V1_CONFIG_HASH).toBe('2cfe9c45585ef51f3a06f2c9dc11e5cd6a5274d3eb77f96271daf2613fc1e4df');
   });
 
   it('rejects a version code that does not match either immutable publication', () => {

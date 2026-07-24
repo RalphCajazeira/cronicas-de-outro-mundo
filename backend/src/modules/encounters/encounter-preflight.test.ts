@@ -146,6 +146,7 @@ describe('encounter adapter preflight', () => {
       scheduledEvents: [],
     } as unknown as CoreV1EncounterState;
     const record = {
+      rulesetVersion: { code: 'core-v1' },
       snapshotSchemaVersion: 2,
       stateVersion: 7,
       currentTick: 41n,

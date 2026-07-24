@@ -21,6 +21,16 @@ import {
   CORE_V1_2_SCHEMA_VERSION,
   CORE_V1_2_VERSION_CODE,
 } from './core-v1/core-v1.progression-v2.js';
+import {
+  CORE_V1_3_CONFIG_CANONICAL_JSON,
+  CORE_V1_3_CONFIG_HASH,
+  CORE_V1_3_CONFIG_SNAPSHOT,
+} from './core-v1/core-v1.progression-v3.manifest.js';
+import {
+  CORE_V1_3_REVISION,
+  CORE_V1_3_SCHEMA_VERSION,
+  CORE_V1_3_VERSION_CODE,
+} from './core-v1/core-v1.progression-v3.js';
 
 export const CORE_RULESET_VERSION_DRIFT = 'CORE_RULESET_VERSION_DRIFT' as const;
 
@@ -87,7 +97,24 @@ export function validateCoreV12RulesetVersion(version: CoreRulesetVersion): Core
 export function validateSupportedCoreRulesetVersion(version: CoreRulesetVersion): CoreRulesetVersion {
   if (version.code === CORE_V1_VERSION_CODE) return validateCoreV1RulesetVersion(version);
   if (version.code === CORE_V1_2_VERSION_CODE) return validateCoreV12RulesetVersion(version);
+  if (version.code === CORE_V1_3_VERSION_CODE) return validateCoreV13RulesetVersion(version);
   throw new CoreRulesetVersionDriftError(['versionCode']);
+}
+
+export function validateCoreV13RulesetVersion(version: CoreRulesetVersion): CoreRulesetVersion {
+  const drift: CoreRulesetDriftField[] = [];
+  if (version.ruleset.code !== CORE_V1_RULESET_CODE) drift.push('rulesetCode');
+  if (version.code !== CORE_V1_3_VERSION_CODE) drift.push('versionCode');
+  if (version.revision !== CORE_V1_3_REVISION) drift.push('revision');
+  if (version.schemaVersion !== CORE_V1_3_SCHEMA_VERSION) drift.push('schemaVersion');
+  if (version.configHash !== CORE_V1_3_CONFIG_HASH) drift.push('configHash');
+  try {
+    if (canonicalJson(version.configSnapshot) !== canonicalJson(CORE_V1_3_CONFIG_SNAPSHOT)) drift.push('configSnapshot');
+  } catch {
+    drift.push('configSnapshot');
+  }
+  if (drift.length > 0) throw new CoreRulesetVersionDriftError(drift);
+  return version;
 }
 
 export async function ensureCoreV1RulesetVersion(client: RulesetRegistryClient): Promise<CoreRulesetVersion> {
@@ -126,7 +153,7 @@ export async function ensureCoreV1RulesetVersion(client: RulesetRegistryClient):
   return validateCoreV1RulesetVersion(version);
 }
 
-export async function ensureCurrentCoreRulesetVersion(client: RulesetRegistryClient): Promise<CoreRulesetVersion> {
+export async function ensureCoreV12RulesetVersion(client: RulesetRegistryClient): Promise<CoreRulesetVersion> {
   const legacy = await ensureCoreV1RulesetVersion(client);
   let version = await client.rulesetVersion.findUnique({ where: { code: CORE_V1_2_VERSION_CODE }, select: versionSelect });
   version ??= await createAfterExpectedUnique(
@@ -148,4 +175,34 @@ export async function ensureCurrentCoreRulesetVersion(client: RulesetRegistryCli
   );
   if (version.rulesetId !== legacy.rulesetId) throw new CoreRulesetVersionDriftError(['rulesetCode']);
   return validateCoreV12RulesetVersion(version);
+}
+
+export async function ensureCurrentCoreRulesetVersion(client: RulesetRegistryClient): Promise<CoreRulesetVersion> {
+  const previous = await ensureCoreV12RulesetVersion(client);
+  let version = await client.rulesetVersion.findUnique({
+    where: { code: CORE_V1_3_VERSION_CODE },
+    select: versionSelect,
+  });
+  version ??= await createAfterExpectedUnique(
+    client,
+    'ensure_core_ruleset_v1_3',
+    () => client.rulesetVersion.create({
+      data: {
+        rulesetId: previous.rulesetId,
+        code: CORE_V1_3_VERSION_CODE,
+        revision: CORE_V1_3_REVISION,
+        schemaVersion: CORE_V1_3_SCHEMA_VERSION,
+        configHash: CORE_V1_3_CONFIG_HASH,
+        configSnapshot: JSON.parse(CORE_V1_3_CONFIG_CANONICAL_JSON) as Prisma.InputJsonValue,
+      },
+      select: versionSelect,
+    }),
+    () => client.rulesetVersion.findUnique({
+      where: { code: CORE_V1_3_VERSION_CODE },
+      select: versionSelect,
+    }),
+    { modelName: 'RulesetVersion', fields: ['code'], index: 'RulesetVersion_code_key', allowModelOnly: true },
+  );
+  if (version.rulesetId !== previous.rulesetId) throw new CoreRulesetVersionDriftError(['rulesetCode']);
+  return validateCoreV13RulesetVersion(version);
 }

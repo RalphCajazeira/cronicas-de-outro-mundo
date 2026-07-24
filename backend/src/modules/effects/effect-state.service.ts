@@ -195,6 +195,7 @@ async function applyLifecycle(
     resources: { hp: { current: 0, maximum: 0 }, mana: { current: 0, maximum: 0 }, sp: { current: 0, maximum: 0 } },
     secondaryAttributes: {
       actorPhysicalPower: 0, actorMagicalPower: 0, physicalDefense: 0, magicalDefense: 0, accuracy: 0, evasion: 0,
+      stealth: 0, detection: 0,
       baseAttackSpeedBps: 1, baseCastingSpeedBps: 1, criticalChanceBps: 0, criticalDamageBps: 0, movementSpeed: 0,
       carryingCapacity: 0, physicalResistanceBps: 0, magicalResistanceBps: 0, elementalResistanceBps: 0,
       hpRegen: 0, manaRegen: 0, spRegen: 0,

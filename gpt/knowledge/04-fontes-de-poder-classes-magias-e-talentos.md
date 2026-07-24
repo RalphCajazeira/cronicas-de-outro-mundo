@@ -32,13 +32,19 @@ Invariantes que não podem ser confundidos:
 - `profile.rulesetCode` usa `core-v1`;
 - `inventorySpec.rulesetCode` usa `core-v1` e `inventoryRulesCode` usa `core-v1-inventory-v1`.
 
-Para um starter novo, copie um template mecânico já aprovado e altere apenas `code`, `name`, descrição, lore, tags e apresentação. Preserve os demais campos até uma decisão mecânica consciente. Padrões tier 1 aprovados:
+Na Criação Rápida use `starterBlueprint`, não reconstrua o profile. O backend materializa e valida estes códigos fechados:
 
-- arma comum de uma mão: ativação `active`, custo `none`, `actionProfile=quick`, targeting `single_target/engaged/maxTargets=1`, um dano físico base 4 com scaling `full` e crítico, `handedness=one_handed`, uma `weaponTag`;
-- armadura comum: ativação `passive`, custo `none`, `defense.physicalFlatDefense=5`, `equipmentSlots=[chest]`;
-- escudo incomum: ativação `passive`, custo `none`, `defense.blockValue=4`, `equipmentSlots=[off_hand]`, efeito `grant_reaction` com `reactionKind=block` e `reactionDepth=1`;
-- roupa narrativa: somente campos narrativos canônicos; slot físico fica também no `inventorySpec`, nunca inventado fora do schema;
-- habilidade comum `whirlwind`: ativação `active`, custo SP 6, `actionProfile=whirlwind`, efeito `damage` multi-target engaged com até 3 alvos e multiplicadores aprovados pelo contrato;
-- consumível comum de cura: ativação `active`, custo `none`, `actionProfile=normal`, `consumable=true`, efeito `restore_resource` de HP 30 com targeting `self/self`.
+- `simple_melee_weapon`, `simple_ranged_weapon` e `simple_magic_focus`;
+- `basic_offensive_spell`, com `blueprintOptions.damageElement` opcional;
+- `basic_mobility_skill` e `basic_healing_spell`;
+- `basic_healing_consumable`;
+- `starter_body_armor`, sempre no slot `body`.
+- `secondary_modifier_equipment`, com slot, peso e modificadores allowlisted;
+- `shadow_wrapped_status` e `veil_of_darkness_spell`, ligados por `linkedStatusCode`;
+- `detect_hidden_skill`, capacidade de detecção/informação sem movimento falso.
 
-Não altere custos, raridade, targeting, slots, efeitos ou potência desses padrões por estética. Para uma ficha materialmente diferente, proponha a diferença e obtenha aprovação antes de persistir. Se `INVALID_INPUT` apontar profile inválido e a correção canônica preservar a intenção aprovada, corrija uma vez com nova idempotency key, repita sem nova confirmação e informe depois. Se a correção mudar custo, potência, objetivo ou conceito, pergunte antes.
+Envie identidade e apresentação (`code`, `name`, `description`, `presentation`, `tags`, `status=active`), mas omita `profile` e `inventorySpec`: eles são derivados. O `contentType` deve corresponder ao blueprint. O vínculo `protagonistLink` concede conhecimento a magia/habilidade; arma, armadura, consumível e item físico são concedidos separadamente por `initialInventory`. Cada combinação `scope/contentType/code` aparece uma única vez no inventário inicial; agregue quantidade/stacks e equipe somente entrada única equipável.
+
+O catálogo fixa custos, raridade, targeting, slots, efeitos e potência, enquanto nome, descrição, apresentação e elemento mágico allowlisted preservam a proposta narrativa. Para mecânica fora do catálogo, use os exemplos completos da ficha e o schema oficial. Se `INVALID_INPUT` apontar erro técnico e a correção preservar a intenção aprovada, corrija uma vez com nova idempotency key; mudança de custo, potência, arma principal, elemento ou conceito exige decisão do jogador.
+
+Leitura Arcana, Memória Meticulosa, Avaliação, Análise e Identificação não podem receber mobilidade, dano ou bônus sem correspondência semântica. Se não houver capability oficial, mantenha o conceito narrativo e exponha a limitação no readiness. A capability mínima atual é `detect_hidden`: melhora detecção por uma ação e continua dependendo de `observe`/teste autoritativo; ela não revela livremente dados internos.

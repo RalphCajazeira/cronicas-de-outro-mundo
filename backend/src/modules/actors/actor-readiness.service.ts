@@ -31,7 +31,16 @@ export type ActorReadinessBlockingReason =
 
 export interface ActorReadinessDto {
   readonly status: 'ready' | 'narrative_only' | 'incomplete' | 'blocked';
+  readonly canBeginMechanically: boolean;
   readonly canStartEncounter: boolean;
+  readonly hasUsableOffensiveAction: boolean;
+  readonly hasDefensiveAlternative: boolean;
+  readonly hasUtilityCapability: boolean;
+  readonly hasStealthCapability: boolean;
+  readonly hasDetectionCapability: boolean;
+  readonly hasInformationalContent: boolean;
+  readonly inventoryValid: boolean;
+  readonly equipmentValid: boolean;
   readonly usableActions: readonly {
     readonly source: 'known_content' | 'equipped_weapon' | 'consumable';
     readonly ref: string;
@@ -39,7 +48,11 @@ export interface ActorReadinessDto {
   }[];
   readonly blockingReasons: readonly ActorReadinessBlockingReason[];
   readonly narrativeContentCount: number;
+  readonly narrativeInventoryItemRefs: readonly string[];
   readonly incompleteContentRefs: readonly string[];
+  readonly stealthContentRefs: readonly string[];
+  readonly detectionContentRefs: readonly string[];
+  readonly informationalContentRefs: readonly string[];
 }
 
 type ReadinessRow = {
@@ -76,7 +89,7 @@ function isUsablePhysicalEntry(entry: ReadinessRow['inventory'][number]): boolea
 }
 
 function isNarrativeNullProfile(contentType: string | undefined, inventory = false): boolean {
-  const allowed = inventory ? ['clothing', 'item'] : ['clothing', 'item', 'class'];
+  const allowed = inventory ? ['clothing', 'item', 'material', 'other'] : ['clothing', 'item', 'class'];
   return allowed.includes(normalizeEnum(contentType ?? ''));
 }
 
@@ -90,6 +103,32 @@ function contentIdentityMatches(
 
 function hasActionOutcome(profile: CoreV1MechanicalContentProfile): boolean {
   return (profile.damageComponents?.length ?? 0) > 0 || (profile.effects?.length ?? 0) > 0;
+}
+
+function hasOffensiveOutcome(profile: CoreV1MechanicalContentProfile): boolean {
+  return (profile.damageComponents?.length ?? 0) > 0
+    || (profile.effects ?? []).some((effect) => effect.type === 'damage');
+}
+
+function profileModifies(profile: CoreV1MechanicalContentProfile, target: string): boolean {
+  return (profile.passiveModifiers ?? []).some((modifier) => modifier.target === target)
+    || (profile.effects ?? []).some((effect) => (
+      effect.type === 'modify_secondary_attribute' && effect.secondaryCode === target
+    ));
+}
+
+function hasDefensiveOutcome(profile: CoreV1MechanicalContentProfile): boolean {
+  return profile.defense !== undefined
+    || (profile.effects ?? []).some((effect) => effect.type === 'restore_resource'
+      || (effect.type === 'modify_secondary_attribute'
+        && ['physicalDefense', 'magicalDefense', 'evasion'].includes(effect.secondaryCode)));
+}
+
+function hasInformationalSemantics(profile: CoreV1MechanicalContentProfile): boolean {
+  return (profile.tags ?? []).some((tag) => (
+    tag === 'informational' || tag === 'detect_hidden' || tag === 'inspect'
+    || tag === 'appraise' || tag === 'analyze' || tag === 'identify_content'
+  ));
 }
 
 function hasUnsupportedTargeting(profile: CoreV1MechanicalContentProfile): boolean {
@@ -183,18 +222,28 @@ export function projectActorReadiness(input: ActorReadinessProjectionInput): Act
 }
 
 /**
- * READY requires an active actor above zero HP, no relevant malformed or
- * unevaluable mechanics, and at least one action affordable with the current
- * authoritative resources. NARRATIVE_ONLY is reserved for cosmetic/narrative
+ * READY preserves the encounter-compatible meaning: active actor above zero
+ * HP, no relevant malformed mechanics, and at least one affordable action.
+ * canBeginMechanically is stricter and also requires an offensive action for a
+ * rich quick-start handoff. NARRATIVE_ONLY is reserved for cosmetic/narrative
  * setup with no action. INCOMPLETE reports relevant persisted mechanics that
  * cannot safely execute. BLOCKED covers status, HP, or temporary lack of an
  * affordable action when the persisted mechanics are otherwise coherent.
  */
 export function classifyActorReadiness(row: ReadinessRow): ActorReadinessDto {
   const usableActions: ActorReadinessDto['usableActions'][number][] = [];
+  const usableOffensiveActionRefs = new Set<string>();
   const incomplete = new Set<string>();
+  const narrativeInventoryItemRefs = new Set<string>();
+  const stealthContentRefs = new Set<string>();
+  const detectionContentRefs = new Set<string>();
+  const informationalContentRefs = new Set<string>();
   const observedBlockers = new Set<ActorReadinessBlockingReason>();
   let narrativeContentCount = 0;
+  let inventoryValid = true;
+  let equipmentValid = true;
+  let hasDefensiveAlternative = false;
+  let hasUtilityCapability = false;
 
   const evaluateRelevantProfile = (
     profile: CoreV1MechanicalContentProfile,
@@ -239,10 +288,22 @@ export function classifyActorReadiness(row: ReadinessRow): ActorReadinessDto {
       incomplete.add(link.definition.code);
       continue;
     }
+    if (profileModifies(profile, 'stealth') || (profile.tags ?? []).includes('stealth')) {
+      stealthContentRefs.add(link.definition.code);
+    }
+    if (profileModifies(profile, 'detection') || (profile.tags ?? []).includes('detect_hidden')) {
+      detectionContentRefs.add(link.definition.code);
+    }
+    if (hasInformationalSemantics(profile)) informationalContentRefs.add(link.definition.code);
+    if (hasDefensiveOutcome(profile)) hasDefensiveAlternative = true;
+    if (!hasOffensiveOutcome(profile) && (hasActionOutcome(profile) || hasInformationalSemantics(profile))) {
+      hasUtilityCapability = true;
+    }
     if (inventoryBoundContentKinds.has(profile.contentKind)) continue;
     if (profile.activation.type !== 'active' || !hasActionOutcome(profile)) continue;
     if (evaluateRelevantProfile(profile, link.definition.code) === 'usable') {
       usableActions.push({ source: 'known_content', ref: link.definition.code, action: 'cast' });
+      if (hasOffensiveOutcome(profile)) usableOffensiveActionRefs.add(`known_content:${link.definition.code}`);
     }
   }
 
@@ -253,37 +314,75 @@ export function classifyActorReadiness(row: ReadinessRow): ActorReadinessDto {
     const validated = validateCoreV1ContentProfile(entry.version.profile);
     if (!validated.ok) {
       if (entry.version.profile === null && isNarrativeNullProfile(entry.definition.contentType, true)) {
-        if (usablePhysicalEntry) narrativeContentCount += 1;
+        const inventorySpec = validateCoreV1InventorySpec(entry.version.inventorySpec);
+        if (!inventorySpec.ok) {
+          inventoryValid = false;
+          if (entry.state === 'equipped') equipmentValid = false;
+          if (relevant) incomplete.add(entry.definition.code);
+          continue;
+        }
+        if (usablePhysicalEntry) {
+          narrativeContentCount += 1;
+          narrativeInventoryItemRefs.add(entry.entryRef);
+        }
         continue;
       }
+      inventoryValid = false;
+      if (entry.state === 'equipped') equipmentValid = false;
       if (relevant) incomplete.add(entry.definition.code);
       continue;
     }
     const profile = validated.value;
     if (profile.profileMode === 'narrative') {
-      if (usablePhysicalEntry) narrativeContentCount += 1;
+      const inventorySpec = validateCoreV1InventorySpec(entry.version.inventorySpec);
+      if (!inventorySpec.ok) {
+        inventoryValid = false;
+        if (entry.state === 'equipped') equipmentValid = false;
+        if (relevant) incomplete.add(entry.definition.code);
+        continue;
+      }
+      if (usablePhysicalEntry) {
+        narrativeContentCount += 1;
+        narrativeInventoryItemRefs.add(entry.entryRef);
+      }
       continue;
     }
-    if (!relevant) continue;
     const inventorySpec = validateCoreV1InventorySpec(entry.version.inventorySpec);
     if (!contentIdentityMatches(profile, entry.definition) || !inventorySpec.ok) {
-      incomplete.add(entry.definition.code);
+      inventoryValid = false;
+      if (entry.state === 'equipped') equipmentValid = false;
+      if (relevant) incomplete.add(entry.definition.code);
       continue;
     }
+    if (profileModifies(profile, 'stealth') || (profile.tags ?? []).includes('stealth')) {
+      stealthContentRefs.add(entry.definition.code);
+    }
+    if (profileModifies(profile, 'detection') || (profile.tags ?? []).includes('detect_hidden')) {
+      detectionContentRefs.add(entry.definition.code);
+    }
+    if (hasInformationalSemantics(profile)) informationalContentRefs.add(entry.definition.code);
+    if (hasDefensiveOutcome(profile)) hasDefensiveAlternative = true;
+    if (!relevant) continue;
     const availability = evaluateRelevantProfile(profile, entry.definition.code);
-    if (availability !== 'usable') continue;
+    if (availability !== 'usable') {
+      if (entry.state === 'equipped' && availability !== 'resource_insufficient') equipmentValid = false;
+      continue;
+    }
     if (entry.state === 'equipped' && profile.contentKind === 'weapon'
       && (profile.damageComponents?.length ?? 0) > 0) {
       usableActions.push({ source: 'equipped_weapon', ref: entry.entryRef, action: 'attack' });
+      usableOffensiveActionRefs.add(`equipped_weapon:${entry.entryRef}`);
     } else if (usablePhysicalEntry && profile.contentKind === 'consumable'
       && profile.activation.type === 'active' && (profile.effects?.length ?? 0) > 0) {
       usableActions.push({ source: 'consumable', ref: entry.entryRef, action: 'use_item' });
+      if (hasOffensiveOutcome(profile)) usableOffensiveActionRefs.add(`consumable:${entry.entryRef}`);
     }
   }
 
   const blockingReasons: ActorReadinessBlockingReason[] = [];
   if (row.actor.status !== ActorStatus.ACTIVE) blockingReasons.push('actor_not_active');
   if (row.resources.hp.current <= 0) blockingReasons.push('hp_depleted');
+  const hasUsableOffensiveAction = usableOffensiveActionRefs.size > 0;
   if (usableActions.length === 0) {
     blockingReasons.push('no_usable_starter_action');
     for (const reason of [
@@ -305,13 +404,26 @@ export function classifyActorReadiness(row: ReadinessRow): ActorReadinessDto {
     status: canStartEncounter ? 'ready'
       : incomplete.size > 0 ? 'incomplete'
         : narrativeContentCount > 0 && blockingReasons.length === 1 ? 'narrative_only' : 'blocked',
+    canBeginMechanically: canStartEncounter && hasUsableOffensiveAction && inventoryValid && equipmentValid,
     canStartEncounter,
+    hasUsableOffensiveAction,
+    hasDefensiveAlternative,
+    hasUtilityCapability,
+    hasStealthCapability: stealthContentRefs.size > 0,
+    hasDetectionCapability: detectionContentRefs.size > 0,
+    hasInformationalContent: informationalContentRefs.size > 0,
+    inventoryValid,
+    equipmentValid,
     usableActions: usableActions
       .sort((left, right) => `${left.source}:${left.ref}`.localeCompare(`${right.source}:${right.ref}`))
       .slice(0, 128),
     blockingReasons,
     narrativeContentCount,
+    narrativeInventoryItemRefs: [...narrativeInventoryItemRefs].sort().slice(0, 128),
     incompleteContentRefs: [...incomplete].sort().slice(0, 128),
+    stealthContentRefs: [...stealthContentRefs].sort().slice(0, 128),
+    detectionContentRefs: [...detectionContentRefs].sort().slice(0, 128),
+    informationalContentRefs: [...informationalContentRefs].sort().slice(0, 128),
   };
 }
 

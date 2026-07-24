@@ -565,7 +565,10 @@ export function resolveCoreV1DamageApplication(
     const criticalProfile = calculateCriticalProfile(
       input.attacker.primaryAttributes,
       components.some((component) => component.canCrit),
-      undefined,
+      input.criticalChanceModifierBps === undefined ? undefined : [{
+        source: { type: 'ruleset', ref: 'core-v1.3-surprise' },
+        value: input.criticalChanceModifierBps,
+      }],
       undefined,
       input.maximumPrimaryAttribute,
     );
@@ -577,7 +580,8 @@ export function resolveCoreV1DamageApplication(
         CORE_V1_MAX_ROLL_BPS,
         'criticalRollBps',
       );
-      critical = input.rolls.criticalRollBps <= criticalProfile.criticalChanceBps;
+      critical = input.forcedCritical === true
+        || input.rolls.criticalRollBps <= criticalProfile.criticalChanceBps;
     }
     const raw = scaledDamageComponents(components, input.attacker, input.targeting.damageMultiplierBps);
     const resistances = input.defense.temporaryResistances ?? {
@@ -1202,6 +1206,13 @@ export function resolveCoreV1EffectSequence(
         ...(effect.type === 'add_damage' ? { addDamage: true } : {}),
         ...(input.weaponDamageComponents === undefined ? {} : { weaponDamageComponents: input.weaponDamageComponents }),
         rolls: input.rolls as CoreV1InjectedRolls,
+        ...(input.situationalHitModifiersBps === undefined
+          ? {}
+          : { situationalHitModifiersBps: input.situationalHitModifiersBps }),
+        ...(input.criticalChanceModifierBps === undefined
+          ? {}
+          : { criticalChanceModifierBps: input.criticalChanceModifierBps }),
+        ...(input.forcedCritical === undefined ? {} : { forcedCritical: input.forcedCritical }),
         targeting: input.targeting,
         defense: input.defense ?? { blockValue: 0, completeBlock: false },
         ...(input.maximumPrimaryAttribute === undefined

@@ -148,6 +148,23 @@ export interface CoreV1EncounterParticipant {
   readonly reactionCapabilities: readonly CoreV1EncounterReactionCapability[];
   readonly equipmentContext: CoreV1EncounterEquipmentContext;
   readonly initiative: CoreV1EncounterInitiative;
+  readonly stealthState?: CoreV13EncounterStealthState;
+}
+
+export type CoreV13VisibilityState = 'exposed' | 'obscured' | 'hidden';
+export type CoreV13AwarenessState = 'unaware' | 'suspicious' | 'detected' | 'tracking';
+export type CoreV13StealthMarginTier = 'critical_failure' | 'failure' | 'success' | 'high_success';
+
+export interface CoreV13ObserverAwareness {
+  readonly observerActorRef: string;
+  readonly awareness: CoreV13AwarenessState;
+  readonly margin: number;
+  readonly marginTier: CoreV13StealthMarginTier;
+}
+
+export interface CoreV13EncounterStealthState {
+  readonly visibility: CoreV13VisibilityState;
+  readonly observerAwareness: readonly CoreV13ObserverAwareness[];
 }
 
 export interface CoreV1EncounterParticipantInput

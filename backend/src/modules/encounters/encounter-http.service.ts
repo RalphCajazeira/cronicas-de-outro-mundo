@@ -116,6 +116,15 @@ export function buildAssistedEncounterCreateInput(
     environment: {
       summary: input.environmentalContext?.summary ?? null,
       tags: [...(input.environmentalContext?.tags ?? [])].sort(),
+      ...(input.environmentalContext?.lighting === undefined
+        ? {}
+        : { lighting: input.environmentalContext.lighting }),
+      ...(input.environmentalContext?.cover === undefined
+        ? {}
+        : { cover: input.environmentalContext.cover }),
+      ...(input.environmentalContext?.ambientNoise === undefined
+        ? {}
+        : { ambientNoise: input.environmentalContext.ambientNoise }),
     },
   };
   return {

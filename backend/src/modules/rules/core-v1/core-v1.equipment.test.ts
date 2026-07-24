@@ -431,12 +431,16 @@ describe('core-v1 equipped passive modifiers', () => {
     ]);
   });
 
-  it('detects overflow only when aggregating', () => {
+  it('rejects unsafe modifier values before equipping or aggregating them', () => {
     const firstItem = instance('a', 'item', itemProfile('a', Number.MAX_SAFE_INTEGER), uniqueSpec(['accessory']));
-    const secondItem = instance('b', 'item', itemProfile('b', 1), uniqueSpec(['accessory']));
-    const first = equip({ entries: [firstItem, secondItem] }, createCoreV1EmptyEquipmentLoadout(), 'a');
-    const second = equip(first.inventory, first.loadout, 'b');
-    expect(expectOk(collectEquippedModifiers(second.inventory, second.loadout))).toHaveLength(2);
-    expectInvalid(aggregateEquippedModifiers(second.inventory, second.loadout), 'SAFE_INTEGER');
+    expectInvalid(
+      planEquipItem(
+        { entries: [firstItem] },
+        createCoreV1EmptyEquipmentLoadout(),
+        { entryRef: 'a' },
+        requirementContext(),
+      ),
+      'MODIFIER_TIER_ENVELOPE',
+    );
   });
 });

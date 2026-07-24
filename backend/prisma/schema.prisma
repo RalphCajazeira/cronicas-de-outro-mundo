@@ -218,6 +218,8 @@ enum EncounterRollKind {
   ACTIVE_DODGE
   INTERRUPT
   COUNTER_ATTACK
+  STEALTH
+  DETECTION
 }
 
 model Player {
@@ -386,6 +388,8 @@ model ActorDerivedSnapshot {
   magicalDefense              Int
   accuracy                    Int
   evasion                     Int
+  stealth                     Int
+  detection                   Int
   baseAttackSpeedBps          Int
   baseCastingSpeedBps         Int
   criticalChanceBps           Int

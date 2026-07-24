@@ -22,6 +22,7 @@ import {
   CORE_V1_ATTRIBUTE_HARD_CAP,
   CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM,
   CORE_V1_2_VERSION_CODE,
+  CORE_V1_3_VERSION_CODE,
   resolveCoreV1ConsumableUse,
   resolveCoreV1EffectSequence,
   validateCoreV1ContentProfile,
@@ -38,6 +39,7 @@ import {
 } from '../rules/core-v1/index.js';
 import {
   ensureCoreV12EffectRulesVersion,
+  ensureCoreV13EffectRulesVersion,
   ensureCoreV1EffectRulesVersion,
 } from '../rules/effect-rules.registry.js';
 import {
@@ -445,11 +447,14 @@ export async function resolveActorEffectTransaction(
   if (rulesetVersion === null) throw operationError('RULESET_VERSION_MISMATCH', 'Campaign ruleset version is unavailable');
   const supportedRuleset = validateSupportedCoreRulesetVersion(rulesetVersion);
   const maximumPrimaryAttribute = supportedRuleset.code === CORE_V1_2_VERSION_CODE
+    || supportedRuleset.code === CORE_V1_3_VERSION_CODE
     ? CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM
     : CORE_V1_ATTRIBUTE_HARD_CAP;
-  const effectRulesPromise = supportedRuleset.code === CORE_V1_2_VERSION_CODE
-    ? ensureCoreV12EffectRulesVersion(client, supportedRuleset)
-    : ensureCoreV1EffectRulesVersion(client, supportedRuleset);
+  const effectRulesPromise = supportedRuleset.code === CORE_V1_3_VERSION_CODE
+    ? ensureCoreV13EffectRulesVersion(client, supportedRuleset)
+    : supportedRuleset.code === CORE_V1_2_VERSION_CODE
+      ? ensureCoreV12EffectRulesVersion(client, supportedRuleset)
+      : ensureCoreV1EffectRulesVersion(client, supportedRuleset);
   const [sourceContext, targetContext, targetSheet, effectRulesVersion] = await Promise.all([
     actorContext(client, actors.source),
     actors.target.id === actors.source.id ? actorContext(client, actors.source) : actorContext(client, actors.target),

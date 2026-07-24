@@ -14,6 +14,8 @@ export * from './core-v1.effects.manifest.js';
 export * from './core-v1.damage.js';
 export * from './core-v1.progression.js';
 export * from './core-v1.progression-v2.js';
+export * from './core-v1.progression-v3.js';
+export * from './core-v1.stealth.js';
 export type * from './core-v1.action-economy.types.js';
 export type * from './core-v1.content-mechanics.types.js';
 export type * from './core-v1.inventory.types.js';

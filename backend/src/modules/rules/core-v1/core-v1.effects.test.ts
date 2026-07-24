@@ -412,7 +412,7 @@ describe('core-v1 duration, active states and stacking', () => {
     expect(expectOk(collectActiveEffectModifiers(durationTarget, 100n))[0]?.value).toBe(-2);
   });
 
-  it('rejects malformed active state and detects modifier overflow', () => {
+  it('rejects malformed active state and out-of-envelope modifiers before activation', () => {
     expect(isCoreV1ActorEffectContext({ ...actor('target'), activeEffects: new Array(1) })).toBe(false);
     const overflowProfile = {
       ...statusProfile({ type: 'actions', value: 2 }, { type: 'stack_intensity', maxStacks: 2 }),
@@ -422,15 +422,10 @@ describe('core-v1 duration, active states and stacking', () => {
         sourceRule: 'status_effect' as const,
       }],
     };
-    let target = expectOk(applyCoreV1Status({
+    expectError(applyCoreV1Status({
       ...statusInput(actor('target'), { type: 'stack_intensity', maxStacks: 2 }, { type: 'actions', value: 2 }),
       profile: overflowProfile,
-    })).actor;
-    target = expectOk(applyCoreV1Status({
-      ...statusInput(target, { type: 'stack_intensity', maxStacks: 2 }, { type: 'actions', value: 2 }),
-      profile: overflowProfile,
-    })).actor;
-    expectError(collectActiveEffectModifiers(target, 100n));
+    }), 'INVALID_ACTIVE_EFFECT_STATE');
   });
 });
 
@@ -531,6 +526,52 @@ describe('core-v1 atomic effect sequence', () => {
     expect(result.targetAfter.activeEffects.map((effect) => effect.kind)).toEqual(['primary_modifier', 'secondary_modifier']);
     expect(expectOk(collectActiveEffectModifiers(result.targetAfter, 0n)).map((entry) => [entry.target, entry.value]))
       .toEqual([['evasion', -1], ['strength', 2]]);
+  });
+
+  it('applies and expires allowlisted stealth buffs and detection debuffs together', () => {
+    const profile: CoreV1MechanicalContentProfile = {
+      schemaVersion: 1, rulesetCode: 'core-v1', profileMode: 'mechanical',
+      contentKind: 'skill', code: 'shadow-feint', name: 'Shadow Feint',
+      tier: 1, rarity: 'rare', activation: { type: 'active' },
+      cost: { type: 'sp', amount: 3 }, actionProfile: 'quick',
+      effects: [
+        {
+          type: 'modify_secondary_attribute',
+          secondaryCode: 'stealth',
+          amount: 4,
+          duration: { type: 'actions', value: 1 },
+        },
+        {
+          type: 'modify_secondary_attribute',
+          secondaryCode: 'detection',
+          amount: -3,
+          duration: { type: 'actions', value: 1 },
+        },
+      ],
+    };
+    const target = actor('target');
+    const applied = expectOk(resolveCoreV1EffectSequence({
+      profile,
+      sourceContent: {
+        scope: 'world', contentType: 'skill', code: 'shadow-feint', versionNumber: 1,
+      },
+      sourceActor: actor('hero'),
+      targetActor: target,
+      currentTick: 0n,
+      effectRefs: ['stealth-buff', 'detection-debuff'],
+      targeting: { targetRef: 'target', targetOrdinal: 0, damageMultiplierBps: 10_000 },
+    }));
+    expect(expectOk(collectActiveEffectModifiers(applied.targetAfter, 0n))
+      .map((entry) => [entry.target, entry.value])).toEqual([
+      ['detection', -3],
+      ['stealth', 4],
+    ]);
+    const expired = expectOk(advanceActorActionDurations(applied.targetAfter, 'target'));
+    expect(expired.actor.activeEffects).toEqual([]);
+    expect(expired.changes.map(({ effectRef, change }) => ({ effectRef, change }))).toEqual([
+      { effectRef: 'stealth-buff', change: 'expired' },
+      { effectRef: 'detection-debuff', change: 'expired' },
+    ]);
   });
 
   it('returns validated movement commands and duration-bound reaction grants', () => {

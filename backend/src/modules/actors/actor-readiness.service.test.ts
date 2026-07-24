@@ -196,7 +196,10 @@ describe('actor encounter readiness', () => {
 
   it('accepts a complete equipped weapon with cost none', () => {
     const result = classifyActorReadiness({ ...base(), inventory: [inventoryEntry()] });
-    expect(result).toMatchObject({ status: 'ready', canStartEncounter: true, blockingReasons: [] });
+    expect(result).toMatchObject({
+      status: 'ready', canBeginMechanically: true, canStartEncounter: true,
+      hasUsableOffensiveAction: true, inventoryValid: true, equipmentValid: true, blockingReasons: [],
+    });
     expect(result.usableActions).toEqual([{ source: 'equipped_weapon', ref: 'starter-dagger-1', action: 'attack' }]);
   });
 
@@ -231,6 +234,7 @@ describe('actor encounter readiness', () => {
     });
     expect(result).toMatchObject({
       status: 'incomplete', canStartEncounter: false,
+      inventoryValid: false, equipmentValid: false,
       blockingReasons: ['mechanical_content_incomplete'], incompleteContentRefs: ['broken-sword'],
     });
     expect(result.usableActions).toEqual([{ source: 'known_content', ref: 'fireball', action: 'cast' }]);
@@ -263,9 +267,13 @@ describe('actor encounter readiness', () => {
     });
   });
 
-  it('accepts a valid skill when current SP pays its cost', () => {
+  it('reports a usable utility skill but still requires an offensive starter action', () => {
     const result = classifyActorReadiness({ ...base(), linked: [link(vigorStrike)] });
-    expect(result).toMatchObject({ status: 'ready', canStartEncounter: true, blockingReasons: [] });
+    expect(result).toMatchObject({
+      status: 'ready', canBeginMechanically: false, canStartEncounter: true,
+      hasUsableOffensiveAction: false, blockingReasons: [],
+    });
+    expect(result.usableActions).toEqual([{ source: 'known_content', ref: 'vigor-strike', action: 'cast' }]);
   });
 
   it('blocks a valid skill when current SP cannot pay its cost', () => {
@@ -284,7 +292,7 @@ describe('actor encounter readiness', () => {
     const affordable = classifyActorReadiness({
       ...base(), resources: { ...base().resources, hp: { current: 2, maximum: 20 } }, linked: [link(bloodStep)],
     });
-    expect(affordable).toMatchObject({ status: 'ready', canStartEncounter: true });
+    expect(affordable).toMatchObject({ status: 'ready', canBeginMechanically: false, canStartEncounter: true });
 
     const unsafe = classifyActorReadiness({
       ...base(), resources: { ...base().resources, hp: { current: 1, maximum: 20 } }, linked: [link(bloodStep)],
@@ -318,7 +326,7 @@ describe('actor encounter readiness', () => {
     });
   });
 
-  it('accepts a possessed consumable only with a complete mechanical profile, effect, and inventory spec', () => {
+  it('reports a valid healing consumable without treating it as an offensive starter action', () => {
     const result = classifyActorReadiness({
       ...base(),
       inventory: [inventoryEntry({
@@ -327,7 +335,10 @@ describe('actor encounter readiness', () => {
         version: { profile: healingPotion, inventorySpec: stackSpec },
       })],
     });
-    expect(result).toMatchObject({ status: 'ready', canStartEncounter: true, blockingReasons: [] });
+    expect(result).toMatchObject({
+      status: 'ready', canBeginMechanically: false, canStartEncounter: true, hasUsableOffensiveAction: false,
+      inventoryValid: true, blockingReasons: [],
+    });
     expect(result.usableActions).toEqual([{ source: 'consumable', ref: 'healing-potions', action: 'use_item' }]);
   });
 
@@ -362,8 +373,27 @@ describe('actor encounter readiness', () => {
     });
     expect(result).toMatchObject({
       status: 'incomplete', canStartEncounter: false,
+      inventoryValid: true, equipmentValid: false,
       blockingReasons: ['starter_action_requirements_unmet', 'mechanical_content_incomplete'],
       incompleteContentRefs: ['starter-body-armor'],
+    });
+  });
+
+  it('reports a possessed narrative item as valid and explicitly non-mechanical', () => {
+    const result = classifyActorReadiness({
+      ...base(),
+      inventory: [
+        inventoryEntry(),
+        inventoryEntry({
+          entryRef: 'travel-journal-1', state: 'available',
+          definition: { code: 'travel-journal', contentType: 'other' },
+          version: { profile: null, inventorySpec: { ...uniqueSpec, equipmentSlots: undefined, handedness: undefined } },
+        }),
+      ],
+    });
+    expect(result).toMatchObject({
+      status: 'ready', canBeginMechanically: true, inventoryValid: true, equipmentValid: true,
+      narrativeInventoryItemRefs: ['travel-journal-1'], incompleteContentRefs: [],
     });
   });
 
@@ -386,7 +416,9 @@ describe('actor encounter readiness', () => {
       ],
     });
     expect(result).toMatchObject({
-      status: 'ready', canStartEncounter: true, blockingReasons: [], narrativeContentCount: 1,
+      status: 'ready', canBeginMechanically: true, canStartEncounter: true,
+      hasUsableOffensiveAction: true, inventoryValid: true, equipmentValid: true,
+      blockingReasons: [], narrativeContentCount: 1,
     });
     expect(result.usableActions).toEqual([
       { source: 'consumable', ref: 'healing-potions', action: 'use_item' },

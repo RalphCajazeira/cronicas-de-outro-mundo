@@ -27,6 +27,7 @@ import {
   type PublishedContent,
   type PublicContentVersion,
 } from '../content/content-publication.service.js';
+import { materializeStarterContentBlueprint } from '../content/starter-content-blueprints.js';
 import { getActorEffects, resolveActorEffectTransaction } from '../effects/effect-resolution.service.js';
 import { projectActorActiveEffectSummary } from '../effects/effect-state.service.js';
 import type {
@@ -434,10 +435,33 @@ export const prismaGptRepository: GptRepository = {
             if (global === null && definitionInput.overridesWorldDefinition === true) throw new ConflictError('World content to override was not found');
           }
           try {
+            const starterBlueprint = definitionInput.starterBlueprint === undefined
+              ? null
+              : materializeStarterContentBlueprint({
+                starterBlueprint: definitionInput.starterBlueprint,
+                code: definitionInput.code,
+                name: definitionInput.name ?? '',
+                ...(definitionInput.blueprintOptions?.damageElement === undefined
+                  ? {}
+                  : { damageElement: definitionInput.blueprintOptions.damageElement }),
+                ...(definitionInput.blueprintOptions?.equipmentSlot === undefined
+                  ? {}
+                  : { equipmentSlot: definitionInput.blueprintOptions.equipmentSlot }),
+                ...(definitionInput.blueprintOptions?.unitWeight === undefined
+                  ? {}
+                  : { unitWeight: definitionInput.blueprintOptions.unitWeight }),
+                ...(definitionInput.blueprintOptions?.secondaryModifiers === undefined
+                  ? {}
+                  : { secondaryModifiers: definitionInput.blueprintOptions.secondaryModifiers }),
+                ...(definitionInput.blueprintOptions?.linkedStatusCode === undefined
+                  ? {}
+                  : { linkedStatusCode: definitionInput.blueprintOptions.linkedStatusCode }),
+              });
             const definition = await observeOperationStage('content_publication', () => publishContentVersion(transaction, {
               worldId: world.id, campaignId, code: definitionInput.code, contentType: type,
               name: definitionInput.name ?? '', description: definitionInput.description ?? null,
-              profile: definitionInput.profile, inventorySpec: definitionInput.inventorySpec,
+              profile: starterBlueprint?.profile ?? definitionInput.profile,
+              inventorySpec: starterBlueprint?.inventorySpec ?? definitionInput.inventorySpec,
               presentation: definitionInput.presentation ?? {},
               tags: definitionInput.tags ?? [], status: ContentStatus.ACTIVE,
               metadata: definitionInput.metadata ?? {},

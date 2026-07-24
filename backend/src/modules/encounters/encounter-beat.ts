@@ -1,4 +1,5 @@
 import {
+  CORE_V1_3_VERSION_CODE,
   calculateMovement,
   resolveCoreV1DeterministicReactionOutcome,
   zoneDistance,
@@ -28,8 +29,10 @@ import type {
 
 export const ENCOUNTER_GENERIC_ACTIONS: readonly EncounterGenericAction[] = [
   'move', 'defend', 'protect', 'prepare', 'intercept', 'assist', 'flee',
-  'observe', 'interact', 'improvise', 'use_item', 'attack', 'cast',
+  'observe', 'hide', 'sneak_move', 'interact', 'improvise', 'use_item', 'attack', 'cast',
 ];
+export const LEGACY_ENCOUNTER_GENERIC_ACTIONS: readonly EncounterGenericAction[] = ENCOUNTER_GENERIC_ACTIONS
+  .filter((action) => action !== 'hide' && action !== 'sneak_move');
 export const ENCOUNTER_COMMON_SCENE_TARGET_BYTES = 65_536;
 export const ENCOUNTER_GROUP_SCENE_TARGET_BYTES = 131_072;
 export const ENCOUNTER_MAX_SCENE_RESPONSE_BYTES = 262_144;
@@ -102,6 +105,7 @@ export function encounterScenePackage(
     readonly lifecycleStatus?: string;
     readonly context?: EncounterContextV1;
     readonly actionCatalog?: ReadonlyMap<string, EncounterActionCatalog>;
+    readonly rulesetVersionCode?: string;
   } = {},
 ): EncounterScenePackageDto {
   return observeOperationStageSync('encounter_capsule_assembly', () => {
@@ -161,7 +165,9 @@ export function encounterScenePackage(
     stateVersion: state.stateVersion,
     lifecycleStatus: options.lifecycleStatus ?? state.status,
     objective: context?.objective ?? null,
-    genericActions: [...ENCOUNTER_GENERIC_ACTIONS],
+    genericActions: [...(options.rulesetVersionCode === undefined || options.rulesetVersionCode === CORE_V1_3_VERSION_CODE
+      ? ENCOUNTER_GENERIC_ACTIONS
+      : LEGACY_ENCOUNTER_GENERIC_ACTIONS)],
     processingLimits: {
       maximumBeatsPerCall: 12,
       maximumComponentsPerBeat: 3,
@@ -196,6 +202,11 @@ export function encounterScenePackage(
       zoneModel: 'abstract_bands',
       summary: context?.environment.summary ?? null,
       tags: [...(context?.environment.tags ?? [])],
+      stealthContext: {
+        lighting: context?.environment.lighting ?? 'normal',
+        cover: context?.environment.cover ?? 'none',
+        ambientNoise: context?.environment.ambientNoise ?? 'normal',
+      },
       notes: [
         'Positions use engaged, near, medium, far and out_of_range bands.',
         'Exact geometry and scene objects are not inferred; use explicit target references.',
@@ -287,6 +298,16 @@ export function encounterScenePackage(
         ...(knownContentRefs.length === 0 ? {} : { knownContentRefs }),
         ...(activeEffects.length === 0 ? {} : { activeEffects }),
         ...(preparedActionRefs.length === 0 ? {} : { preparedActionRefs }),
+        ...(participant.stealthState === undefined ? {} : {
+          stealth: {
+            visibility: participant.stealthState.visibility,
+            observers: participant.stealthState.observerAwareness.map((entry) => ({
+              observerActorRef: entry.observerActorRef,
+              awareness: entry.awareness,
+              marginTier: entry.marginTier,
+            })),
+          },
+        }),
         validThreatRefs: [...relations.hostiles],
         usableActions: {
           catalogMode: fullCatalog ? 'full' : 'summary',
@@ -479,7 +500,7 @@ export function genericEncounterAction(
 } {
   const actor = state.participants.find((participant) => participant.actorRef === actorRef);
   if (actor === undefined) throw new TypeError('Beat actor is not an encounter participant');
-  const destination = component.type === 'move' ? component.destination
+  const destination = component.type === 'move' || component.type === 'sneak_move' ? component.destination
     : component.type === 'flee' ? component.destination ?? 'out_of_range' : undefined;
   const targetRef = 'targetRef' in component ? component.targetRef : undefined;
   const intent: CoreV1EncounterActionIntent = {
@@ -500,7 +521,8 @@ export function genericEncounterAction(
     defenses: {},
     ...(destination === undefined ? {} : { movement: {
       kind: component.type === 'move' && component.movementKind !== undefined
-        ? component.movementKind : movementKind(actor.zone, destination),
+        ? component.movementKind
+        : movementKind(actor.zone, destination),
       from: actor.zone,
       to: destination,
       terrain: 'normal' as const,

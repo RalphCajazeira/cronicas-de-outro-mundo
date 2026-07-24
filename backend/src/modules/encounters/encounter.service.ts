@@ -24,21 +24,29 @@ import {
   confirmCoreV1EncounterCompletion,
   CORE_V1_MAX_ENCOUNTER_BATCH_ADVANCE,
   CORE_V1_MAX_ENCOUNTER_BATCH_EVENTS,
+  CORE_V1_3_VERSION_CODE,
   createCoreV1EncounterActionSlots,
   createCoreV1EncounterState,
+  initializeCoreV13EncounterStealthState,
   processCoreV1EncounterBatch,
   processNextCoreV1EncounterEvent,
   resolveCoreV1DeterministicReactionOutcome,
+  applyCoreV13ObserverAwareness,
+  revealCoreV13Actor,
+  resolveCoreV13StealthContest,
   validateCoreV1EncounterActionIntent,
   type CoreV1EncounterBatchResult,
   type CoreV1CreateEncounterInput,
   type CoreV1EncounterParticipantInput,
+  type CoreV1EncounterParticipant,
   type CoreV1EncounterRuntime,
   type CoreV1EncounterState,
   type CoreV1EncounterActionDefinition,
   type CoreV1EncounterActionIntent,
   type CoreV1EncounterTargetingContext,
   type ReactionOutcomeResolver,
+  type CoreV13ObserverAwareness,
+  type CoreV13StealthContext,
 } from '../rules/core-v1/index.js';
 import {
   loadAuthoritativeEncounterAction,
@@ -103,6 +111,7 @@ import {
 } from './encounter-state-loader.js';
 import {
   createCoreV1EncounterSnapshotHash,
+  encounterSnapshotSchemaVersionForRulesetVersionCode,
   serializeCoreV1EncounterState,
 } from './encounter-state-snapshot.js';
 import {
@@ -338,6 +347,8 @@ async function persistRolls(
     hit: EncounterRollKind.HIT,
     critical: EncounterRollKind.CRITICAL,
     concentration: EncounterRollKind.CONCENTRATION,
+    stealth: EncounterRollKind.STEALTH,
+    detection: EncounterRollKind.DETECTION,
   } as const;
   if (recorder.consumed.length === 0) return;
   await transaction.encounterRoll.createMany({
@@ -381,8 +392,8 @@ async function persistTransition(
     : undefined;
   const persistedState = terminal?.state ?? state;
   const persistedAuthorities = terminal?.authorities ?? authorities;
-  const snapshot = serializeCoreV1EncounterState(persistedState);
-  const stateHash = createCoreV1EncounterSnapshotHash(snapshot);
+  const snapshot = serializeCoreV1EncounterState(persistedState, loaded.record.rulesetVersion.code);
+  const stateHash = createCoreV1EncounterSnapshotHash(snapshot, loaded.record.rulesetVersion.code);
   const lifecycleStatus = deriveEncounterLifecycle(persistedState, stopReason);
   const updated = await transaction.encounter.updateMany({
     where: {
@@ -396,6 +407,7 @@ async function persistTransition(
       currentTick: persistedState.currentTick,
       stopReason: databaseStopReason(stopReason),
       completionCandidate: databaseCompletionCandidate(persistedState.completionCandidate),
+      snapshotSchemaVersion: encounterSnapshotSchemaVersionForRulesetVersionCode(loaded.record.rulesetVersion.code),
       stateSnapshot: snapshot,
       stateHash,
       ...((lifecycleStatus === EncounterLifecycleStatus.COMPLETED
@@ -457,6 +469,7 @@ async function persistTransition(
     operation === 'resolve_beat' ? encounterScenePackage(persistedState, persistedAuthorities, {
       lifecycleStatus: normalizeEnum(lifecycleStatus),
       context: encounterContext,
+      rulesetVersionCode: loaded.record.rulesetVersion.code,
       ...(actionCatalog === undefined ? {} : { actionCatalog }),
     }) : undefined,
     beatSummary,
@@ -648,6 +661,144 @@ function atomicBeatIssues(results: EncounterBeatSummaryDto['componentResults']) 
       ? `${result.reason ?? 'Component was rejected'}. ${result.alternative ?? 'Choose a compatible component.'}`
       : `Component was ${result.status} in memory but was not persisted because the beat policy required full rollback.`,
   }));
+}
+
+function participantRelation(
+  state: CoreV1EncounterState,
+  leftActorRef: string,
+  rightActorRef: string,
+): 'self' | 'ally' | 'hostile' | 'neutral' {
+  if (leftActorRef === rightActorRef) return 'self';
+  return state.relations.find((entry) => (
+    (entry.leftActorRef === leftActorRef && entry.rightActorRef === rightActorRef)
+    || (entry.rightActorRef === leftActorRef && entry.leftActorRef === rightActorRef)
+  ))?.relation ?? 'neutral';
+}
+
+function stealthContext(
+  context: EncounterContextV1 | undefined,
+  component: Extract<EncounterBeatComponent, { type: 'hide' | 'sneak_move' }>,
+): CoreV13StealthContext {
+  return {
+    lighting: context?.environment.lighting ?? 'normal',
+    cover: context?.environment.cover ?? 'none',
+    noise: context?.environment.ambientNoise ?? 'normal',
+    pace: component.type === 'hide' ? 'stationary' : component.pace ?? 'normal',
+  };
+}
+
+function eligibleStealthObservers(
+  state: CoreV1EncounterState,
+  targetActorRef: string,
+): readonly CoreV1EncounterParticipant[] {
+  return state.participants.filter((participant) => (
+    participantRelation(state, targetActorRef, participant.actorRef) === 'hostile'
+    && participant.combatState !== 'removed'
+    && participant.resources.hp.current > 0
+    && participant.zone !== 'out_of_range'
+  )).sort((left, right) => left.actorRef.localeCompare(right.actorRef));
+}
+
+function resolveStealthComponent(
+  state: CoreV1EncounterState,
+  actorRef: string,
+  component: Extract<EncounterBeatComponent, { type: 'hide' | 'sneak_move' }>,
+  actionRef: string,
+  recorder: RecordingEncounterRollProvider,
+  context: EncounterContextV1 | undefined,
+): {
+  readonly state: CoreV1EncounterState;
+  readonly summary: NonNullable<EncounterBeatSummaryDto['componentResults'][number]['stealth']>;
+} {
+  const actor = state.participants.find((participant) => participant.actorRef === actorRef);
+  if (actor === undefined) throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
+  const observers = eligibleStealthObservers(state, actorRef);
+  const entries: CoreV13ObserverAwareness[] = observers.map((observer, observerOrdinal) => {
+    const rolls = recorder.stealthContest({
+      encounterRef: state.encounterRef,
+      actionRef,
+      sourceActorRef: actorRef,
+      observerActorRef: observer.actorRef,
+      observerOrdinal,
+    });
+    const result = resolveCoreV13StealthContest({
+      agentStealth: actor.secondaryAttributes.stealth,
+      observerDetection: observer.secondaryAttributes.detection,
+      ...rolls,
+      context: stealthContext(context, component),
+    });
+    return {
+      observerActorRef: observer.actorRef,
+      awareness: result.awareness,
+      margin: result.margin,
+      marginTier: result.marginTier,
+    };
+  });
+  const next = applyCoreV13ObserverAwareness(state, actorRef, entries, {
+    eligibleObserverActorRefs: observers.map((observer) => observer.actorRef),
+  });
+  const stealthState = next.participants.find((participant) => participant.actorRef === actorRef)?.stealthState;
+  if (stealthState === undefined) throw new EncounterError('ENCOUNTER_INTERNAL');
+  return {
+    state: next,
+    summary: {
+      visibility: stealthState.visibility,
+      observerResults: stealthState.observerAwareness.map((entry) => ({
+        observerActorRef: entry.observerActorRef,
+        awareness: entry.awareness,
+        marginTier: entry.marginTier,
+      })),
+    },
+  };
+}
+
+function resolveObservationComponent(
+  state: CoreV1EncounterState,
+  observerActorRef: string,
+  targetActorRef: string | undefined,
+  actionRef: string,
+  recorder: RecordingEncounterRollProvider,
+  context: EncounterContextV1 | undefined,
+): CoreV1EncounterState {
+  const observer = state.participants.find((participant) => participant.actorRef === observerActorRef);
+  if (observer === undefined) throw new EncounterError('ENCOUNTER_PARTICIPANT_INVALID');
+  const hiddenTargets = state.participants.filter((participant) => (
+    participant.actorRef !== observerActorRef
+    && participant.stealthState !== undefined
+    && (targetActorRef === undefined || participant.actorRef === targetActorRef)
+    && participantRelation(state, observerActorRef, participant.actorRef) === 'hostile'
+  )).sort((left, right) => left.actorRef.localeCompare(right.actorRef));
+  let current = state;
+  hiddenTargets.forEach((target, targetOrdinal) => {
+    const rolls = recorder.stealthContest({
+      encounterRef: current.encounterRef,
+      actionRef,
+      sourceActorRef: target.actorRef,
+      observerActorRef,
+      observerOrdinal: targetOrdinal,
+    });
+    const result = resolveCoreV13StealthContest({
+      agentStealth: target.secondaryAttributes.stealth,
+      observerDetection: observer.secondaryAttributes.detection,
+      ...rolls,
+      context: {
+        lighting: context?.environment.lighting ?? 'normal',
+        cover: context?.environment.cover ?? 'none',
+        noise: context?.environment.ambientNoise ?? 'normal',
+        pace: 'stationary',
+      },
+    });
+    current = applyCoreV13ObserverAwareness(current, target.actorRef, [{
+      observerActorRef,
+      awareness: result.awareness,
+      margin: result.margin,
+      marginTier: result.marginTier,
+    }], {
+      eligibleObserverActorRefs: eligibleStealthObservers(current, target.actorRef)
+        .map((candidate) => candidate.actorRef),
+    });
+  });
+  return current;
 }
 
 function evaluateBeatComponentCondition(
@@ -954,6 +1105,44 @@ async function executeOneResolvedBeat(
   ));
   let current = applyBeatGuardCapabilities(main.state, intent.actorRef, resolvedMainComponents, prefix);
   current = storePreparedPlans(current, intent.actorRef, main.prepared, prefix);
+  let componentResults = main.results;
+  for (const [index, component] of resolvedMainComponents.entries()) {
+    const originalIndex = main.appliedComponents.indexOf(component);
+    if (component.type === 'hide' || component.type === 'sneak_move') {
+      if (loaded.record.rulesetVersion.code !== CORE_V1_3_VERSION_CODE) {
+        throw new EncounterError('ENCOUNTER_CORE_REJECTED', {
+          issues: [{
+            path: `intent.components.${String(originalIndex)}`,
+            code: 'RULESET_CAPABILITY_UNAVAILABLE',
+            message: 'Stealth encounter components require a campaign pinned to core-v1.3.',
+          }],
+        });
+      }
+      const stealth = resolveStealthComponent(
+        current,
+        intent.actorRef,
+        component,
+        `beat-${prefix}-${String(originalIndex < 0 ? index : originalIndex)}`,
+        recorder,
+        loaded.context,
+      );
+      current = stealth.state;
+      componentResults = componentResults.map((result) => (
+        result.index === originalIndex ? { ...result, stealth: stealth.summary } : result
+      ));
+    } else if (component.type === 'observe') {
+      current = resolveObservationComponent(
+        current,
+        intent.actorRef,
+        component.targetRef,
+        `beat-${prefix}-${String(originalIndex < 0 ? index : originalIndex)}`,
+        recorder,
+        loaded.context,
+      );
+    } else if (component.type === 'attack') {
+      current = revealCoreV13Actor(current, intent.actorRef);
+    }
+  }
   reports.push(main.report);
   const actorsActed = new Set<string>(main.report.resolvedActions.length === 0 ? [] : [intent.actorRef]);
   const npcActions: EncounterBeatSummaryDto['npcActions'][number][] = [];
@@ -983,6 +1172,9 @@ async function executeOneResolvedBeat(
     current = applyBeatGuardCapabilities(
       npc.state, actorRef, npcResolved ? [selected.component] : [], `${prefix}-npc-${npcIndex}`,
     );
+    if (npcResolved && selected.component.type === 'attack') {
+      current = revealCoreV13Actor(current, actorRef);
+    }
     reports.push(npc.report);
     if (npcResolved) {
       actorsActed.add(actorRef);
@@ -1017,7 +1209,7 @@ async function executeOneResolvedBeat(
       resolutionPolicy: intent.resolutionPolicy,
       partialResolutionApplied: rejectedResults.length > 0,
       actorsActed: [...actorsActed].sort(),
-      componentResults: main.results,
+      componentResults,
       npcActions,
       npcResults,
       ...(deferredNpcActorRefs.length === 0 ? {} : { deferredNpcActorRefs }),
@@ -1443,7 +1635,10 @@ export function createEncounterService(
             };
             coreValue(createCoreV1EncounterState(coreInput));
             const recorder = rollRecorderFactory(requestHash);
-            const state = coreValue(createCoreV1EncounterState(coreInput, recorder));
+            const initialState = coreValue(createCoreV1EncounterState(coreInput, recorder));
+            const state = rulesetVersion.code === CORE_V1_3_VERSION_CODE
+              ? initializeCoreV13EncounterStealthState(initialState)
+              : initialState;
             const encounterContext = normalizedInput.context ?? defaultEncounterContext();
             const actionCatalog = await loadEncounterActionCatalog(transaction, { state, authorities });
             const assistedSetup = normalizedInput.setupMode === 'assisted' && normalizedInput.setupSummary !== undefined
@@ -1482,8 +1677,8 @@ export function createEncounterService(
                 };
               })()
               : undefined;
-            const snapshot = serializeCoreV1EncounterState(state);
-            const stateHash = createCoreV1EncounterSnapshotHash(snapshot);
+            const snapshot = serializeCoreV1EncounterState(state, rulesetVersion.code);
+            const stateHash = createCoreV1EncounterSnapshotHash(snapshot, rulesetVersion.code);
             const lifecycleStatus = deriveEncounterLifecycle(state, null);
             const encounter = await transaction.encounter.create({
               data: {
@@ -1493,7 +1688,7 @@ export function createEncounterService(
                 lifecycleStatus,
                 stateVersion: 1,
                 currentTick: state.currentTick,
-                snapshotSchemaVersion: 1,
+                snapshotSchemaVersion: encounterSnapshotSchemaVersionForRulesetVersionCode(rulesetVersion.code),
                 stateSnapshot: snapshot,
                 stateHash,
               },
@@ -1554,6 +1749,7 @@ export function createEncounterService(
                 lifecycleStatus: normalizeEnum(lifecycleStatus),
                 context: encounterContext,
                 actionCatalog,
+                rulesetVersionCode: rulesetVersion.code,
               }),
               undefined,
               undefined,
@@ -1595,6 +1791,7 @@ export function createEncounterService(
               lifecycleStatus: normalizeEnum(loaded.record.lifecycleStatus),
               context: loaded.context ?? defaultEncounterContext(),
               actionCatalog,
+              rulesetVersionCode: loaded.record.rulesetVersion.code,
             }),
           );
         }, {
@@ -1942,8 +2139,8 @@ export function createEncounterService(
               stateVersion: loaded.state.stateVersion + 1,
               completionCandidate: null,
             };
-            const snapshot = serializeCoreV1EncounterState(failedState);
-            const stateHash = createCoreV1EncounterSnapshotHash(snapshot);
+            const snapshot = serializeCoreV1EncounterState(failedState, record.rulesetVersion.code);
+            const stateHash = createCoreV1EncounterSnapshotHash(snapshot, record.rulesetVersion.code);
             const stopReason = databaseStopReason('encounter_failed');
             const updated = await transaction.encounter.updateMany({
               where: { id: record.id, stateVersion: record.stateVersion, stateHash: record.stateHash },
@@ -1952,6 +2149,7 @@ export function createEncounterService(
                 stateVersion: failedState.stateVersion,
                 completionCandidate: null,
                 stopReason,
+                snapshotSchemaVersion: encounterSnapshotSchemaVersionForRulesetVersionCode(record.rulesetVersion.code),
                 stateSnapshot: snapshot,
                 stateHash,
                 closedAt: new Date(),
