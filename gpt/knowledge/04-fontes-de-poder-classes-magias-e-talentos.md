@@ -32,7 +32,7 @@ Invariantes que não podem ser confundidos:
 - `profile.rulesetCode` usa `core-v1`;
 - `inventorySpec.rulesetCode` usa `core-v1` e `inventoryRulesCode` usa `core-v1-inventory-v1`.
 
-Na Criação Rápida use `starterBlueprint`, não reconstrua o profile. O backend materializa e valida estes códigos fechados:
+Na Criação Rápida use `starterBlueprint` diretamente em `definition`, nunca dentro de `profile`, e não reconstrua o profile. O backend materializa e valida estes códigos fechados:
 
 - `simple_melee_weapon`, `simple_ranged_weapon` e `simple_magic_focus`;
 - `basic_offensive_spell`, com `blueprintOptions.damageElement` opcional;
@@ -44,6 +44,8 @@ Na Criação Rápida use `starterBlueprint`, não reconstrua o profile. O backen
 - `detect_hidden_skill`, capacidade de detecção/informação sem movimento falso.
 
 Envie identidade e apresentação (`code`, `name`, `description`, `presentation`, `tags`, `status=active`), mas omita `profile` e `inventorySpec`: eles são derivados. O `contentType` deve corresponder ao blueprint. O vínculo `protagonistLink` concede conhecimento a magia/habilidade; arma, armadura, consumível e item físico são concedidos separadamente por `initialInventory`. Cada combinação `scope/contentType/code` aparece uma única vez no inventário inicial; agregue quantidade/stacks e equipe somente entrada única equipável.
+
+Não existe `starterBlueprint` de classe. Em campanha com classe mecânica customizada, use uma definição `class` com o `profile` completo do exemplo OpenAPI: ativação passiva, custo `none` e concessões em `profile.grants`. `contentGrants` não pertence ao schema, e `starterBlueprint`/`blueprintOptions` nunca entram em `profile`.
 
 O catálogo fixa custos, raridade, targeting, slots, efeitos e potência, enquanto nome, descrição, apresentação e elemento mágico allowlisted preservam a proposta narrativa. Para mecânica fora do catálogo, use os exemplos completos da ficha e o schema oficial. Se `INVALID_INPUT` apontar erro técnico e a correção preservar a intenção aprovada, corrija uma vez com nova idempotency key; mudança de custo, potência, arma principal, elemento ou conceito exige decisão do jogador.
 

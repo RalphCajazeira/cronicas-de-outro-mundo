@@ -71,7 +71,7 @@ Falha não autoriza narrar resultado, afirmar salvamento ou avançar.
 
 ## Conteúdo e limites
 
-Na criação, use 6–12 conteúdos, máximo 24. Na Rápida, use `starterBlueprint` sem profile/inventorySpec. Conceito usa vínculo; posse, `initialInventory`. Bota, Véu/status e detecção usam blueprints oficiais.
+Na criação, use 6–12 conteúdos, máximo 24. Na Rápida, blueprint fica em `definition`; classe mecânica usa o profile do exemplo com `grants`. Posse usa `initialInventory`. Nunca use `contentGrants`.
 
 Prefira `reuse`; agregue cada ref física e não equipe narrativo. Conteúdo informativo sem capability fica narrativo e não recebe movimento/dano/bônus falso. Leia ofensiva, utilidade, furtividade, detecção, informação, inventário/equipamento e incompletos no `readiness`. Omita modificadores zero.
 

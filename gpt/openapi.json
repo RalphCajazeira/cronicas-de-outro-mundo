@@ -150,7 +150,7 @@
         "operationId": "startGame",
         "x-openai-isConsequential": false,
         "summary": "Criar um jogo estruturado em uma transação",
-        "description": "Somente após pedido explícito e confirmação, cria/reutiliza Player e World sem atualizá-los e cria Campaign, protagonista, conteúdos, vínculos e campaign-started. Reuse envia apenas mode, scope, code e contentType.",
+        "description": "Somente após pedido explícito e confirmação, cria/reutiliza Player/World sem atualizá-los e cria Campaign, protagonista, conteúdos, vínculos e evento inicial. Reuse envia mode, scope, code e contentType. Blueprints ficam em definition; classe mecânica customizada usa o profile do exemplo.",
         "requestBody": {
           "required": true,
           "content": {
@@ -339,6 +339,171 @@
                       { "scope": "world", "contentType": "other", "code": "travel-journal", "quantity": 1, "entryRefs": ["travel-journal-1"] }
                     ],
                     "initialPremise": "Nara encontra um portal instável sob antigas ruínas."
+                  }
+                },
+                "quick_shadow_mage": {
+                  "summary": "Criação Rápida furtiva com classe mecânica completa, Véu e equipamento leve",
+                  "value": {
+                    "idempotencyKey": "start-quick-shadow-mage-001",
+                    "playerMode": "create", "playerRef": "vael", "playerDisplayName": "ralph",
+                    "worldMode": "create", "worldRef": "erdhavar", "worldName": "Erdhavar",
+                    "worldDescription": "Reino medieval de florestas enegrecidas, fortalezas decadentes e magia proibida.",
+                    "worldConfiguration": {
+                      "schemaVersion": 1, "genres": ["fantasy", "dark_fantasy"], "setting": "Reino sob um véu de sombras", "era": "medieval",
+                      "technologyLevel": { "grade": "preindustrial" }, "magicLevel": { "grade": "rare" },
+                      "worldTone": ["mysterious", "dark"]
+                    },
+                    "campaignRef": "arquivos-ordem-morta", "campaignName": "Os Arquivos da Ordem Morta",
+                    "campaignConfiguration": {
+                      "schemaVersion": 1, "difficulty": { "preset": "standard" }, "progressionPace": "standard",
+                      "narrativeTone": ["mysterious", "dark"], "focus": ["exploration", "investigation"],
+                      "playerFreedom": "open", "consequenceLevel": "moderate",
+                      "classModel": {
+                        "mode": "mechanical", "startingClass": "required", "progressionBasis": ["class", "content"],
+                        "description": "Classes são identidades mecânicas e concedem conteúdos iniciais."
+                      }
+                    },
+                    "protagonist": {
+                      "code": "vael", "name": "Vael", "actorType": "character", "species": "humano",
+                      "className": "Mago das Sombras", "role": "explorador arcano, infiltrador e investigador",
+                      "description": "Estudioso perseguido por recuperar os rituais proibidos de uma ordem extinta.",
+                      "appearance": { "summary": "Figura magra em tecidos escuros reforçados com couro flexível." },
+                      "personality": { "traits": ["observador", "cauteloso", "obstinado"] },
+                      "origin": { "label": "Último erudito da Ordem Morta", "summary": "Aprendeu magia sombria em manuscritos de uma ordem apagada da história." },
+                      "primaryAttributes": {
+                        "strength": 6, "vitality": 9, "agility": 12, "dexterity": 11, "intelligence": 16,
+                        "wisdom": 10, "perception": 11, "willpower": 11, "luck": 4
+                      }
+                    },
+                    "initialContentPackages": [
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "contentType": "class", "code": "shadow-mage", "name": "Mago das Sombras",
+                          "description": "Classe mecânica de conjuração sombria, exploração e infiltração.",
+                          "profile": {
+                            "schemaVersion": 1, "rulesetCode": "core-v1", "profileMode": "mechanical",
+                            "contentKind": "class", "code": "shadow-mage", "name": "Mago das Sombras",
+                            "tier": 1, "rarity": "epic", "activation": { "type": "passive" }, "cost": { "type": "none" },
+                            "grants": [
+                              { "contentKind": "spell", "code": "shadow-bolt" },
+                              { "contentKind": "spell", "code": "veil-of-darkness" },
+                              { "contentKind": "skill", "code": "silent-step" },
+                              { "contentKind": "skill", "code": "beyond-veil-sight" }
+                            ]
+                          },
+                          "inventorySpec": null, "presentation": {}, "tags": ["shadow", "exploration", "stealth"], "status": "active"
+                        },
+                        "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "basic_offensive_spell",
+                          "blueprintOptions": { "damageElement": "shadow" },
+                          "contentType": "spell", "code": "shadow-bolt", "name": "Seta Umbral",
+                          "description": "Projétil ofensivo de sombras.", "presentation": {}, "tags": ["shadow", "offensive"], "status": "active"
+                        },
+                        "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "basic_mobility_skill",
+                          "contentType": "skill", "code": "silent-step", "name": "Passo Silencioso",
+                          "description": "Reposicionamento cuidadoso para infiltração.", "presentation": {}, "tags": ["stealth", "movement"], "status": "active"
+                        },
+                        "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "shadow_wrapped_status",
+                          "contentType": "status_effect", "code": "shadow-wrapped", "name": "Envolto em Sombras",
+                          "description": "Status de cena que melhora furtividade sem invisibilidade.", "presentation": {},
+                          "tags": ["shadow_wrapped", "stealth"], "status": "active"
+                        }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "veil_of_darkness_spell",
+                          "blueprintOptions": { "linkedStatusCode": "shadow-wrapped" },
+                          "contentType": "spell", "code": "veil-of-darkness", "name": "Véu das Trevas",
+                          "description": "Aplica Envolto em Sombras ao próprio conjurador.", "presentation": {},
+                          "tags": ["shadow", "stealth"], "status": "active"
+                        },
+                        "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "detect_hidden_skill",
+                          "contentType": "skill", "code": "beyond-veil-sight", "name": "Olhar Além do Véu",
+                          "description": "Detecção mecânica de presenças ocultas sem revelar informação livremente.", "presentation": {},
+                          "tags": ["detect_hidden", "informational"], "status": "active"
+                        },
+                        "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "simple_melee_weapon",
+                          "contentType": "weapon", "code": "dark-blade-dagger", "name": "Adaga de Lâmina Escura",
+                          "description": "Adaga leve para defesa e ataques próximos.", "presentation": {}, "tags": ["light", "shadow"], "status": "active"
+                        }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "starter_body_armor",
+                          "contentType": "armor", "code": "shadow-scholar-garb", "name": "Traje Leve do Erudito Sombrio",
+                          "description": "Traje integral leve reforçado com couro flexível.", "presentation": {},
+                          "tags": ["light", "stealth"], "status": "active"
+                        }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "simple_magic_focus",
+                          "blueprintOptions": { "damageElement": "shadow" },
+                          "contentType": "weapon", "code": "obsidian-focus", "name": "Foco de Obsidiana",
+                          "description": "Instrumento mágico leve para canalizar sombras.", "presentation": {}, "tags": ["focus", "shadow"], "status": "active"
+                        }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "basic_healing_consumable",
+                          "contentType": "consumable", "code": "healing-potion", "name": "Poção de Cura",
+                          "description": "Consumível inicial de cura.", "presentation": {}, "tags": ["healing"], "status": "active"
+                        }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "contentType": "other", "code": "order-coded-journal", "name": "Diário Cifrado da Ordem",
+                          "description": "Registro narrativo sem bônus mecânico.", "profile": null,
+                          "inventorySpec": {
+                            "schemaVersion": 1, "rulesetCode": "core-v1", "inventoryRulesCode": "core-v1-inventory-v1",
+                            "unitWeight": 1, "stacking": { "mode": "unique" }
+                          },
+                          "presentation": {}, "tags": ["narrative"], "status": "active"
+                        }
+                      }
+                    ],
+                    "initialInventory": [
+                      {
+                        "scope": "world", "contentType": "weapon", "code": "dark-blade-dagger", "quantity": 1,
+                        "entryRefs": ["dark-blade-dagger-1"], "equip": { "targetSlotRef": "main_hand" }
+                      },
+                      {
+                        "scope": "world", "contentType": "armor", "code": "shadow-scholar-garb", "quantity": 1,
+                        "entryRefs": ["shadow-scholar-garb-1"], "equip": { "targetSlotRef": "body" }
+                      },
+                      {
+                        "scope": "world", "contentType": "weapon", "code": "obsidian-focus", "quantity": 1,
+                        "entryRefs": ["obsidian-focus-1"]
+                      },
+                      {
+                        "scope": "world", "contentType": "consumable", "code": "healing-potion", "quantity": 2,
+                        "entryRefs": ["healing-potions"]
+                      },
+                      {
+                        "scope": "world", "contentType": "other", "code": "order-coded-journal", "quantity": 1,
+                        "entryRefs": ["order-coded-journal-1"]
+                      }
+                    ],
+                    "initialPremise": "Vael chega a Dornhal e encontra o símbolo invertido de sua ordem numa cripta recém-exposta."
                   }
                 }
               }
@@ -2509,7 +2674,7 @@
           "metadata": { "$ref": "#/components/schemas/JsonObject", "description": "Até 4096 bytes UTF-8, profundidade 5 e 30 chaves recursivas." },
           "overridesWorldDefinition": { "type": "boolean" }
         },
-        "description": "create exige identidade completa e, para conteúdo customizado, profile/inventorySpec. Com starterBlueprint, omita profile/inventorySpec: o backend os deriva. reuse aceita somente mode, scope=world, code e contentType."
+        "description": "create exige identidade completa e, para conteúdo customizado, profile/inventorySpec. Com starterBlueprint diretamente em definition, omita profile/inventorySpec: o backend os deriva. Não há blueprint de classe; classe mecânica customizada usa profile completo com grants, nunca contentGrants. reuse aceita somente mode, scope=world, code e contentType."
       },
       "InitialActorContentLink": {
         "type": "object",
