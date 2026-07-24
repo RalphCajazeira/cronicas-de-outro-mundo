@@ -7,6 +7,10 @@ import {
 import { jsonByteSize, jsonDepth, jsonKeyCount } from './gpt.start-game.js';
 import { getInitialAttributePreset } from '../rules/core-v1/index.js';
 import { skillPublicationInput } from '../../../tests/support/content-fixture.js';
+import {
+  capturedRichQuickCreationPayload,
+  correctedRichQuickCreationPayload,
+} from '../../../tests/support/rich-quick-creation-fixture.js';
 
 const scope = { playerRef: 'ralph', worldRef: 'mundo-cardinal', campaignRef: 'harem-perfeito' };
 const primaryAttributes = getInitialAttributePreset('balanced');
@@ -246,6 +250,116 @@ describe('GPT API schemas', () => {
       initialContentPackages: [{
         ...skill,
         definition: { ...skill.definition, blueprintOptions: { damageElement: 'fire' } },
+      }],
+    }).success).toBe(false);
+  });
+
+  it('turns the captured rich payload and its minimal invalid blueprint into actionable issues without throwing', () => {
+    const captured = capturedRichQuickCreationPayload('schema-captured-rich');
+    const result = startGameSchema.safeParse(captured);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issuePaths = result.error.issues.map((issue) => issue.path.join('.'));
+      expect(issuePaths).toContain(
+        'initialContentPackages.8.definition.blueprintOptions.secondaryModifiers',
+      );
+      expect(issuePaths).toContain('initialContentPackages.7.definition.contentType');
+      expect(issuePaths).toContain('initialContentPackages.5.definition.blueprintOptions');
+    }
+
+    const base = validStartGame();
+    const minimalPackage = captured.initialContentPackages[8]!;
+    const minimal = startGameSchema.safeParse({
+      ...base,
+      initialContentPackages: [minimalPackage],
+      initialInventory: [],
+    });
+    expect(minimal.success).toBe(false);
+    if (!minimal.success) {
+      expect(minimal.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: ['initialContentPackages', 0, 'definition', 'blueprintOptions', 'secondaryModifiers'],
+          message: 'Starter blueprint options produce an invalid profile: Armor requires defense or a recognized defensive passive modifier',
+        }),
+      ]));
+    }
+  });
+
+  it('accepts the corrected 11-package and 6-grant rich creation payload', () => {
+    const result = startGameSchema.safeParse(correctedRichQuickCreationPayload('schema-corrected-rich'));
+    expect(result.success, result.success ? '' : JSON.stringify(result.error.issues)).toBe(true);
+    if (!result.success) return;
+    expect(result.data.initialContentPackages).toHaveLength(11);
+    expect(result.data.initialInventory).toHaveLength(6);
+  });
+
+  it('keeps rich creation stable at the adjacent package/inventory counts, ordering and equipment variants', () => {
+    const eleven = correctedRichQuickCreationPayload('schema-rich-matrix');
+    const ten = {
+      ...eleven,
+      initialContentPackages: eleven.initialContentPackages.slice(0, 10),
+      initialInventory: eleven.initialInventory.slice(0, 5),
+    };
+    const extraDefinition = {
+      ...eleven.initialContentPackages[10]!.definition,
+      code: 'schema-rich-matrix-map',
+      name: 'Mapa Cifrado',
+    };
+    const twelve = {
+      ...eleven,
+      initialContentPackages: [...eleven.initialContentPackages, { definition: extraDefinition }],
+      initialInventory: [...eleven.initialInventory, {
+        scope: 'campaign' as const,
+        contentType: 'other' as const,
+        code: extraDefinition.code,
+        quantity: 1,
+        entryRefs: ['schema-rich-matrix-map-1'],
+      }],
+    };
+    for (const value of [ten, eleven, twelve]) {
+      expect(startGameSchema.safeParse(value).success).toBe(true);
+    }
+    expect(ten.initialContentPackages).toHaveLength(10);
+    expect(eleven.initialContentPackages).toHaveLength(11);
+    expect(twelve.initialContentPackages).toHaveLength(12);
+    expect(ten.initialInventory).toHaveLength(5);
+    expect(eleven.initialInventory).toHaveLength(6);
+    expect(twelve.initialInventory).toHaveLength(7);
+
+    expect(startGameSchema.safeParse({
+      ...eleven,
+      initialContentPackages: [...eleven.initialContentPackages].reverse(),
+      initialInventory: eleven.initialInventory.map((value) => {
+        const item = { ...value } as Record<string, unknown>;
+        delete item.equip;
+        return item;
+      }),
+    }).success).toBe(true);
+
+    const narrativeTemplate = eleven.initialContentPackages[10]!;
+    const maximum = {
+      ...eleven,
+      initialContentPackages: [
+        ...eleven.initialContentPackages,
+        ...Array.from({ length: 13 }, (_, index) => ({
+          definition: {
+            ...narrativeTemplate.definition,
+            code: `schema-rich-extra-${index}`,
+            name: `Schema rich extra ${index}`,
+          },
+        })),
+      ],
+    };
+    expect(maximum.initialContentPackages).toHaveLength(24);
+    expect(startGameSchema.safeParse(maximum).success).toBe(true);
+    expect(startGameSchema.safeParse({
+      ...maximum,
+      initialContentPackages: [...maximum.initialContentPackages, {
+        definition: {
+          ...narrativeTemplate.definition,
+          code: 'schema-rich-extra-over-limit',
+          name: 'Schema rich extra over limit',
+        },
       }],
     }).success).toBe(false);
   });

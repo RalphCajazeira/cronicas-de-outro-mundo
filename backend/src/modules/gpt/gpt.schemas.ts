@@ -5,6 +5,7 @@ import {
   validateContentPublicationShape,
 } from '../content/content.schemas.js';
 import {
+  InvalidStarterContentBlueprintError,
   materializeStarterContentBlueprint,
   STARTER_CONTENT_BLUEPRINT_CODES,
 } from '../content/starter-content-blueprints.js';
@@ -298,26 +299,41 @@ const initialDefinitionSchema = z.strictObject({
       }
       if (value.name !== undefined && value.description !== undefined
         && value.presentation !== undefined && value.tags !== undefined) {
-        const blueprint = materializeStarterContentBlueprint({
-          starterBlueprint: value.starterBlueprint,
-          code: value.code,
-          name: value.name,
-          ...(value.blueprintOptions?.damageElement === undefined
-            ? {}
-            : { damageElement: value.blueprintOptions.damageElement }),
-          ...(value.blueprintOptions?.equipmentSlot === undefined
-            ? {}
-            : { equipmentSlot: value.blueprintOptions.equipmentSlot }),
-          ...(value.blueprintOptions?.unitWeight === undefined
-            ? {}
-            : { unitWeight: value.blueprintOptions.unitWeight }),
-          ...(value.blueprintOptions?.secondaryModifiers === undefined
-            ? {}
-            : { secondaryModifiers: value.blueprintOptions.secondaryModifiers }),
-          ...(value.blueprintOptions?.linkedStatusCode === undefined
-            ? {}
-            : { linkedStatusCode: value.blueprintOptions.linkedStatusCode }),
-        });
+        let blueprint;
+        try {
+          blueprint = materializeStarterContentBlueprint({
+            starterBlueprint: value.starterBlueprint,
+            code: value.code,
+            name: value.name,
+            ...(value.blueprintOptions?.damageElement === undefined
+              ? {}
+              : { damageElement: value.blueprintOptions.damageElement }),
+            ...(value.blueprintOptions?.equipmentSlot === undefined
+              ? {}
+              : { equipmentSlot: value.blueprintOptions.equipmentSlot }),
+            ...(value.blueprintOptions?.unitWeight === undefined
+              ? {}
+              : { unitWeight: value.blueprintOptions.unitWeight }),
+            ...(value.blueprintOptions?.secondaryModifiers === undefined
+              ? {}
+              : { secondaryModifiers: value.blueprintOptions.secondaryModifiers }),
+            ...(value.blueprintOptions?.linkedStatusCode === undefined
+              ? {}
+              : { linkedStatusCode: value.blueprintOptions.linkedStatusCode }),
+          });
+        } catch (error) {
+          if (!(error instanceof InvalidStarterContentBlueprintError)) throw error;
+          error.issues.forEach((issue) => {
+            context.addIssue({
+              code: 'custom',
+              path: error.component === 'profile' && issue.rule === 'ARMOR_DEFENSE'
+                ? ['blueprintOptions', 'secondaryModifiers']
+                : ['blueprintOptions'],
+              message: `Starter blueprint options produce an invalid ${error.component}: ${issue.message}`,
+            });
+          });
+          return;
+        }
         if (blueprint.contentType !== value.contentType) {
           context.addIssue({
             code: 'custom', path: ['contentType'],

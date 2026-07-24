@@ -39,11 +39,13 @@ Na Criação Rápida use `starterBlueprint` diretamente em `definition`, nunca d
 - `basic_mobility_skill` e `basic_healing_spell`;
 - `basic_healing_consumable`;
 - `starter_body_armor`, sempre no slot `body`.
-- `secondary_modifier_equipment`, com slot, peso e modificadores allowlisted;
+- `secondary_modifier_equipment`, sempre com `contentType=armor`; aceita slot, `unitWeight` e modificadores allowlisted, mas precisa incluir ao menos um modificador defensivo (`physicalDefense`, `magicalDefense`, `physicalResistanceBps` ou `magicalResistanceBps`);
 - `shadow_wrapped_status` e `veil_of_darkness_spell`, ligados por `linkedStatusCode`;
 - `detect_hidden_skill`, capacidade de detecção/informação sem movimento falso.
 
 Envie identidade e apresentação (`code`, `name`, `description`, `presentation`, `tags`, `status=active`), mas omita `profile` e `inventorySpec`: eles são derivados. O `contentType` deve corresponder ao blueprint. O vínculo `protagonistLink` concede conhecimento a magia/habilidade; arma, armadura, consumível e item físico são concedidos separadamente por `initialInventory`. Cada combinação `scope/contentType/code` aparece uma única vez no inventário inicial; agregue quantidade/stacks e equipe somente entrada única equipável.
+
+Não envie `unitWeight`, `equipmentSlot` ou `secondaryModifiers` nos demais blueprints; seus pesos e slots são fixados pelo backend. Roupa puramente narrativa usa `contentType=clothing` sem blueprint mecânico.
 
 Não existe `starterBlueprint` de classe. Em campanha com classe mecânica customizada, use uma definição `class` com o `profile` completo do exemplo OpenAPI: ativação passiva, custo `none` e concessões em `profile.grants`. `contentGrants` não pertence ao schema, e `starterBlueprint`/`blueprintOptions` nunca entram em `profile`.
 

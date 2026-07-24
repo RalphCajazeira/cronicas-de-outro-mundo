@@ -13,6 +13,7 @@ import { actorMechanicalSheetFixture } from '../tests/support/actor-mechanics-fi
 import { getInitialAttributePreset } from './modules/rules/core-v1/index.js';
 import { actorContentFixture, publishedContentFixture, skillPublicationInput } from '../tests/support/content-fixture.js';
 import { inventoryOperationError, inventoryStateVersionConflictError } from './modules/inventory/inventory-http.errors.js';
+import { capturedRichQuickCreationPayload } from '../tests/support/rich-quick-creation-fixture.js';
 
 const config: AppConfig = { NODE_ENV: 'test', HOST: '0.0.0.0', PORT: 3000, DATABASE_URL: 'postgresql://test:test@localhost:5432/test', DIRECT_URL: 'postgresql://test:test@localhost:5432/test', RPG_API_KEY: 'test-key' };
 const primaryAttributes = getInitialAttributePreset('balanced');
@@ -183,6 +184,44 @@ describe('HTTP API', () => {
     const response = await request(appWith(undefined, undefined, repository)).post('/api/v1/game/start').set('x-rpg-key', 'test-key').send(oversized);
     expect(response.status).toBe(400);
     expect(response.body).toMatchObject({ error: { code: 'INVALID_INPUT', issues: [expect.objectContaining({ path: '$' })] } });
+  });
+  it('rejects the captured rich quick-creation payload as actionable input instead of a pre-database 500', async () => {
+    const records: HttpAuditRecord[] = [];
+    let repositoryReached = false;
+    const repository: GptRepository = {
+      ...emptyGptRepository,
+      startGame: () => {
+        repositoryReached = true;
+        return Promise.reject(new Error('repository must not be reached'));
+      },
+    };
+    const response = await request(appWith(undefined, undefined, repository, undefined, (record) => records.push(record)))
+      .post('/api/v1/game/start')
+      .set('x-rpg-key', 'test-key')
+      .send(capturedRichQuickCreationPayload('http-captured-rich'));
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      error: {
+        code: 'INVALID_INPUT',
+        retryable: false,
+        recoveryAction: 'correct_request',
+      },
+    });
+    const responseBody = response.body as unknown as { error: { issues: Array<{ path: string }> } };
+    expect(responseBody.error.issues.some((issue) => (
+      issue.path === 'initialContentPackages.8.definition.blueprintOptions.secondaryModifiers'
+    ))).toBe(true);
+    expect(repositoryReached).toBe(false);
+    expect(records[0]).toMatchObject({
+      error: { type: 'validation', code: 'INVALID_INPUT' },
+      performance: {
+        operation: 'startGame',
+        outcome: 'error',
+        queryCount: 0,
+        stages: [expect.objectContaining({ name: 'request_validation', queryCount: 0 })],
+      },
+    });
   });
   it('audits structured startGame counts without narrative or mechanical values', async () => {
     const records: HttpAuditRecord[] = [];
@@ -396,18 +435,25 @@ describe('HTTP API', () => {
       issues: [{ path: 'expectedInventoryStateVersion', code: 'STATE_VERSION_CONFLICT' }],
     } });
   });
-  it('keeps unknown inventory failures sanitized', async () => {
+  it('keeps unknown inventory failures public-safe and records only sanitized internal diagnostics', async () => {
+    const records: HttpAuditRecord[] = [];
     const repository: GptRepository = {
       ...emptyGptRepository,
       manageActorInventory: () => Promise.reject(new Error('postgresql://secret Prisma SQL private payload')),
     };
-    const response = await request(appWith(undefined, undefined, repository))
+    const response = await request(appWith(undefined, undefined, repository, undefined, (record) => records.push(record)))
       .post('/api/v1/actors/ralph/inventory/manage')
       .set('x-rpg-key', 'test-key')
       .send({ ...scope, operation: 'get' });
 
     expect(response.status).toBe(500);
     expect(response.body).toEqual({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
-    expect(JSON.stringify(response.body)).not.toMatch(/postgres|secret|Prisma|SQL|private payload/i);
+    expect(records[0]?.error).toMatchObject({
+      type: 'internal',
+      code: 'INTERNAL_ERROR',
+      errorName: 'Error',
+    });
+    expect(Array.isArray(records[0]?.error?.stackFrames)).toBe(true);
+    expect(JSON.stringify([response.body, records])).not.toMatch(/postgres|secret|Prisma|SQL|private payload/i);
   });
 });

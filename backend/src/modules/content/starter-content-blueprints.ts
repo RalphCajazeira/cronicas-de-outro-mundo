@@ -6,6 +6,7 @@ import {
   type CoreV1InventorySpec,
   type CoreV1PassiveModifierTarget,
   type CoreV1Rarity,
+  type ValidationIssue,
 } from '../rules/core-v1/index.js';
 
 export const STARTER_CONTENT_BLUEPRINT_CODES = [
@@ -46,6 +47,24 @@ export interface MaterializedStarterContentBlueprint {
   readonly contentType: 'weapon' | 'spell' | 'skill' | 'consumable' | 'armor' | 'clothing' | 'status_effect';
   readonly profile: CoreV1ContentProfile;
   readonly inventorySpec: CoreV1InventorySpec | null;
+}
+
+export class InvalidStarterContentBlueprintError extends Error {
+  readonly starterBlueprint: StarterContentBlueprintCode;
+  readonly component: 'profile' | 'inventorySpec';
+  readonly issues: readonly ValidationIssue[];
+
+  constructor(
+    starterBlueprint: StarterContentBlueprintCode,
+    component: 'profile' | 'inventorySpec',
+    issues: readonly ValidationIssue[],
+  ) {
+    super('Starter content blueprint options are invalid');
+    this.name = 'InvalidStarterContentBlueprintError';
+    this.starterBlueprint = starterBlueprint;
+    this.component = component;
+    this.issues = structuredClone(issues);
+  }
 }
 
 const uniqueSpec = (
@@ -312,10 +331,12 @@ export function materializeStarterContentBlueprint(
   const blueprint = materializeUnchecked(input);
   const profile = validateCoreV1ContentProfile(blueprint.profile);
   if (!profile.ok) {
-    throw new Error(`Invalid built-in starter content profile: ${input.starterBlueprint}: ${JSON.stringify(profile.issues)}`);
+    throw new InvalidStarterContentBlueprintError(input.starterBlueprint, 'profile', profile.issues);
   }
   if (blueprint.inventorySpec === null) return { ...blueprint, profile: profile.value };
   const inventorySpec = validateCoreV1InventorySpec(blueprint.inventorySpec);
-  if (!inventorySpec.ok) throw new Error(`Invalid built-in starter inventory spec: ${input.starterBlueprint}`);
+  if (!inventorySpec.ok) {
+    throw new InvalidStarterContentBlueprintError(input.starterBlueprint, 'inventorySpec', inventorySpec.issues);
+  }
   return { ...blueprint, profile: profile.value, inventorySpec: inventorySpec.value };
 }

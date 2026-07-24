@@ -10,6 +10,7 @@ import {
   type CoreV1InventoryEntry,
 } from '../rules/core-v1/index.js';
 import {
+  InvalidStarterContentBlueprintError,
   materializeStarterContentBlueprint,
   STARTER_CONTENT_BLUEPRINT_CODES,
 } from './starter-content-blueprints.js';
@@ -132,6 +133,30 @@ describe('starter content blueprints', () => {
       { entries: [] },
       createCoreV1EmptyEquipmentLoadout(),
     )).toMatchObject({ ok: true, value: [] });
+  });
+
+  it('reports an invalid option combination as a typed error without embedding validation data in its message', () => {
+    let captured: unknown;
+    try {
+      materializeStarterContentBlueprint({
+        starterBlueprint: 'secondary_modifier_equipment',
+        code: 'stealth-only-cloak',
+        name: 'Stealth-only cloak',
+        equipmentSlot: 'body',
+        secondaryModifiers: { stealth: 2 },
+      });
+    } catch (error) {
+      captured = error;
+    }
+    expect(captured).toBeInstanceOf(InvalidStarterContentBlueprintError);
+    expect(captured).toMatchObject({
+      name: 'InvalidStarterContentBlueprintError',
+      message: 'Starter content blueprint options are invalid',
+      starterBlueprint: 'secondary_modifier_equipment',
+      component: 'profile',
+      issues: [expect.objectContaining({ path: 'defense', rule: 'ARMOR_DEFENSE' })],
+    });
+    expect(String(captured)).not.toMatch(/secondaryModifiers|stealth|received|JSON/i);
   });
 
   it('keeps Veil of Darkness and detection semantically distinct from movement', () => {

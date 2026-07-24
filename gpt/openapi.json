@@ -2643,9 +2643,13 @@
                 "enum": ["fire", "ice", "lightning", "earth", "wind", "water", "light", "shadow", "poison", "arcane"]
               },
               "equipmentSlot": { "type": "string", "enum": ["head", "chest", "hands", "legs", "feet", "body", "accessory"] },
-              "unitWeight": { "type": "integer", "minimum": 0, "maximum": 20 },
+              "unitWeight": {
+                "type": "integer", "minimum": 0, "maximum": 20,
+                "description": "Aceito somente por secondary_modifier_equipment; os demais blueprints têm peso derivado."
+              },
               "secondaryModifiers": {
                 "type": "object", "additionalProperties": false,
+                "description": "Aceito somente por secondary_modifier_equipment, que sempre materializa contentType=armor e exige ao menos um modificador defensivo reconhecido.",
                 "properties": {
                   "physicalDefense": { "type": "integer", "minimum": -5, "maximum": 5 },
                   "magicalDefense": { "type": "integer", "minimum": -5, "maximum": 5 },

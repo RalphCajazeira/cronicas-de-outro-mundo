@@ -72,6 +72,10 @@ import {
   operationTelemetrySnapshot,
   runWithOperationTelemetry,
 } from '../../src/shared/observability/operation-observability.js';
+import {
+  capturedRichQuickCreationPayload,
+  correctedRichQuickCreationPayload,
+} from '../support/rich-quick-creation-fixture.js';
 
 const config = parseConfig(process.env);
 const { Client } = pg;
@@ -5976,6 +5980,63 @@ describe('GPT v1 persistence with real transactions', () => {
     await expect(prisma.actorContent.count({ where: { actorId: actor.id } })).resolves.toBe(5);
     await expect(prisma.inventoryEntry.count({ where: { actorId: actor.id } })).resolves.toBe(5);
     await expect(prisma.idempotencyRecord.count({ where: { key: parsed.data.idempotencyKey } })).resolves.toBe(1);
+  });
+
+  it('rejects both captured retries atomically and creates the corrected 11-package/6-grant payload once', async () => {
+    const invalid = capturedRichQuickCreationPayload('integration-captured-rich');
+    const firstRejected = await post('/api/v1/game/start', invalid);
+    const secondRejected = await post('/api/v1/game/start', invalid);
+    expect(firstRejected.status).toBe(400);
+    expect(secondRejected.status).toBe(400);
+    expect(secondRejected.body).toEqual(firstRejected.body);
+    expect(firstRejected.body).toMatchObject({
+      error: {
+        code: 'INVALID_INPUT',
+        retryable: false,
+        recoveryAction: 'correct_request',
+      },
+    });
+    const rejectedBody = firstRejected.body as unknown as {
+      error: { issues: Array<{ path: string }> };
+    };
+    expect(rejectedBody.error.issues.some((issue) => (
+      issue.path === 'initialContentPackages.8.definition.blueprintOptions.secondaryModifiers'
+    ))).toBe(true);
+    await expectNoCreatedIntent(invalid);
+
+    const corrected = correctedRichQuickCreationPayload('integration-corrected-rich');
+    const created = await post('/api/v1/game/start', corrected);
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+    expect(created.body).toMatchObject({
+      protagonist: {
+        name: 'Vael',
+        readiness: {
+          status: 'ready',
+          canBeginMechanically: true,
+          hasUsableOffensiveAction: true,
+          hasStealthCapability: true,
+          hasDetectionCapability: true,
+          inventoryValid: true,
+          equipmentValid: true,
+        },
+      },
+    });
+    const replay = await post('/api/v1/game/start', corrected);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(created.body);
+
+    const actor = await prisma.actor.findFirstOrThrow({
+      where: {
+        code: corrected.playerRef,
+        campaign: { code: corrected.campaignRef, world: { code: corrected.worldRef } },
+      },
+      include: { attributes: true },
+    });
+    expect(actor.attributes.reduce((sum, attribute) => sum + attribute.baseValue, 0)).toBe(90);
+    await expect(prisma.contentDefinition.count({ where: { world: { code: corrected.worldRef } } }))
+      .resolves.toBe(11);
+    await expect(prisma.inventoryEntry.count({ where: { actorId: actor.id } })).resolves.toBe(6);
+    await expect(prisma.idempotencyRecord.count({ where: { key: corrected.idempotencyKey } })).resolves.toBe(1);
   });
 
   it('rejects fragmented duplicate initial grants and accepts one aggregated grant', async () => {
