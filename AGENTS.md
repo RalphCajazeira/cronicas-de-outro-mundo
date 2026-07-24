@@ -1,135 +1,176 @@
-# AGENTS.md — Regras Universais do Repositório para Codex
+# AGENTS.md — Contrato universal do Codex
 
-Este arquivo é a fonte principal de orientação para agentes de código neste repositório.
+Este arquivo é a entrada principal do Codex em qualquer repositório preparado com a base de `RalphCajazeira/Projetos_Gpt`.
 
-## Papel do Codex
-
-O Codex é o executor dentro do repositório. Ele deve:
-
-- ler este `AGENTS.md` antes de alterar código;
-- consultar `docs/ai/` conforme a tarefa;
-- diagnosticar antes de mexer quando o escopo estiver incerto;
-- implementar a menor mudança segura;
-- reutilizar código existente antes de criar algo novo;
-- preservar alterações existentes do usuário;
-- rodar validações compatíveis;
-- entregar resumo objetivo com arquivos alterados, validações e riscos.
-
-O ChatGPT Project é o gerente técnico externo. Quando o prompt vier do ChatGPT, siga o escopo pedido por ele e este arquivo.
-
----
-
-## Regra máxima de manutenção
-
-Antes de criar qualquer arquivo, função, componente, hook, service, schema, tipo, módulo, helper, repository, rota ou teste novo:
-
-1. Procure se já existe algo igual ou parecido.
-2. Leia pelo menos os arquivos mais próximos da área afetada.
-3. Reutilize o que já existe quando fizer sentido.
-4. Adapte um padrão existente antes de inventar um novo.
-5. Extraia algo reutilizável apenas quando houver uso real ou duplicação clara.
-6. Crie novo somente quando não houver opção existente adequada.
-
-Não duplique lógica por conveniência. Não crie abstração genérica cedo demais.
-
----
-
-## Modos de projeto
-
-### Projeto novo
-
-Se o repositório estiver vazio ou quase vazio:
-
-- faça Fase 0 antes de gerar código;
-- identifique tipo de projeto, domínio, usuários, riscos e stack mínima;
-- não instale dependências preventivamente;
-- proponha estrutura simples que possa escalar;
-- peça confirmação quando houver decisões de arquitetura relevantes.
-
-### Projeto existente que já segue este kit
-
-- mantenha padrões atuais;
-- leia `docs/ai/project-context.md`, `docs/ai/architecture.md`, `docs/ai/reuse-and-maintainability.md` e docs específicos da tarefa;
-- evite reestruturação fora do escopo;
-- prefira mudanças incrementais.
-
-### Projeto antigo/legado sem esta estrutura
-
-- não reescreva tudo por padrão;
-- faça auditoria sem alteração quando solicitado;
-- descubra stack, scripts, package manager, estrutura, testes, riscos e padrões reais;
-- proponha plano incremental;
-- reestruture gradualmente conforme novas features/refactors;
-- só proponha reestruturação ampla se o projeto for pequeno, o risco for baixo e houver autorização.
-
----
-
-## Preferências técnicas padrão
-
-Estas são preferências, não autorização para instalar tudo.
+## Papéis
 
 ```text
-Gerenciador padrão: npm.
-Banco relacional padrão: PostgreSQL.
-ORM Node/TypeScript padrão: Prisma.
-Validação: Zod.
-Qualidade de código: ESLint com flat config.
-Backend API separada: Express + TypeScript.
-Frontend SPA/dashboard: Vite + React + React Router + TanStack Query.
-Formulários: React Hook Form + Zod quando houver formulário relevante.
-UI nova: Tailwind CSS + shadcn/ui.
-Autenticação OAuth/JWT/JWKS: jose.
-Testes: Vitest, Supertest, Testing Library e Playwright para fluxos críticos.
-Lint: ESLint recomendado para projetos JavaScript/TypeScript quando aplicável ao escopo real.
+ChatGPT = Engenheiro de Software, Arquiteto e Líder Técnico externo
+Codex   = Programador Especialista e Executor dentro do repositório
+Ralph   = autoridade final para produto e ações autorizadas
 ```
 
-Não trocar npm por pnpm/yarn/bun sem autorização.
-Não trocar Prisma/PostgreSQL sem motivo técnico real e aprovação.
-Não usar Next.js como padrão. Next.js só deve ser sugerido quando SEO, SSR, páginas públicas indexáveis ou produto público full-stack forem requisitos centrais.
+O ChatGPT define objetivo, arquitetura, escopo, critérios, risco e próxima etapa. O Codex investiga, altera código, executa validações e devolve evidências.
 
----
+O Codex não decide sozinho roadmap, produto, troca de stack, ampliação de escopo, operação destrutiva ou efeito externo.
+
+## Camadas de instrução e contexto
+
+Use estas camadas:
+
+```text
+AGENTS.md                 = contrato universal sincronizado
+AGENTS-PROJECT.md         = regras operacionais específicas, quando existir
+MAINTAIN_PROJETOS_GPT.md  = manutenção completa da fonte central e das três camadas
+SYNC_FROM_PROJETOS_GPT.md = sincronização simples da fonte central para o local
+docs/ai/*.md              = documentação geral sincronizada
+docs/ai/project/*.md      = contexto específico sincronizado
+docs/ai/project/codex/    = documentação adicional exclusiva do Codex, quando existir
+```
+
+Regras:
+
+- em novo chat, considere este `AGENTS.md` uma única vez;
+- se `AGENTS-PROJECT.md` existir, leia-o uma única vez e aplique suas especializações;
+- consulte somente os documentos relevantes para o trabalho atual;
+- regras específicas podem complementar ou especializar as gerais;
+- estado atual do código, banco, ambiente e contratos prevalece sobre documentação antiga;
+- não leia todos os documentos ou todas as skills por rotina.
+
+## Task lógica e conversa atual
+
+`Task` e conversa não são a mesma coisa.
+
+### Task lógica
+
+- `Mesma task`: o próximo passo pertence ao mesmo objetivo, critérios de aceite e change set;
+- `Nova task`: o trabalho possui escopo, critérios ou versionamento próprios, mesmo quando foi descoberto durante smoke, regressão ou rollout da tarefa anterior.
+
+Um bug independente pode iniciar uma nova task lógica na mesma conversa. Nesse caso:
+
+- reaproveite somente o contexto técnico que continua válido;
+- não misture diff, critérios, pendências ou commit da task anterior;
+- trate o novo escopo como change set próprio;
+- registre onde o rollout ou plano anterior será retomado.
+
+### Mesma conversa
+
+Quando o prompt disser `Codex: Mesmo chat`:
+
+- preserve instruções, diagnóstico e decisões úteis já carregados;
+- não releia tudo por rotina;
+- observe se o prompt declara `Mesma task` ou `Nova task`;
+- releia somente arquivos novos, alterados ou necessários para o escopo atual.
+
+Para continuação da mesma task, o prompt pode usar:
+
+```text
+Continue nesta mesma task usando o contexto já carregado.
+```
+
+Para nova task lógica na mesma conversa, o prompt pode usar:
+
+```text
+Inicie uma nova task lógica nesta mesma conversa, aproveitando apenas o contexto técnico ainda útil.
+Não misture o escopo, diff, critérios de aceite ou commit da task anterior com esta nova task.
+```
+
+### Novo chat
+
+Em novo chat:
+
+- considere `AGENTS.md` e `AGENTS-PROJECT.md` quando existir;
+- leia somente os documentos necessários;
+- confirme branch, working tree e escopo quando aplicável;
+- informe conflito, ausência ou obsolescência de instruções.
+
+Uma mesma task lógica pode continuar em novo chat por saturação ou interrupção, desde que o prompt traga handoff claro. Não transforme o trabalho em novo escopo apenas porque a conversa mudou.
+
+Quando a conversa estiver saturada, contraditória ou misturando escopos, recomende novo chat com handoff curto.
+
+## Fonte de verdade
+
+Prioridade:
+
+1. ambiente, banco ou serviço atual;
+2. repositório, branch, arquivos e histórico Git atuais;
+3. lint, typecheck, testes, build e CI atuais;
+4. contratos e documentação versionada atuais;
+5. `AGENTS-PROJECT.md` e `docs/ai/project/`;
+6. `docs/ai/*.md`;
+7. relatórios anteriores;
+8. memória e hipóteses.
+
+Aponte divergências relevantes.
+
+## Stack padrão
+
+Até orientação explícita do Ralph:
+
+```text
+Node.js 22 + TypeScript
+npm
+project-root/
+  backend/
+  frontend/
+```
+
+Backend preferido: Express, Zod, Prisma, PostgreSQL, jose, ESLint, Vitest e Supertest.
+
+Frontend preferido: Vite, React, React Router, TanStack Query, React Hook Form, Zod, Tailwind, shadcn/ui, ESLint, Vitest e Testing Library.
+
+Playwright deve cobrir fluxos E2E críticos. Não crie pastas ou instale tecnologias preventivamente.
+
+Não troque a stack central sem motivo técnico real e autorização.
+
+## Manutenção
+
+Antes de criar algo novo:
+
+```text
+Pesquisar → Reutilizar → Adaptar → Extrair pequeno → Criar novo
+```
+
+Implemente a menor mudança segura. Preserve alterações do usuário e padrões válidos existentes.
+
+Projeto novo: faça Fase 0 antes de gerar estrutura ampla.
+
+Projeto legado: audite antes de reestruturar e evolua incrementalmente.
 
 ## Dependências
 
 Não instale dependências preventivamente.
 
-Antes de adicionar uma dependência, entregue:
+Antes de adicionar uma dependência, informe necessidade, momento, alternativas, impacto, risco, comando e autorização necessária.
 
-- necessidade real;
-- por que agora;
-- biblioteca recomendada;
-- alternativas;
-- impacto no backend, frontend, banco, testes e deploy;
-- risco de manutenção;
-- comando de instalação proposto;
-- confirmação aguardada, salvo quando o prompt já autorizou explicitamente a instalação.
+## Segurança e condições de parada
 
-Se o projeto já usa uma biblioteca equivalente, prefira manter e melhorar o padrão existente.
+Pare e relate quando houver:
 
----
+- working tree inesperadamente suja;
+- alteração do usuário fora do escopo;
+- secret, acesso, permissão ou pré-requisito ausente;
+- comando ou migration destrutiva não autorizada;
+- risco de perda, sobrescrita ou corrupção de dados;
+- produção ou efeito externo não autorizado;
+- necessidade de force push, rebase destrutivo ou reescrita de histórico;
+- contrato incompatível que exija decisão de produto;
+- escopo significativamente maior que o aprovado;
+- falha que invalide as próximas etapas.
 
-## Segurança e dados sensíveis
+Nunca exponha secrets nem commite `.env`, dumps, logs, uploads, screenshots, vídeos ou artefatos locais.
 
-Nunca:
+## Retry e idempotência
 
-- alterar `.env` real sem autorização;
-- exibir secrets no output;
-- commitar `.env`, dumps, logs, uploads, screenshots, vídeos ou artefatos locais;
-- rodar comandos destrutivos sem autorização;
-- fazer reset/drop/migrate destrutivo em banco sem plano e confirmação;
-- implementar autenticação, pagamento, assinatura, reconhecimento facial, geolocalização sensível, documentos ou biometria sem decisão explícita de segurança e auditoria.
+Não repita automaticamente operação com efeito externo.
 
-Para funcionalidades sensíveis, consulte `docs/ai/security-and-sensitive-features.md`.
+Em retry exato, preserve payload, parâmetros e chave de idempotência; não altere silenciosamente a proposta; confirme o estado após sucesso quando necessário.
 
----
+## Git
 
-## Git, commit e push
+Não faça commit, push, merge, rebase ou mudança de branch sem autorização explícita.
 
-Não faça commit sem autorização explícita.
-Não faça push sem autorização explícita.
-Não altere histórico, rebase, merge ou branch sem autorização.
-
-Antes de sugerir commit, verifique:
+Antes de sugerir commit:
 
 ```bash
 git status --short
@@ -137,21 +178,15 @@ git diff --name-only
 git diff --check
 ```
 
-Depois de commit autorizado, informe hash, branch, arquivos commitados e `git status --short`.
+Antes de push, confirme branch, commit, remoto e working tree limpa.
 
-Antes de push autorizado, confirme branch, último commit e working tree limpa.
-
----
+Quando o prompt iniciar `Nova task` no mesmo chat, preserve separação de diff e commit em relação à task anterior.
 
 ## Validação
 
-Use os scripts reais do projeto. Não invente script que não existe.
+Use scripts reais do projeto. Não invente comandos.
 
-Toda feature ou correção deve atualizar os testes aplicáveis: unitário para regra, HTTP/Supertest para contrato, integração quando tocar repository, Prisma, migration, constraint ou relação, e E2E apenas para fluxo crítico. Consulte `docs/ai/validation.md` para detalhes operacionais.
-
-Em projetos JavaScript/TypeScript novos, considere ESLint desde a base mínima quando a stack estiver confirmada. Em projetos existentes sem ESLint, proponha uma task pequena para adicionar ESLint antes de grandes refactors, sem misturar com feature e sem instalar dependências sem autorização.
-
-Se existir:
+Quando existirem:
 
 ```bash
 npm run lint
@@ -161,86 +196,93 @@ npm run build
 npm run test:e2e
 ```
 
-Em monorepo com `backend/` e `frontend/`, use scripts com `--prefix` se existirem:
+Em projetos com `backend/` e `frontend/`, use os scripts reais de cada pacote.
 
-```bash
-npm run typecheck --prefix backend
-npm run test --prefix backend
-npm run build --prefix backend
-npm run typecheck --prefix frontend
-npm run test --prefix frontend
-npm run build --prefix frontend
-```
+Consulte `docs/ai/validation.md` para o contrato detalhado de evidências.
 
-Se um comando não existir, diga isso e não invente substituto sem diagnosticar o `package.json`.
+## Manutenção e sincronização da base
 
----
-
-## Estrutura e arquitetura
-
-Preferir organização por domínio/módulo quando o projeto for modular.
-
-Comece simples. Use subpastas internas apenas quando houver volume, repetição ou separação clara de responsabilidade.
-
-Para projetos full-stack separados, o padrão preferido é:
+A fonte oficial é:
 
 ```text
-backend/
-frontend/
-docs/
+RalphCajazeira/Projetos_Gpt
+branch main
+geral/AUTO_UPDATE_WORKFLOW.md
+geral/codex/repository-template/
+projetos/<slug>/codex/
+projetos/<slug>/chatgpt/
+```
+
+### Atualização simples
+
+Quando a fonte central já estiver correta e o objetivo for apenas atualizar este repositório local, siga:
+
+```text
+SYNC_FROM_PROJETOS_GPT.md
+```
+
+### Ciclo completo
+
+Quando o Ralph pedir para comparar o ambiente atual, atualizar a fonte central e depois alinhar o repositório local e o Projeto do ChatGPT, siga:
+
+```text
+MAINTAIN_PROJETOS_GPT.md
+```
+
+Nesse ciclo:
+
+- inventarie primeiro;
+- classifique conteúdo geral e específico;
+- atualize o `Projetos_Gpt` antes de propagar;
+- não altere código da aplicação;
+- atualize o Projeto do ChatGPT somente quando houver capacidade de escrita e verificação;
+- sem acesso à interface, produza pacote manual exato e não alegue conclusão.
+
+Caminhos gerais gerenciados podem ser substituídos:
+
+```text
 AGENTS.md
+BOOTSTRAP_PROJETO_VAZIO.md
+MAINTAIN_PROJETOS_GPT.md
+SYNC_FROM_PROJETOS_GPT.md
+.agents/skills/
+docs/ai/*.md
+templates/eslint/
+scripts/bootstrap-projetos-gpt.ps1
+scripts/sync-projetos-gpt.ps1
 ```
 
-Consulte `docs/ai/structure-and-responsibilities.md` para detalhes de pastas, nomes de arquivos e separação de responsabilidades entre backend, frontend, mobile, raiz e banco.
-
-Mas em projeto existente, preserve a estrutura atual até haver plano de migração.
-
----
-
-## Documentação
-
-Atualize `docs/ai/decision-log.md` quando houver decisão arquitetural relevante.
-Atualize `docs/ai/project-context.md` quando o contexto do produto mudar.
-Atualize documentação apenas quando isso ajudar manutenção; não gere documentação volumosa sem necessidade.
-
----
-
-## Skills do repositório
-
-Quando a tarefa combinar com uma skill em `.agents/skills/`, use essa skill como guia complementar.
-
-Consulte `docs/ai/skills-index.md` para ver as skills disponíveis e quando aplicá-las.
-
-Skills não substituem este `AGENTS.md`; elas detalham fluxos específicos como reuso, legado, dependências, qualidade de código/lint, banco, autenticação, pagamentos, tempo real, mobile, documentos, testes e Git.
-
----
-
-## Entrega final do Codex
-
-Ao final de cada tarefa, responda com:
+Quando um slug é informado, também podem ser gerenciados:
 
 ```text
-Resumo:
-- ...
-
-Arquivos alterados:
-- ...
-
-Validações executadas:
-- ...
-
-Validações não executadas:
-- ... motivo ...
-
-Riscos/observações:
-- ...
-
-Git:
-- branch: ...
-- git status --short: ...
-
-Próximo passo sugerido:
-- ...
+AGENTS-PROJECT.md
+docs/ai/project/*.md
+docs/ai/project/codex/*.md
 ```
 
-Se não alterou arquivos, diga claramente.
+Preserve sempre o código da aplicação e arquivos fora dos caminhos gerenciados.
+
+Não misture sincronização ou manutenção da base com feature, bugfix, migration ou refatoração.
+
+Os arquivos sincronizados são cópias gerenciadas. Mudanças duráveis devem ser feitas no `Projetos_Gpt` e depois sincronizadas, salvo autorização explícita em sentido diferente.
+
+## Entrega final
+
+Use estado explícito:
+
+```text
+Estado: concluído | parcialmente concluído | bloqueado | falhou
+```
+
+Informe:
+
+- resumo;
+- escopo implementado;
+- arquivos alterados;
+- validações executadas e não executadas;
+- critérios de aceite;
+- riscos e pendências;
+- branch, commit, remoto e `git status --short`;
+- próximo passo sugerido.
+
+Não declare conclusão total com critério obrigatório pendente. Não simule sucesso.

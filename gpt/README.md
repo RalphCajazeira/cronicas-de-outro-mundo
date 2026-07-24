@@ -26,7 +26,7 @@ Envie ao GPT todos e somente estes arquivos:
 8. `08-memorias-conhecimento-e-codex.md` — eventos, conhecimento privado e níveis de certeza;
 9. `09-fichas-e-coerencia-mecanica.md` — ficha real de atores e limites de cálculo.
 
-Os arquivos em `legacy/supabase-gpt-v1/` são somente referência histórica e nunca devem ser enviados ao GPT ativo. O corpus atual consolida princípios narrativos úteis do legado, sem Edge Functions, RPCs, tabelas, campos ou operationIds antigos.
+O corpus atual consolida somente os princípios narrativos ainda válidos, sem Edge Functions, RPCs, tabelas, campos ou operationIds da implementação descontinuada.
 
 ## Categorias de capacidade
 

@@ -2,13 +2,11 @@
 
 ## Objetivo
 
-ESLint é a ferramenta preferida para manter consistência, detectar problemas e reduzir variações de estilo que confundem manutenção humana e agentes de código em projetos JavaScript/TypeScript.
+ESLint é a ferramenta padrão para manter consistência, detectar problemas e reduzir variações de estilo que confundem manutenção humana e agentes de código.
 
 ## Quando usar
 
-Recomende ESLint quando o projeto tiver código JavaScript/TypeScript de aplicação, backend, frontend, mobile ou scripts relevantes.
-
-Antes de configurar ou instalar, confira se o projeto já usa ESLint, Prettier, Biome, Oxlint ou outro padrão equivalente. Em projeto legado, trate a adoção como task própria e pequena.
+Use ESLint em todo projeto JavaScript/TypeScript que tenha código de aplicação, backend, frontend, mobile ou scripts relevantes.
 
 ## Configuração preferida
 
@@ -21,9 +19,7 @@ eslint.config.mjs
 
 Evitar criar `.eslintrc` em projeto novo, salvo se o projeto já usa configuração legada.
 
-## Dependências de referência por cenário
-
-Os comandos abaixo são sugestões para propor ao usuário ou executar apenas quando houver autorização explícita.
+## Dependências recomendadas por cenário
 
 ### TypeScript geral
 
@@ -75,7 +71,7 @@ Na raiz de projeto com `backend/` e `frontend/`:
 
 ## Regras para projeto novo
 
-- Considerar ESLint na base inicial quando a stack JavaScript/TypeScript estiver confirmada.
+- Adicionar ESLint na base inicial de qualquer projeto JavaScript/TypeScript.
 - Usar configuração simples e recomendada.
 - Evitar regras excessivamente opinativas no início.
 - Integrar `npm run lint` ao checklist de validação.
@@ -83,7 +79,7 @@ Na raiz de projeto com `backend/` e `frontend/`:
 ## Regras para projeto legado
 
 - Não adicionar ESLint junto com uma feature de negócio, salvo autorização explícita.
-- Fazer uma task pequena: diagnosticar stack, propor dependências, configurar lint, rodar, corrigir apenas problemas seguros.
+- Fazer uma task pequena: diagnosticar stack, instalar dependências, configurar lint, rodar, corrigir apenas problemas seguros.
 - Não refatorar o projeto inteiro só para satisfazer lint.
 - Se houver muitos erros, configurar regras gradualmente ou limitar o escopo inicial.
 
@@ -96,7 +92,7 @@ Antes de mexer em lint:
 3. Conferir scripts no `package.json`.
 4. Propor dependências e scripts antes de instalar.
 5. Não trocar ferramenta existente sem justificativa.
-6. Rodar `npm run lint` quando o script existir ou depois de configurado com autorização, e relatar erros restantes.
+6. Rodar `npm run lint` e relatar erros restantes.
 
 ## ESLint, Prettier, Biome e Oxlint
 
