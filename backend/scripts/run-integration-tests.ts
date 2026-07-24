@@ -14,6 +14,7 @@ import {
   assertOnlyExpectedEncounterPartialIndexDiff,
   type EncounterPartialIndexMetadata,
 } from './encounter-partial-index-diff.js';
+import { cleanSlateApplicationSchema, inspectCleanSlateObjects } from './clean-slate.js';
 
 const { Client } = pg;
 
@@ -435,6 +436,32 @@ async function verifyEffectRulesRegistryTransactions(databaseUrl: URL): Promise<
   console.info('Phase 1J effect registry rollback and concurrency verified safely');
 }
 
+async function verifyCompleteCleanSlateCycles(
+  environment: NodeJS.ProcessEnv,
+  databaseUrl: URL,
+): Promise<void> {
+  for (const cycle of [1, 2]) {
+    const client = new Client({ connectionString: databaseUrl.toString() });
+    await client.connect();
+    try {
+      const before = await inspectCleanSlateObjects(client);
+      if (before.tables !== 28 || before.enums !== 25 || before.functions !== 24 || before.prismaHistory !== 1) {
+        throw new Error(`Clean-slate cycle ${cycle} precondition catalog is incomplete`);
+      }
+      await cleanSlateApplicationSchema(client);
+      const after = await inspectCleanSlateObjects(client);
+      if (after.tables !== 0 || after.enums !== 0 || after.functions !== 0 || after.prismaHistory !== 0) {
+        throw new Error(`Clean-slate cycle ${cycle} left application objects behind`);
+      }
+    } finally {
+      await client.end();
+    }
+    runNpm(['exec', '--', 'prisma', 'migrate', 'deploy'], environment);
+    runNpm(['exec', '--', 'prisma', 'migrate', 'status'], environment);
+  }
+  console.info('Two complete allowlisted clean-slate and migration cycles verified safely');
+}
+
 async function main(): Promise<void> {
   const config = resolveTestDatabaseConfig(process.env);
   const adminUrl = createAdminUrl(config.directUrl);
@@ -456,6 +483,7 @@ async function main(): Promise<void> {
 
   runNpm(['exec', '--', 'prisma', 'migrate', 'deploy'], environment);
   runNpm(['exec', '--', 'prisma', 'migrate', 'status'], environment);
+  await verifyCompleteCleanSlateCycles(environment, config.databaseUrl);
   await verifySchemaDiffWithEncounterPartialIndex(environment, config.databaseUrl);
   await verifyRulesetRegistryTransactions(config.databaseUrl);
   await verifyContentProfileRegistryTransactions(config.databaseUrl);
