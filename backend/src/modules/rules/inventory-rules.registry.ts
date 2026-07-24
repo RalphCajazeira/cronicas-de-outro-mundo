@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Prisma } from '../../generated/prisma/client.js';
 import { createAfterExpectedUnique } from '../../shared/database/create-after-expected-unique.js';
 import { canonicalJson } from '../../shared/json/canonical-json.js';
@@ -10,7 +11,17 @@ import {
   CORE_V1_INVENTORY_RULES_CODE,
   CORE_V1_INVENTORY_SCHEMA_VERSION,
 } from './core-v1/core-v1.inventory.config.js';
-import { ensureCoreV1RulesetVersion, type RulesetRegistryClient } from './ruleset.registry.js';
+import {
+  ensureCoreV1RulesetVersion,
+  type CoreRulesetVersion,
+  type RulesetRegistryClient,
+} from './ruleset.registry.js';
+
+export const CORE_V1_2_INVENTORY_RULES_CODE = 'core-v1.2-inventory-v1' as const;
+const coreV12InventorySnapshot = structuredClone(CORE_V1_INVENTORY_RULES_SNAPSHOT) as { identity: { code: string } };
+coreV12InventorySnapshot.identity.code = CORE_V1_2_INVENTORY_RULES_CODE;
+const CORE_V1_2_INVENTORY_CANONICAL_JSON = canonicalJson(coreV12InventorySnapshot);
+export const CORE_V1_2_INVENTORY_HASH = createHash('sha256').update(CORE_V1_2_INVENTORY_CANONICAL_JSON).digest('hex');
 
 export const CORE_INVENTORY_RULES_VERSION_DRIFT = 'CORE_INVENTORY_RULES_VERSION_DRIFT' as const;
 export type InventoryRulesDriftField = 'rulesetVersion' | 'code' | 'schemaVersion' | 'configHash' | 'configSnapshot';
@@ -79,4 +90,38 @@ export async function ensureCoreV1InventoryRulesVersion(
     },
   );
   return validateCoreV1InventoryRulesVersion(version, rulesetVersion.id);
+}
+
+export async function ensureCoreV12InventoryRulesVersion(
+  client: InventoryRulesRegistryClient,
+  rulesetVersion: CoreRulesetVersion,
+): Promise<CoreInventoryRulesVersion> {
+  let version = await client.inventoryRulesVersion.findUnique({
+    where: { code: CORE_V1_2_INVENTORY_RULES_CODE }, select: inventoryRulesSelect,
+  });
+  version ??= await createAfterExpectedUnique(
+    client,
+    'ensure_core_v1_2_inventory',
+    () => client.inventoryRulesVersion.create({
+      data: {
+        rulesetVersionId: rulesetVersion.id,
+        code: CORE_V1_2_INVENTORY_RULES_CODE,
+        schemaVersion: CORE_V1_INVENTORY_SCHEMA_VERSION,
+        configHash: CORE_V1_2_INVENTORY_HASH,
+        configSnapshot: JSON.parse(CORE_V1_2_INVENTORY_CANONICAL_JSON) as Prisma.InputJsonValue,
+      },
+      select: inventoryRulesSelect,
+    }),
+    () => client.inventoryRulesVersion.findUnique({
+      where: { code: CORE_V1_2_INVENTORY_RULES_CODE }, select: inventoryRulesSelect,
+    }),
+    { modelName: 'InventoryRulesVersion', fields: ['code'], index: 'InventoryRulesVersion_code_key', allowModelOnly: true },
+  );
+  if (version.rulesetVersionId !== rulesetVersion.id || version.code !== CORE_V1_2_INVENTORY_RULES_CODE
+    || version.schemaVersion !== CORE_V1_INVENTORY_SCHEMA_VERSION
+    || version.configHash !== CORE_V1_2_INVENTORY_HASH
+    || canonicalJson(version.configSnapshot) !== CORE_V1_2_INVENTORY_CANONICAL_JSON) {
+    throw new CoreInventoryRulesVersionDriftError(['rulesetVersion']);
+  }
+  return version;
 }

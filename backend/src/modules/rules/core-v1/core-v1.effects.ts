@@ -565,6 +565,9 @@ export function resolveCoreV1DamageApplication(
     const criticalProfile = calculateCriticalProfile(
       input.attacker.primaryAttributes,
       components.some((component) => component.canCrit),
+      undefined,
+      undefined,
+      input.maximumPrimaryAttribute,
     );
     let critical = false;
     if (hit && criticalProfile.canCrit) {
@@ -1201,6 +1204,9 @@ export function resolveCoreV1EffectSequence(
         rolls: input.rolls as CoreV1InjectedRolls,
         targeting: input.targeting,
         defense: input.defense ?? { blockValue: 0, completeBlock: false },
+        ...(input.maximumPrimaryAttribute === undefined
+          ? {}
+          : { maximumPrimaryAttribute: input.maximumPrimaryAttribute }),
       });
       if (!damage.ok) return damage;
       offensiveHit = damage.value.hit;

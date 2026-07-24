@@ -624,12 +624,45 @@
         "operationId": "upsertActor",
         "x-openai-isConsequential": false,
         "summary": "Criar ou atualizar ator por campanha e code",
+        "description": "Cria atores em qualquer nível inteiro positivo aceito pela revisão da campanha. Não há nível máximo de gameplay. primaryAttributes é sempre a base de 90 pontos; progressionPrimaryAttributes pode alocar até 10 × (level - 1). Em ator existente, não sobrescreve mecânicas.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ActorUpsertInput"
+              },
+              "examples": {
+                "npc_level_5_full_progression": {
+                  "summary": "NPC nível 5 com os 40 pontos de progressão distribuídos",
+                  "value": {
+                    "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign",
+                    "idempotencyKey": "npc-level-5-full-001", "code": "sentinela-veterano",
+                    "name": "Sentinela Veterano", "actorType": "npc", "level": 5,
+                    "primaryAttributes": { "strength": 10, "vitality": 10, "agility": 10, "dexterity": 10, "intelligence": 10, "wisdom": 10, "perception": 10, "willpower": 10, "luck": 10 },
+                    "progressionPrimaryAttributes": { "strength": 5, "vitality": 5, "agility": 5, "dexterity": 5, "intelligence": 5, "wisdom": 5, "perception": 5, "willpower": 5, "luck": 0 }
+                  }
+                },
+                "npc_level_5_available_points": {
+                  "summary": "NPC nível 5 com 15 pontos distribuídos e 25 ainda disponíveis",
+                  "value": {
+                    "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign",
+                    "idempotencyKey": "npc-level-5-partial-001", "code": "sabio-itinerante",
+                    "name": "Sábio Itinerante", "actorType": "npc", "level": 5,
+                    "primaryAttributes": { "strength": 10, "vitality": 10, "agility": 10, "dexterity": 10, "intelligence": 10, "wisdom": 10, "perception": 10, "willpower": 10, "luck": 10 },
+                    "progressionPrimaryAttributes": { "strength": 0, "vitality": 0, "agility": 0, "dexterity": 0, "intelligence": 10, "wisdom": 5, "perception": 0, "willpower": 0, "luck": 0 }
+                  }
+                },
+                "npc_level_50_full_progression": {
+                  "summary": "NPC nível 50 criado diretamente com os 490 pontos distribuídos",
+                  "value": {
+                    "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign",
+                    "idempotencyKey": "npc-level-50-full-001", "code": "arquimaga-centenaria",
+                    "name": "Arquimaga Centenária", "actorType": "npc", "level": 50,
+                    "primaryAttributes": { "strength": 10, "vitality": 10, "agility": 10, "dexterity": 10, "intelligence": 10, "wisdom": 10, "perception": 10, "willpower": 10, "luck": 10 },
+                    "progressionPrimaryAttributes": { "strength": 0, "vitality": 0, "agility": 0, "dexterity": 0, "intelligence": 250, "wisdom": 120, "perception": 20, "willpower": 100, "luck": 0 }
+                  }
+                }
               }
             }
           }
@@ -802,6 +835,139 @@
                   "narrative_content_not_equippable": {
                     "summary": "Conteúdo narrativo não possui perfil mecânico equipável",
                     "value": { "error": { "code": "INVALID_INVENTORY_OPERATION", "message": "The inventory operation could not be completed", "retryable": false, "recoveryAction": "correct_request", "issues": [{ "path": "profile", "code": "MECHANICAL_EQUIPMENT", "message": "This content does not have an equippable mechanical profile. Changing only targetSlotRef will not make it equippable." }] } }
+                  }
+                }
+              }
+            }
+          },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/actors/progression/manage": {
+      "post": {
+        "operationId": "manageActorProgression",
+        "x-openai-isConsequential": false,
+        "tags": ["Actors"],
+        "summary": "Consultar e administrar XP, nível e atributos do ator",
+        "description": "get consulta. Não há nível máximo de gameplay. Escritas exigem intenção clara, idempotencyKey e expectedMechanicsStateVersion. grant_xp exige source estável e não repete recompensa ao ator. O backend calcula derivados; em conflito, consulte get.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ActorProgressionManageInput" },
+              "examples": {
+                "get_progression": {
+                  "summary": "Consultar ficha e pontos disponíveis",
+                  "value": { "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "actorRef": "ralph", "operation": "get" }
+                },
+                "grant_xp": {
+                  "summary": "Conceder XP por origem auditável",
+                  "value": { "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "actorRef": "ralph", "operation": "grant_xp", "idempotencyKey": "grant-xp-objective-001", "expectedMechanicsStateVersion": 4, "xpAmount": 150, "source": { "type": "event", "ref": "objective-main-result-1" }, "reason": "Objetivo principal concluído." }
+                },
+                "level_up": {
+                  "summary": "Consumir o XP exigido e subir um nível sem distribuir pontos",
+                  "value": { "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "actorRef": "ralph", "operation": "level_up", "idempotencyKey": "level-up-ralph-001", "expectedMechanicsStateVersion": 5 }
+                },
+                "allocate_exact": {
+                  "summary": "Executar a distribuição exata escolhida pelo jogador",
+                  "value": { "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "actorRef": "ralph", "operation": "allocate_attributes", "idempotencyKey": "allocate-ralph-001", "expectedMechanicsStateVersion": 6, "attributeDeltas": { "intelligence": 5, "wisdom": 3, "willpower": 2 } }
+                },
+                "idempotent_replay": {
+                  "summary": "Repetir exatamente payload e chave após resposta incerta devolve o resultado canônico",
+                  "value": { "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "actorRef": "ralph", "operation": "allocate_attributes", "idempotencyKey": "allocate-ralph-001", "expectedMechanicsStateVersion": 6, "attributeDeltas": { "intelligence": 5, "wisdom": 3, "willpower": 2 } }
+                },
+                "correct_sheet": {
+                  "summary": "Corrigir nível, XP, base e ganhos após pedido claro",
+                  "value": {
+                    "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign",
+                    "actorRef": "lyra", "operation": "set_progression_state",
+                    "idempotencyKey": "correct-lyra-sheet-001", "expectedMechanicsStateVersion": 3,
+                    "reason": "Jogador pediu correção da ficha importada.", "level": 5, "xp": 25,
+                    "basePrimaryAttributes": { "strength": 10, "vitality": 10, "agility": 10, "dexterity": 10, "intelligence": 10, "wisdom": 10, "perception": 10, "willpower": 10, "luck": 10 },
+                    "progressionPrimaryAttributes": { "strength": 0, "vitality": 0, "agility": 0, "dexterity": 0, "intelligence": 10, "wisdom": 5, "perception": 0, "willpower": 0, "luck": 0 }
+                  }
+                },
+                "get_level_50": {
+                  "summary": "Consultar ator acima do antigo nível 20",
+                  "value": { "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "actorRef": "arquimaga-centenaria", "operation": "get" }
+                },
+                "level_up_20_to_21": {
+                  "summary": "Subir do nível 20 para 21 preservando XP excedente",
+                  "value": { "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "actorRef": "ralph", "operation": "level_up", "idempotencyKey": "level-up-20-21-001", "expectedMechanicsStateVersion": 20 }
+                },
+                "level_up_99_to_100": {
+                  "summary": "Subir do nível 99 para 100",
+                  "value": { "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "actorRef": "arquimaga-centenaria", "operation": "level_up", "idempotencyKey": "level-up-99-100-001", "expectedMechanicsStateVersion": 99 }
+                },
+                "allocate_above_old_cap_to_zero": {
+                  "summary": "Gastar todo o saldo de nível alto e ultrapassar o antigo cap 30",
+                  "value": { "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "actorRef": "arquimaga-centenaria", "operation": "allocate_attributes", "idempotencyKey": "allocate-level-50-all-001", "expectedMechanicsStateVersion": 50, "attributeDeltas": { "intelligence": 490 } }
+                },
+                "correct_high_level_sheet": {
+                  "summary": "Corrigir ficha de nível alto",
+                  "value": {
+                    "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "actorRef": "arquimaga-centenaria",
+                    "operation": "set_progression_state", "idempotencyKey": "correct-level-100-001", "expectedMechanicsStateVersion": 51,
+                    "reason": "Corrigir importação de ficha de alto nível.", "level": 100, "xp": 500,
+                    "progressionPrimaryAttributes": { "strength": 0, "vitality": 0, "agility": 0, "dexterity": 0, "intelligence": 990, "wisdom": 0, "perception": 0, "willpower": 0, "luck": 0 }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Estado de progressão autoritativo confirmado; replay idêntico devolve este mesmo resultado",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActorProgression" } } }
+          },
+          "400": { "$ref": "#/components/responses/InvalidInput" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": {
+            "description": "Conflito de versão, chave idempotente ou bloqueio por encontro",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": {
+                  "mechanics_state_version_conflict": {
+                    "summary": "Consultar novamente antes de refazer a intenção",
+                    "value": { "error": { "code": "MECHANICS_STATE_VERSION_CONFLICT", "message": "Actor mechanics state version does not match", "retryable": false, "recoveryAction": "get_actor_progression", "issues": [{ "path": "expectedMechanicsStateVersion", "code": "STATE_VERSION_CONFLICT", "message": "Get actor progression again and use the returned mechanicsStateVersion in a new request." }] } }
+                  },
+                  "active_encounter_lock": {
+                    "summary": "Participante de encontro ativo permanece bloqueado",
+                    "value": { "error": { "code": "ACTOR_ENCOUNTER_LOCKED", "message": "Actor authority cannot change during an active encounter", "retryable": false, "recoveryAction": "finish_or_abandon_encounter", "issues": [{ "path": "actors.ralph", "code": "ACTIVE_ENCOUNTER_PARTICIPANT", "message": "Finish or abandon the active encounter before changing this actor." }] } }
+                  },
+                  "duplicate_xp_source": {
+                    "summary": "Mesma recompensa não é reaplicada com outra idempotencyKey",
+                    "value": { "error": { "code": "XP_SOURCE_ALREADY_GRANTED", "message": "This XP source was already granted to the actor", "retryable": false, "recoveryAction": "get_actor_progression", "issues": [{ "path": "source", "code": "DUPLICATE_REWARD_SOURCE", "message": "Use a different source only for a genuinely different reward fact." }] } }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "XP, pontos ou estado mecânico insuficiente ou inválido",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": {
+                  "insufficient_attribute_points": {
+                    "summary": "Distribuição excede o saldo disponível",
+                    "value": { "error": { "code": "INSUFFICIENT_ATTRIBUTE_POINTS", "message": "The actor does not have enough available attribute points", "retryable": false, "recoveryAction": "get_actor_progression", "issues": [{ "path": "attributeDeltas", "code": "ATTRIBUTE_POINTS_EXCEEDED", "message": "Get actor progression and allocate no more than attributePointsAvailable." }] } }
+                  },
+                  "insufficient_xp": {
+                    "summary": "XP insuficiente para a transição atual",
+                    "value": { "error": { "code": "INSUFFICIENT_XP", "message": "The actor does not have enough XP to level up", "retryable": false, "recoveryAction": "get_actor_progression", "issues": [{ "path": "operation", "code": "XP_REQUIRED", "message": "Get actor progression and grant or earn enough XP before trying level_up again." }] } }
+                  },
+                  "technical_level_boundary": {
+                    "summary": "Fronteira técnica de armazenamento, não nível máximo de gameplay",
+                    "value": { "error": { "code": "LEVEL_TECHNICAL_RANGE_EXCEEDED", "message": "Actor level exceeds the technical storage and calculation range", "retryable": false, "recoveryAction": "correct_request", "issues": [{ "path": "level", "code": "TECHNICAL_INTEGER_RANGE", "message": "This is a storage safety boundary, not a gameplay maximum level." }] } }
+                  },
+                  "xp_storage_boundary": {
+                    "summary": "Concessão excederia o inteiro persistido",
+                    "value": { "error": { "code": "XP_RANGE_EXCEEDED", "message": "XP total exceeds the technical Actor.xp storage range", "retryable": false, "recoveryAction": "correct_request" } }
                   }
                 }
               }
@@ -1974,7 +2140,7 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "minimumLevel": { "type": "integer", "minimum": 1, "maximum": 20 },
+          "minimumLevel": { "type": "integer", "minimum": 1, "maximum": 20, "description": "Envelope legado do perfil de conteúdo core-v1; não é limite de nível do ator." },
           "minimumPrimaryAttributes": { "$ref": "#/components/schemas/PrimaryAttributeRequirements" },
           "requiredContent": { "type": "array", "maxItems": 32, "items": { "$ref": "#/components/schemas/ContentReference" } },
           "requiredWeaponTags": { "type": "array", "minItems": 1, "maxItems": 24, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
@@ -2134,6 +2300,56 @@
         },
         "description": "Os nove atributos são obrigatórios e a alocação inicial deve totalizar exatamente 90 pontos."
       },
+      "ProgressionPrimaryAttributes": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["strength", "vitality", "agility", "dexterity", "intelligence", "wisdom", "perception", "willpower", "luck"],
+        "properties": {
+          "strength": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "vitality": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "agility": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "dexterity": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "intelligence": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "wisdom": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "perception": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "willpower": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "luck": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
+        },
+        "description": "Ganhos permanentes após o nível 1. A soma não pode exceder 10 × (level - 1). A revisão atual não possui cap efetivo fixo de gameplay."
+      },
+      "EffectivePrimaryAttributes": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["strength", "vitality", "agility", "dexterity", "intelligence", "wisdom", "perception", "willpower", "luck"],
+        "properties": {
+          "strength": { "type": "integer", "minimum": 0 },
+          "vitality": { "type": "integer", "minimum": 0 },
+          "agility": { "type": "integer", "minimum": 0 },
+          "dexterity": { "type": "integer", "minimum": 0 },
+          "intelligence": { "type": "integer", "minimum": 0 },
+          "wisdom": { "type": "integer", "minimum": 0 },
+          "perception": { "type": "integer", "minimum": 0 },
+          "willpower": { "type": "integer", "minimum": 0 },
+          "luck": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "PrimaryAttributeDeltas": {
+        "type": "object",
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "strength": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "vitality": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "agility": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "dexterity": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "intelligence": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "wisdom": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "perception": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "willpower": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "luck": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
+        },
+        "description": "Somente deltas não negativos; ao menos um delta deve ser positivo."
+      },
       "ActorResources": {
         "type": "object",
         "additionalProperties": false,
@@ -2183,7 +2399,7 @@
         "additionalProperties": false,
         "required": ["primaryAttributes", "resources", "secondaryAttributes", "mechanicsStateVersion", "inventoryStateVersion", "effectsStateVersion", "ruleset"],
         "properties": {
-          "primaryAttributes": { "$ref": "#/components/schemas/PrimaryAttributes" },
+          "primaryAttributes": { "$ref": "#/components/schemas/EffectivePrimaryAttributes" },
           "resources": { "$ref": "#/components/schemas/ActorResources" },
           "secondaryAttributes": { "$ref": "#/components/schemas/SecondaryAttributes" },
           "mechanicsStateVersion": { "type": "integer", "minimum": 1 },
@@ -2397,7 +2613,7 @@
               },
               "recoveryAction": {
                 "type": "string",
-                "enum": ["correct_request", "load_inventory", "load_encounter", "use_new_idempotency_key", "choose_new_intent", "retry_same_request", "stop_encounter_flow"]
+                "enum": ["correct_request", "load_inventory", "load_encounter", "get_actor_progression", "finish_or_abandon_encounter", "use_new_idempotency_key", "choose_new_intent", "retry_same_request", "stop_encounter_flow"]
               },
               "issues": {
                 "type": "array",
@@ -2528,7 +2744,7 @@
             "type": "integer",
             "minimum": 0
           },
-          "primaryAttributes": { "$ref": "#/components/schemas/PrimaryAttributes" },
+          "primaryAttributes": { "$ref": "#/components/schemas/EffectivePrimaryAttributes" },
           "resources": { "$ref": "#/components/schemas/ActorResources" },
           "secondaryAttributes": { "$ref": "#/components/schemas/SecondaryAttributes" },
           "mechanicsStateVersion": { "type": "integer", "minimum": 1 },
@@ -2600,11 +2816,175 @@
           "className": { "type": ["string", "null"], "maxLength": 100 },
           "role": { "type": ["string", "null"], "maxLength": 100 },
           "description": { "type": ["string", "null"], "maxLength": 5000 },
-          "level": { "type": "integer", "minimum": 1, "maximum": 20 },
+          "level": { "type": "integer", "minimum": 1, "description": "Sem máximo de gameplay; o backend rejeita somente valores fora do envelope técnico seguro." },
           "primaryAttributes": { "$ref": "#/components/schemas/PrimaryAttributes" },
+          "progressionPrimaryAttributes": { "$ref": "#/components/schemas/ProgressionPrimaryAttributes" },
           "appearance": { "$ref": "#/components/schemas/Appearance" },
           "personality": { "$ref": "#/components/schemas/Personality" },
           "metadata": { "$ref": "#/components/schemas/JsonObject" }
+        }
+      },
+      "XpGrantSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "ref"],
+        "properties": {
+          "type": { "type": "string", "enum": ["encounter_consequence", "mission", "event", "training", "correction", "manual"] },
+          "ref": { "$ref": "#/components/schemas/Code" }
+        },
+        "description": "Identidade semântica estável do fato recompensável. O mesmo ator e source não recebem XP duas vezes, mesmo com outra idempotencyKey."
+      },
+      "ActorProgressionManageInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["playerRef", "worldRef", "campaignRef", "actorRef", "operation"],
+        "properties": {
+          "playerRef": { "$ref": "#/components/schemas/Code" },
+          "worldRef": { "$ref": "#/components/schemas/Code" },
+          "campaignRef": { "$ref": "#/components/schemas/Code" },
+          "actorRef": { "$ref": "#/components/schemas/Code" },
+          "operation": { "type": "string", "enum": ["get", "grant_xp", "level_up", "allocate_attributes", "set_progression_state"] },
+          "idempotencyKey": { "$ref": "#/components/schemas/IdempotencyKey" },
+          "expectedMechanicsStateVersion": { "type": "integer", "minimum": 1 },
+          "xpAmount": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+          "source": { "$ref": "#/components/schemas/XpGrantSource" },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000, "description": "Motivo auditável; obrigatório para grant_xp e set_progression_state." },
+          "attributeDeltas": { "$ref": "#/components/schemas/PrimaryAttributeDeltas" },
+          "level": { "type": "integer", "minimum": 1, "description": "Sem máximo de gameplay; sujeito apenas ao envelope técnico seguro." },
+          "xp": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "basePrimaryAttributes": { "$ref": "#/components/schemas/PrimaryAttributes" },
+          "progressionPrimaryAttributes": { "$ref": "#/components/schemas/ProgressionPrimaryAttributes" }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "operation": { "const": "get" } } },
+            "then": {
+              "allOf": [
+                { "not": { "required": ["idempotencyKey"] } },
+                { "not": { "required": ["expectedMechanicsStateVersion"] } },
+                { "not": { "required": ["xpAmount"] } },
+                { "not": { "required": ["source"] } },
+                { "not": { "required": ["reason"] } },
+                { "not": { "required": ["attributeDeltas"] } },
+                { "not": { "required": ["level"] } },
+                { "not": { "required": ["xp"] } },
+                { "not": { "required": ["basePrimaryAttributes"] } },
+                { "not": { "required": ["progressionPrimaryAttributes"] } }
+              ]
+            }
+          },
+          {
+            "if": { "properties": { "operation": { "const": "grant_xp" } } },
+            "then": {
+              "required": ["idempotencyKey", "expectedMechanicsStateVersion", "xpAmount", "source", "reason"],
+              "allOf": [
+                { "not": { "required": ["attributeDeltas"] } },
+                { "not": { "required": ["level"] } },
+                { "not": { "required": ["xp"] } },
+                { "not": { "required": ["basePrimaryAttributes"] } },
+                { "not": { "required": ["progressionPrimaryAttributes"] } }
+              ]
+            }
+          },
+          {
+            "if": { "properties": { "operation": { "const": "level_up" } } },
+            "then": {
+              "required": ["idempotencyKey", "expectedMechanicsStateVersion"],
+              "allOf": [
+                { "not": { "required": ["xpAmount"] } },
+                { "not": { "required": ["source"] } },
+                { "not": { "required": ["attributeDeltas"] } },
+                { "not": { "required": ["level"] } },
+                { "not": { "required": ["xp"] } },
+                { "not": { "required": ["basePrimaryAttributes"] } },
+                { "not": { "required": ["progressionPrimaryAttributes"] } }
+              ]
+            }
+          },
+          {
+            "if": { "properties": { "operation": { "const": "allocate_attributes" } } },
+            "then": {
+              "required": ["idempotencyKey", "expectedMechanicsStateVersion", "attributeDeltas"],
+              "allOf": [
+                { "not": { "required": ["xpAmount"] } },
+                { "not": { "required": ["source"] } },
+                { "not": { "required": ["level"] } },
+                { "not": { "required": ["xp"] } },
+                { "not": { "required": ["basePrimaryAttributes"] } },
+                { "not": { "required": ["progressionPrimaryAttributes"] } }
+              ]
+            }
+          },
+          {
+            "if": { "properties": { "operation": { "const": "set_progression_state" } } },
+            "then": {
+              "required": ["idempotencyKey", "expectedMechanicsStateVersion", "reason"],
+              "allOf": [
+                { "not": { "required": ["xpAmount"] } },
+                { "not": { "required": ["source"] } },
+                { "not": { "required": ["attributeDeltas"] } },
+                {
+                  "not": {
+                    "allOf": [
+                      { "not": { "required": ["level"] } },
+                      { "not": { "required": ["xp"] } },
+                      { "not": { "required": ["basePrimaryAttributes"] } },
+                      { "not": { "required": ["progressionPrimaryAttributes"] } }
+                    ]
+                  }
+                }
+              ],
+              "description": "Exige pelo menos um de level, xp, basePrimaryAttributes ou progressionPrimaryAttributes."
+            }
+          }
+        ]
+      },
+      "ActorProgressionResourceChange": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["resource", "before", "after"],
+        "properties": {
+          "resource": { "type": "string", "enum": ["hp", "mana", "sp"] },
+          "before": {
+            "type": "object", "additionalProperties": false, "required": ["current", "max"],
+            "properties": { "current": { "type": "integer", "minimum": 0 }, "max": { "type": "integer", "minimum": 0 } }
+          },
+          "after": {
+            "type": "object", "additionalProperties": false, "required": ["current", "max"],
+            "properties": { "current": { "type": "integer", "minimum": 0 }, "max": { "type": "integer", "minimum": 0 } }
+          }
+        }
+      },
+      "ActorProgression": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "actorRef", "level", "xpCurrent", "xpRequiredForNextLevel",
+          "basePrimaryAttributes", "progressionPrimaryAttributes", "effectivePrimaryAttributes",
+          "attributePointsEarned", "attributePointsAllocated", "attributePointsAvailable",
+          "totalAttributeEntitlement", "mechanicsStateVersion", "canLevelUp"
+        ],
+        "properties": {
+          "operation": { "type": "string", "enum": ["grant_xp", "level_up", "allocate_attributes", "set_progression_state"] },
+          "changed": { "type": "boolean" },
+          "actorRef": { "$ref": "#/components/schemas/Code" },
+          "level": { "type": "integer", "minimum": 1 },
+          "xpCurrent": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+          "xpRequiredForNextLevel": { "type": ["integer", "null"], "minimum": 1 },
+          "basePrimaryAttributes": { "$ref": "#/components/schemas/PrimaryAttributes" },
+          "progressionPrimaryAttributes": { "$ref": "#/components/schemas/ProgressionPrimaryAttributes" },
+          "effectivePrimaryAttributes": { "$ref": "#/components/schemas/EffectivePrimaryAttributes" },
+          "attributePointsEarned": { "type": "integer", "minimum": 0 },
+          "attributePointsAllocated": { "type": "integer", "minimum": 0 },
+          "attributePointsAvailable": { "type": "integer", "minimum": 0 },
+          "totalAttributeEntitlement": { "type": "integer", "minimum": 90 },
+          "mechanicsStateVersion": { "type": "integer", "minimum": 1 },
+          "canLevelUp": { "type": "boolean" },
+          "resourceChanges": {
+            "type": "array",
+            "maxItems": 3,
+            "items": { "$ref": "#/components/schemas/ActorProgressionResourceChange" }
+          }
         }
       },
       "Content": {

@@ -3,6 +3,7 @@ import {
   advanceActorActionDurations,
   applyCoreV1Status,
   calculateSecondaryAttributes,
+  CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM,
   closeEffectScope,
   collectActiveEffectModifiers,
   createCoreV1RuntimeDurationState,
@@ -195,6 +196,26 @@ describe('core-v1 rolls, damage, defense and restoration', () => {
     expectOk(resolveCoreV1DamageApplication({ ...base, rolls: { hitRollBps: 1, criticalRollBps: 10_000 } }));
     expectError(resolveCoreV1DamageApplication({ ...base, rolls: { hitRollBps: 0, criticalRollBps: 1 } }));
     expectError(resolveCoreV1DamageApplication({ ...base, rolls: { hitRollBps: 1, criticalRollBps: 10_001 } }));
+  });
+
+  it('resolves RC1.2 critical calculations above the legacy attribute cap without changing the legacy default', () => {
+    const highAttacker = {
+      ...actor('archmage'),
+      primaryAttributes: { ...attributes, intelligence: 500, luck: 100 },
+    };
+    const input = {
+      attacker: highAttacker,
+      target: actor('target'),
+      damageComponents: fire,
+      rolls: { hitRollBps: 1, criticalRollBps: 1 },
+      targeting: { targetRef: 'target', targetOrdinal: 0, damageMultiplierBps: 10_000 },
+      defense: { blockValue: 0, completeBlock: false },
+    } as const;
+    expectError(resolveCoreV1DamageApplication(input));
+    expect(expectOk(resolveCoreV1DamageApplication({
+      ...input,
+      maximumPrimaryAttribute: CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM,
+    }))).toMatchObject({ hit: true, critical: true });
   });
 
   it('reuses mitigation for defense, resistance, immunity, partial and complete block', () => {

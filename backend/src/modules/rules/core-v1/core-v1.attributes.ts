@@ -89,7 +89,10 @@ export function getInitialAttributePreset(preset: PrimaryAttributePreset): Prima
   return { ...attributes };
 }
 
-function assertPrimaryAttributes(attributes: PrimaryAttributes): void {
+function assertPrimaryAttributes(
+  attributes: PrimaryAttributes,
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): void {
   assertKnownKeys(attributes, CORE_V1_PRIMARY_ATTRIBUTES, 'attributes');
   if (Object.keys(attributes).length !== CORE_V1_PRIMARY_ATTRIBUTES.length) {
     throw new TypeError('attributes must contain every primary attribute exactly once');
@@ -98,27 +101,29 @@ function assertPrimaryAttributes(attributes: PrimaryAttributes): void {
     if (!Object.hasOwn(attributes, attribute)) {
       throw new TypeError(`attributes.${attribute} is required`);
     }
-    assertIntegerInRange(attributes[attribute], 0, CORE_V1_ATTRIBUTE_HARD_CAP, `attributes.${attribute}`);
+    assertIntegerInRange(attributes[attribute], 0, maximumPrimaryAttribute, `attributes.${attribute}`);
   }
 }
 
 export function calculateEffectiveAttribute(
   base: number,
   modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
 ): number {
-  assertIntegerInRange(base, 0, CORE_V1_ATTRIBUTE_HARD_CAP, 'base');
-  return clamp(0, CORE_V1_ATTRIBUTE_HARD_CAP, safeIntegerAdd(base, sumAuthorizedModifiers(modifiers), 'effectiveAttribute'));
+  assertIntegerInRange(base, 0, maximumPrimaryAttribute, 'base');
+  return clamp(0, maximumPrimaryAttribute, safeIntegerAdd(base, sumAuthorizedModifiers(modifiers), 'effectiveAttribute'));
 }
 
 export function calculateEffectiveAttributes(
   base: PrimaryAttributes,
   modifiers: Partial<Record<PrimaryAttributeCode, readonly AuthorizedNumericModifier[]>> = {},
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
 ): PrimaryAttributes {
-  assertPrimaryAttributes(base);
+  assertPrimaryAttributes(base, maximumPrimaryAttribute);
   assertKnownKeys(modifiers, CORE_V1_PRIMARY_ATTRIBUTES, 'attributeModifiers');
   return Object.fromEntries(CORE_V1_PRIMARY_ATTRIBUTES.map((attribute) => [
     attribute,
-    calculateEffectiveAttribute(base[attribute], modifiers[attribute]),
+    calculateEffectiveAttribute(base[attribute], modifiers[attribute], maximumPrimaryAttribute),
   ])) as PrimaryAttributes;
 }
 
@@ -126,9 +131,11 @@ export function calculateResourceMaximums(
   attributes: PrimaryAttributes,
   level: number,
   modifiers: ResourceModifierSet = {},
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+  maximumLevel = CORE_V1_LEVEL_CAP,
 ): ResourceMaximums {
-  assertPrimaryAttributes(attributes);
-  assertIntegerInRange(level, 1, CORE_V1_LEVEL_CAP, 'level');
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
+  assertIntegerInRange(level, 1, maximumLevel, 'level');
   assertKnownKeys(modifiers, ['maxHp', 'maxMana', 'maxSp'], 'resourceModifiers');
   const levelOffset = level - 1;
   return {
@@ -150,8 +157,9 @@ export function calculateActorPhysicalPower(
   attributes: PrimaryAttributes,
   weaponFamilyRank: number,
   modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
 ): number {
-  assertPrimaryAttributes(attributes);
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   assertIntegerInRange(weaponFamilyRank, 0, 10, 'weaponFamilyRank');
   return clamp(0, 200, sumWithModifiers([
     Math.floor((2 * attributes.strength + attributes.dexterity) / 6), Math.floor(weaponFamilyRank / 3),
@@ -162,23 +170,32 @@ export function calculateActorMagicalPower(
   attributes: PrimaryAttributes,
   magicSchoolRank: number,
   modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
 ): number {
-  assertPrimaryAttributes(attributes);
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   assertIntegerInRange(magicSchoolRank, 0, 10, 'magicSchoolRank');
   return clamp(0, 200, sumWithModifiers([
     Math.floor((2 * attributes.intelligence + attributes.wisdom) / 6), Math.floor(magicSchoolRank / 3),
   ], modifiers, 'actorMagicalPower'));
 }
 
-export function calculatePhysicalDefense(attributes: PrimaryAttributes, modifiers?: readonly AuthorizedNumericModifier[]): number {
-  assertPrimaryAttributes(attributes);
+export function calculatePhysicalDefense(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   return clamp(0, 300, sumWithModifiers([
     Math.floor((attributes.vitality + attributes.strength) / 5),
   ], modifiers, 'physicalDefense'));
 }
 
-export function calculateMagicalDefense(attributes: PrimaryAttributes, modifiers?: readonly AuthorizedNumericModifier[]): number {
-  assertPrimaryAttributes(attributes);
+export function calculateMagicalDefense(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   return clamp(0, 300, sumWithModifiers([
     Math.floor((attributes.wisdom + attributes.willpower) / 5),
   ], modifiers, 'magicalDefense'));
@@ -188,8 +205,9 @@ export function calculateAccuracy(
   attributes: PrimaryAttributes,
   relevantRank: number,
   modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
 ): number {
-  assertPrimaryAttributes(attributes);
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   assertIntegerInRange(relevantRank, 0, 10, 'relevantRank');
   return clamp(0, 100, sumWithModifiers([
     2 * attributes.dexterity, attributes.perception, relevantRank,
@@ -201,8 +219,9 @@ export function calculateEvasion(
   evasionRank: number,
   encumbrancePenalty: number,
   modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
 ): number {
-  assertPrimaryAttributes(attributes);
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   assertIntegerInRange(evasionRank, 0, 10, 'evasionRank');
   assertIntegerInRange(encumbrancePenalty, 0, 100, 'encumbrancePenalty');
   return clamp(0, 100, sumWithModifiers([
@@ -210,31 +229,47 @@ export function calculateEvasion(
   ], modifiers, 'evasion'));
 }
 
-export function calculateBaseAttackSpeedBps(attributes: PrimaryAttributes, modifiers?: readonly AuthorizedNumericModifier[]): number {
-  assertPrimaryAttributes(attributes);
+export function calculateBaseAttackSpeedBps(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   return clamp(7500, 15000, sumWithModifiers([
     10000, 100 * (attributes.agility - 10), 50 * (attributes.dexterity - 10),
   ], modifiers, 'baseAttackSpeedBps'));
 }
 
-export function calculateBaseCastingSpeedBps(attributes: PrimaryAttributes, modifiers?: readonly AuthorizedNumericModifier[]): number {
-  assertPrimaryAttributes(attributes);
+export function calculateBaseCastingSpeedBps(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   return clamp(7500, 15000, sumWithModifiers([
     10000, 100 * (attributes.intelligence - 10), 50 * (attributes.wisdom - 10),
     50 * (attributes.dexterity - 10),
   ], modifiers, 'baseCastingSpeedBps'));
 }
 
-export function calculateCriticalChanceBps(attributes: PrimaryAttributes, modifiers?: readonly AuthorizedNumericModifier[]): number {
-  assertPrimaryAttributes(attributes);
+export function calculateCriticalChanceBps(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   return clamp(100, 2500, sumWithModifiers([
     500, 25 * (attributes.dexterity - 10), 25 * (attributes.perception - 10),
     50 * (attributes.luck - 10),
   ], modifiers, 'criticalChanceBps'));
 }
 
-export function calculateCriticalDamageBps(attributes: PrimaryAttributes, modifiers?: readonly AuthorizedNumericModifier[]): number {
-  assertPrimaryAttributes(attributes);
+export function calculateCriticalDamageBps(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   return clamp(15000, 22000, sumWithModifiers([
     15000, 100 * Math.max(0, attributes.luck - 10),
     50 * Math.max(0, Math.max(attributes.strength, attributes.intelligence) - 10),
@@ -246,11 +281,14 @@ export function calculateCriticalProfile(
   canCrit: boolean,
   chanceModifiers?: readonly AuthorizedNumericModifier[],
   damageModifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
 ) {
   return {
     canCrit,
-    criticalChanceBps: canCrit ? calculateCriticalChanceBps(attributes, chanceModifiers) : 0,
-    criticalDamageBps: calculateCriticalDamageBps(attributes, damageModifiers),
+    criticalChanceBps: canCrit
+      ? calculateCriticalChanceBps(attributes, chanceModifiers, maximumPrimaryAttribute)
+      : 0,
+    criticalDamageBps: calculateCriticalDamageBps(attributes, damageModifiers, maximumPrimaryAttribute),
   } as const;
 }
 
@@ -258,58 +296,87 @@ export function calculateMovementSpeed(
   attributes: PrimaryAttributes,
   encumbrancePenalty: number,
   modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
 ): number {
-  assertPrimaryAttributes(attributes);
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   assertIntegerInRange(encumbrancePenalty, 0, 100, 'encumbrancePenalty');
   return clamp(2, 8, sumWithModifiers([
     4, Math.floor((attributes.agility - 10) / 5), -encumbrancePenalty,
   ], modifiers, 'movementSpeed'));
 }
 
-export function calculateCarryingCapacity(attributes: PrimaryAttributes, modifiers?: readonly AuthorizedNumericModifier[]): number {
-  assertPrimaryAttributes(attributes);
+export function calculateCarryingCapacity(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   return clamp(100, 2000, sumWithModifiers([
     200, 20 * attributes.strength, 10 * attributes.vitality,
   ], modifiers, 'carryingCapacity'));
 }
 
-export function calculatePhysicalResistanceBps(attributes: PrimaryAttributes, modifiers?: readonly AuthorizedNumericModifier[]): number {
-  assertPrimaryAttributes(attributes);
+export function calculatePhysicalResistanceBps(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   return clamp(-5000, 4000, sumWithModifiers([
     20 * attributes.vitality, 10 * attributes.willpower,
   ], modifiers, 'physicalResistanceBps'));
 }
 
-export function calculateMagicalResistanceBps(attributes: PrimaryAttributes, modifiers?: readonly AuthorizedNumericModifier[]): number {
-  assertPrimaryAttributes(attributes);
+export function calculateMagicalResistanceBps(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   return clamp(-5000, 4000, sumWithModifiers([
     20 * attributes.wisdom, 10 * attributes.willpower,
   ], modifiers, 'magicalResistanceBps'));
 }
 
-export function calculateElementalResistanceBps(attributes: PrimaryAttributes, modifiers?: readonly AuthorizedNumericModifier[]): number {
-  assertPrimaryAttributes(attributes);
+export function calculateElementalResistanceBps(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   return clamp(-5000, 7500, sumWithModifiers([
     10 * Math.max(0, attributes.wisdom + attributes.willpower - 20),
   ], modifiers, 'elementalResistanceBps'));
 }
 
-export function calculateHpRegen(attributes: PrimaryAttributes, modifiers?: readonly AuthorizedNumericModifier[]): number {
-  assertPrimaryAttributes(attributes);
+export function calculateHpRegen(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   return clamp(0, 20, sumWithModifiers([
     Math.floor(attributes.vitality / 5),
   ], modifiers, 'hpRegen'));
 }
 
-export function calculateManaRegen(attributes: PrimaryAttributes, modifiers?: readonly AuthorizedNumericModifier[]): number {
-  assertPrimaryAttributes(attributes);
+export function calculateManaRegen(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   return clamp(0, 20, sumWithModifiers([
     Math.floor((attributes.wisdom + attributes.willpower) / 10),
   ], modifiers, 'manaRegen'));
 }
 
-export function calculateSpRegen(attributes: PrimaryAttributes, modifiers?: readonly AuthorizedNumericModifier[]): number {
-  assertPrimaryAttributes(attributes);
+export function calculateSpRegen(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
   return clamp(1, 20, sumWithModifiers([
     Math.max(1, Math.floor((attributes.vitality + attributes.willpower) / 8)),
   ], modifiers, 'spRegen'));
@@ -317,6 +384,7 @@ export function calculateSpRegen(attributes: PrimaryAttributes, modifiers?: read
 
 export function calculateSecondaryAttributes(input: SecondaryAttributeInput): SecondaryAttributes {
   const { attributes, modifiers = {} } = input;
+  const maximumPrimaryAttribute = input.maximumPrimaryAttribute ?? CORE_V1_ATTRIBUTE_HARD_CAP;
   assertKnownKeys(modifiers, [
     'physicalPower', 'magicalPower', 'physicalFlatDefense', 'magicalFlatDefense', 'accuracy',
     'evasion', 'attackSpeedBps', 'castingSpeedBps', 'criticalChanceBps', 'criticalDamageBps',
@@ -325,24 +393,24 @@ export function calculateSecondaryAttributes(input: SecondaryAttributeInput): Se
   ], 'secondaryAttributeModifiers');
   assertInteger(input.encumbrancePenalty, 'encumbrancePenalty');
   return {
-    actorPhysicalPower: calculateActorPhysicalPower(attributes, input.weaponFamilyRank, modifiers.physicalPower),
-    actorMagicalPower: calculateActorMagicalPower(attributes, input.magicSchoolRank, modifiers.magicalPower),
-    physicalDefense: calculatePhysicalDefense(attributes, modifiers.physicalFlatDefense),
-    magicalDefense: calculateMagicalDefense(attributes, modifiers.magicalFlatDefense),
-    accuracy: calculateAccuracy(attributes, input.accuracyRank, modifiers.accuracy),
-    evasion: calculateEvasion(attributes, input.evasionRank, input.encumbrancePenalty, modifiers.evasion),
-    baseAttackSpeedBps: calculateBaseAttackSpeedBps(attributes, modifiers.attackSpeedBps),
-    baseCastingSpeedBps: calculateBaseCastingSpeedBps(attributes, modifiers.castingSpeedBps),
-    criticalChanceBps: calculateCriticalChanceBps(attributes, modifiers.criticalChanceBps),
-    criticalDamageBps: calculateCriticalDamageBps(attributes, modifiers.criticalDamageBps),
-    movementSpeed: calculateMovementSpeed(attributes, input.encumbrancePenalty, modifiers.movementSpeed),
-    carryingCapacity: calculateCarryingCapacity(attributes, modifiers.carryingCapacity),
-    physicalResistanceBps: calculatePhysicalResistanceBps(attributes, modifiers.physicalResistanceBps),
-    magicalResistanceBps: calculateMagicalResistanceBps(attributes, modifiers.magicalResistanceBps),
-    elementalResistanceBps: calculateElementalResistanceBps(attributes, modifiers.elementalResistanceBps),
-    hpRegen: calculateHpRegen(attributes, modifiers.hpRegen),
-    manaRegen: calculateManaRegen(attributes, modifiers.manaRegen),
-    spRegen: calculateSpRegen(attributes, modifiers.spRegen),
+    actorPhysicalPower: calculateActorPhysicalPower(attributes, input.weaponFamilyRank, modifiers.physicalPower, maximumPrimaryAttribute),
+    actorMagicalPower: calculateActorMagicalPower(attributes, input.magicSchoolRank, modifiers.magicalPower, maximumPrimaryAttribute),
+    physicalDefense: calculatePhysicalDefense(attributes, modifiers.physicalFlatDefense, maximumPrimaryAttribute),
+    magicalDefense: calculateMagicalDefense(attributes, modifiers.magicalFlatDefense, maximumPrimaryAttribute),
+    accuracy: calculateAccuracy(attributes, input.accuracyRank, modifiers.accuracy, maximumPrimaryAttribute),
+    evasion: calculateEvasion(attributes, input.evasionRank, input.encumbrancePenalty, modifiers.evasion, maximumPrimaryAttribute),
+    baseAttackSpeedBps: calculateBaseAttackSpeedBps(attributes, modifiers.attackSpeedBps, maximumPrimaryAttribute),
+    baseCastingSpeedBps: calculateBaseCastingSpeedBps(attributes, modifiers.castingSpeedBps, maximumPrimaryAttribute),
+    criticalChanceBps: calculateCriticalChanceBps(attributes, modifiers.criticalChanceBps, maximumPrimaryAttribute),
+    criticalDamageBps: calculateCriticalDamageBps(attributes, modifiers.criticalDamageBps, maximumPrimaryAttribute),
+    movementSpeed: calculateMovementSpeed(attributes, input.encumbrancePenalty, modifiers.movementSpeed, maximumPrimaryAttribute),
+    carryingCapacity: calculateCarryingCapacity(attributes, modifiers.carryingCapacity, maximumPrimaryAttribute),
+    physicalResistanceBps: calculatePhysicalResistanceBps(attributes, modifiers.physicalResistanceBps, maximumPrimaryAttribute),
+    magicalResistanceBps: calculateMagicalResistanceBps(attributes, modifiers.magicalResistanceBps, maximumPrimaryAttribute),
+    elementalResistanceBps: calculateElementalResistanceBps(attributes, modifiers.elementalResistanceBps, maximumPrimaryAttribute),
+    hpRegen: calculateHpRegen(attributes, modifiers.hpRegen, maximumPrimaryAttribute),
+    manaRegen: calculateManaRegen(attributes, modifiers.manaRegen, maximumPrimaryAttribute),
+    spRegen: calculateSpRegen(attributes, modifiers.spRegen, maximumPrimaryAttribute),
   };
 }
 

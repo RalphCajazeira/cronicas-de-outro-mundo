@@ -3,7 +3,7 @@ import { observeOperation } from '../../shared/observability/operation-observabi
 import { actorRefSchema } from '../actors/actors.schemas.js';
 import {
   createEventSchema, listCampaignActorsSchema, listPlayerWorldsSchema, listWorldCampaignsSchema, loadGameSchema, manageActorContentSchema, manageActorInventorySchema, startGameSchema,
-  patchActorSchema, upsertActorSchema, upsertContentSchema,
+  manageActorProgressionSchema, patchActorSchema, upsertActorSchema, upsertContentSchema,
   resolveActorEffectSchema,
 } from './gpt.schemas.js';
 import { createGptService } from './gpt.service.js';
@@ -50,6 +50,14 @@ export function createGptRouter(repository: GptRepository) {
   router.post('/actors/:actorRef/inventory/manage', async (request, response, next) => {
     try {
       response.json(await service.manageActorInventory(actorRefSchema.parse(request.params.actorRef), manageActorInventorySchema.parse(request.body)));
+    } catch (error) { next(error); }
+  });
+  router.post('/actors/progression/manage', async (request, response, next) => {
+    try {
+      response.json(await observeOperation(
+        'manageActorProgression',
+        () => service.manageActorProgression(manageActorProgressionSchema.parse(request.body)),
+      ));
     } catch (error) { next(error); }
   });
   router.post('/events', async (request, response, next) => {

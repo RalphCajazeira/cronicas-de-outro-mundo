@@ -4,13 +4,21 @@ import {
   contentPresentationSchema, contentTagsSchema, contentTypeSchema, coreV1ContentProfileSchema, inventorySpecSchema,
   validateContentPublicationShape,
 } from '../content/content.schemas.js';
-import { validateInitialPrimaryAttributes, type PrimaryAttributes } from '../rules/core-v1/index.js';
+import {
+  CORE_V1_2_TECHNICAL_LEVEL_MAXIMUM,
+  CORE_V1_2_XP_STORAGE_MAXIMUM,
+  validateInitialPrimaryAttributes,
+  type PrimaryAttributes,
+} from '../rules/core-v1/index.js';
 import {
   METADATA_MAX_BYTES, METADATA_TOTAL_MAX_BYTES, PROFILE_MAX_BYTES, START_GAME_MAX_BYTES,
   difficultyPresets, hasDangerousJsonKey, jsonByteSize, jsonDepth, jsonKeyCount,
 } from './gpt.start-game.js';
 
 const idempotencyKeySchema = z.string().trim().min(8).max(200);
+const actorLevelSchema = z.number().int().min(1).max(CORE_V1_2_TECHNICAL_LEVEL_MAXIMUM, {
+  error: 'Level exceeds the technical PostgreSQL INTEGER and XP-calculation envelope; this is not a gameplay level cap.',
+});
 const jsonObjectSchema = z.record(z.string(), z.json());
 const safeMetadataObjectSchema = z.unknown().superRefine((value, context) => {
   if (hasDangerousJsonKey(value)) context.addIssue({ code: 'custom', message: 'Contains a reserved object key' });
@@ -151,6 +159,35 @@ export const primaryAttributesSchema: z.ZodType<PrimaryAttributes> = z.unknown()
   });
   return z.NEVER;
 });
+
+const nonnegativeAttributeValueSchema = z.number().int().min(0).max(CORE_V1_2_XP_STORAGE_MAXIMUM);
+
+export const progressionPrimaryAttributesSchema = z.strictObject({
+  strength: nonnegativeAttributeValueSchema,
+  vitality: nonnegativeAttributeValueSchema,
+  agility: nonnegativeAttributeValueSchema,
+  dexterity: nonnegativeAttributeValueSchema,
+  intelligence: nonnegativeAttributeValueSchema,
+  wisdom: nonnegativeAttributeValueSchema,
+  perception: nonnegativeAttributeValueSchema,
+  willpower: nonnegativeAttributeValueSchema,
+  luck: nonnegativeAttributeValueSchema,
+});
+
+export const primaryAttributeDeltasSchema = z.strictObject({
+  strength: nonnegativeAttributeValueSchema.optional(),
+  vitality: nonnegativeAttributeValueSchema.optional(),
+  agility: nonnegativeAttributeValueSchema.optional(),
+  dexterity: nonnegativeAttributeValueSchema.optional(),
+  intelligence: nonnegativeAttributeValueSchema.optional(),
+  wisdom: nonnegativeAttributeValueSchema.optional(),
+  perception: nonnegativeAttributeValueSchema.optional(),
+  willpower: nonnegativeAttributeValueSchema.optional(),
+  luck: nonnegativeAttributeValueSchema.optional(),
+}).refine(
+  (value) => Object.values(value).some((delta) => (delta ?? 0) > 0),
+  { message: 'At least one positive attribute delta is required' },
+);
 
 const actorNarrativeFields = {
   role: z.string().trim().min(1).max(100).nullable().optional(),
@@ -371,7 +408,8 @@ export const startGameSchema = z.strictObject({
 export const upsertActorSchema = z.strictObject({
   ...scopeFields, idempotencyKey: idempotencyKeySchema, code: codeSchema, name: z.string().trim().min(1).max(200), actorType: actorTypeSchema,
   species: z.string().trim().min(1).max(100).nullable().optional(), className: z.string().trim().min(1).max(100).nullable().optional(),
-  level: z.number().int().min(1).max(20).optional(), primaryAttributes: primaryAttributesSchema, ...actorNarrativeFields,
+  level: actorLevelSchema.optional(), primaryAttributes: primaryAttributesSchema,
+  progressionPrimaryAttributes: progressionPrimaryAttributesSchema.optional(), ...actorNarrativeFields,
 });
 
 export const patchActorSchema = z.strictObject({
@@ -462,6 +500,73 @@ export const manageActorInventorySchema = z.strictObject({
   }
 });
 
+const actorProgressionOperationSchema = z.enum([
+  'get', 'grant_xp', 'level_up', 'allocate_attributes', 'set_progression_state',
+]);
+const xpGrantSourceSchema = z.strictObject({
+  type: z.enum(['encounter_consequence', 'mission', 'event', 'training', 'correction', 'manual']),
+  ref: codeSchema,
+});
+
+export const manageActorProgressionSchema = z.strictObject({
+  ...scopeFields,
+  actorRef: codeSchema,
+  operation: actorProgressionOperationSchema,
+  idempotencyKey: idempotencyKeySchema.optional(),
+  expectedMechanicsStateVersion: z.number().int().positive().optional(),
+  xpAmount: z.number().int().positive().max(CORE_V1_2_XP_STORAGE_MAXIMUM).optional(),
+  source: xpGrantSourceSchema.optional(),
+  reason: z.string().trim().min(1).max(1_000).optional(),
+  attributeDeltas: primaryAttributeDeltasSchema.optional(),
+  level: actorLevelSchema.optional(),
+  xp: z.number().int().min(0).max(CORE_V1_2_XP_STORAGE_MAXIMUM).optional(),
+  basePrimaryAttributes: primaryAttributesSchema.optional(),
+  progressionPrimaryAttributes: progressionPrimaryAttributesSchema.optional(),
+}).superRefine((value, context) => {
+  const writeFields = ['idempotencyKey', 'expectedMechanicsStateVersion'] as const;
+  const requireFields = (fields: readonly (keyof typeof value)[]) => {
+    for (const field of fields) {
+      if (value[field] === undefined) context.addIssue({ code: 'custom', path: [field], message: 'Required for this operation' });
+    }
+  };
+  const forbidFields = (fields: readonly (keyof typeof value)[]) => {
+    for (const field of fields) {
+      if (value[field] !== undefined) context.addIssue({ code: 'custom', path: [field], message: 'Not allowed for this operation' });
+    }
+  };
+
+  if (value.operation === 'get') {
+    forbidFields([
+      ...writeFields, 'xpAmount', 'source', 'reason', 'attributeDeltas', 'level', 'xp',
+      'basePrimaryAttributes', 'progressionPrimaryAttributes',
+    ]);
+    return;
+  }
+
+  requireFields(writeFields);
+  if (value.operation === 'grant_xp') {
+    requireFields(['xpAmount', 'source', 'reason']);
+    forbidFields(['attributeDeltas', 'level', 'xp', 'basePrimaryAttributes', 'progressionPrimaryAttributes']);
+    return;
+  }
+  if (value.operation === 'level_up') {
+    forbidFields(['xpAmount', 'source', 'attributeDeltas', 'level', 'xp', 'basePrimaryAttributes', 'progressionPrimaryAttributes']);
+    return;
+  }
+  if (value.operation === 'allocate_attributes') {
+    requireFields(['attributeDeltas']);
+    forbidFields(['xpAmount', 'source', 'level', 'xp', 'basePrimaryAttributes', 'progressionPrimaryAttributes']);
+    return;
+  }
+
+  requireFields(['reason']);
+  forbidFields(['xpAmount', 'source', 'attributeDeltas']);
+  if (value.level === undefined && value.xp === undefined
+    && value.basePrimaryAttributes === undefined && value.progressionPrimaryAttributes === undefined) {
+    context.addIssue({ code: 'custom', message: 'At least one progression state field is required' });
+  }
+});
+
 export const createEventSchema = z.strictObject({
   ...scopeFields, actorRef: codeSchema.optional(), eventType: codeSchema, title: z.string().trim().min(1).max(300),
   payload: jsonObjectSchema, idempotencyKey: idempotencyKeySchema,
@@ -531,5 +636,6 @@ export type PatchActorInput = z.infer<typeof patchActorSchema>;
 export type UpsertContentInput = z.infer<typeof upsertContentSchema>;
 export type ManageActorContentInput = z.infer<typeof manageActorContentSchema>;
 export type ManageActorInventoryInput = z.infer<typeof manageActorInventorySchema>;
+export type ManageActorProgressionInput = z.infer<typeof manageActorProgressionSchema>;
 export type CreateEventInput = z.infer<typeof createEventSchema>;
 export type ResolveActorEffectInput = z.infer<typeof resolveActorEffectSchema>;

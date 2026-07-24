@@ -6,7 +6,9 @@ A API atual persiste identidade e tipo; espécie, classe, papel e descrição; n
 
 Estados atuais: `active`, `inactive`, `defeated`, `dead` e `archived`. Tipos atuais: `character`, `npc`, `creature`, `companion` e `spirit`.
 
-O GPT envia somente `primaryAttributes` na criação. Cada valor deve ser inteiro de 4 a 16 e os nove devem somar 90. O protagonista sempre nasce no nível 1 e XP 0; demais atores aceitam nível 1–20. O backend inicia recursos cheios e devolve `resources.hp|mana|sp` com `current`/`max`, além de `secondaryAttributes`, versão mecânica e ruleset.
+`primaryAttributes` representa a base do nível 1. Cada valor deve ser inteiro de 4 a 16 e os nove somam exatamente 90. O protagonista de `startGame` nasce no nível 1 e XP 0; `upsertActor` aceita demais atores em qualquer nível inteiro positivo dentro do envelope técnico e `progressionPrimaryAttributes` fechado para ganhos já alocados. Ganhos podem ser menores que `10 × (level - 1)`, deixando saldo derivado. Na revisão atual não há nível máximo de gameplay nem cap efetivo fixo: atributo efetivo é base + ganho e todo ponto conquistado pode ser gasto.
+
+`manageActorProgression(get)` devolve `basePrimaryAttributes`, `progressionPrimaryAttributes`, `effectivePrimaryAttributes`, pontos ganhos/alocados/disponíveis, XP, próxima exigência e versão. `grant_xp` exige `source.type/ref` estável; a mesma fonte não recompensa o mesmo ator duas vezes, mesmo com outra chave. `level_up` usa a curva versionada também acima do nível 20. Use as escritas somente após intenção clara. Ordem exata é executada; pedido de sugestão recebe 3–4 opções e aguarda escolha; delegação explícita autoriza escolher e executar; correção clara autoriza `set_progression_state` com motivo. Nunca simule esses dados em metadata.
 
 ## Conteúdo e valores derivados
 
@@ -22,7 +24,7 @@ Peso e equipamento alteram `mechanicsStateVersion`, recompõem o snapshot e pode
 
 Interprete valores confirmados de modo coerente com espécie, classe, experiência, condição e contexto. Campos omitidos preservam o estado apenas conforme o contrato da operação; nunca substitua ficha conhecida por padrão genérico.
 
-Mudanças permanentes só existem após confirmação. `updateActor` é narrativo e não altera nível, XP, atributos, recursos ou derivados. Dano, cura, gasto e efeitos só mudam após sucesso de `resolveActorEffect` fora de encontro ou de `manageEncounter` durante um encontro; falha, conflito ou mera inferência narrativa não alteram a ficha. Máximo aumentado não cura e máximo reduzido pode clampá-la. HP zero só produz `defeated` quando um encerramento/cancelamento confirmado encontra participante persistido ainda `active`; cura oficial de 0 para valor positivo reativa somente quem já estava `defeated`.
+Mudanças permanentes só existem após confirmação. `updateActor` é narrativo e não altera nível, XP, atributos, recursos ou derivados. Progressão usa a Action oficial, idempotência e `expectedMechanicsStateVersion`; conflito exige novo `get`, nunca incremento inventado. Dano, cura, gasto e efeitos só mudam após sucesso de `resolveActorEffect` fora de encontro ou de `manageEncounter` durante um encontro. Falha ou inferência narrativa não alteram a ficha. Máximo aumentado não cura; máximo reduzido limita o atual ao novo máximo e registra o delta. HP zero só produz `defeated` quando um encerramento/cancelamento confirmado encontra participante persistido ainda `active`; cura oficial de 0 para valor positivo reativa somente quem já estava `defeated`.
 
 Durante o encontro persistente, o participante carrega versões da ficha, recursos, efeitos, action slots, zona e um `combatState` interno. `incapacitated_candidate` e sugestões não alteram `Actor.status`. Somente a resposta terminal bem-sucedida torna o outcome oficial, aplica `defeated`, remove os efeitos `scope=encounter` pertencentes ao encontro e registra o evento. Ela não concede XP, level-up, loot, ouro, progressão, morte ou recompensa material.
 

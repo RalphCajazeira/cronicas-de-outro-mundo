@@ -1,14 +1,19 @@
 import { Prisma } from '../../generated/prisma/client.js';
 import { describe, expect, it, vi } from 'vitest';
 import { CORE_V1_CONFIG_HASH, CORE_V1_CONFIG_SNAPSHOT } from './core-v1/core-v1.manifest.js';
+import { CORE_V1_2_CONFIG_HASH, CORE_V1_2_CONFIG_SNAPSHOT } from './core-v1/core-v1.progression-v2.manifest.js';
 import { CORE_V1_EFFECT_RULES_HASH, CORE_V1_EFFECT_RULES_SNAPSHOT } from './core-v1/core-v1.effects.manifest.js';
 import {
   CoreEffectRulesVersionDriftError,
+  CORE_V1_2_EFFECT_HASH,
+  CORE_V1_2_EFFECT_RULES_CODE,
+  ensureCoreV12EffectRulesVersion,
   ensureCoreV1EffectRulesVersion,
   validateCoreV1EffectRulesVersion,
   type CoreEffectRulesVersion,
   type EffectRulesRegistryClient,
 } from './effect-rules.registry.js';
+import type { CoreRulesetVersion } from './ruleset.registry.js';
 
 const rulesetId = '00000000-0000-0000-0000-000000000001';
 const rulesetVersionId = '00000000-0000-0000-0000-000000000002';
@@ -18,6 +23,35 @@ function official(overrides: Partial<CoreEffectRulesVersion> = {}): CoreEffectRu
     id: '00000000-0000-0000-0000-000000000003', rulesetVersionId,
     code: 'core-v1-effects-v1', schemaVersion: 1, configHash: CORE_V1_EFFECT_RULES_HASH,
     configSnapshot: structuredClone(CORE_V1_EFFECT_RULES_SNAPSHOT), ...overrides,
+  };
+}
+
+function currentRuleset(): CoreRulesetVersion {
+  return {
+    id: '00000000-0000-0000-0000-000000000012',
+    rulesetId,
+    code: 'core-v1.2',
+    revision: 'RC1.2',
+    schemaVersion: 1,
+    configHash: CORE_V1_2_CONFIG_HASH,
+    configSnapshot: structuredClone(CORE_V1_2_CONFIG_SNAPSHOT),
+    ruleset: { code: 'core' },
+  };
+}
+
+function officialV12(overrides: Partial<CoreEffectRulesVersion> = {}): CoreEffectRulesVersion {
+  const snapshot = structuredClone(CORE_V1_EFFECT_RULES_SNAPSHOT) as unknown as {
+    identity: { code: string };
+  };
+  snapshot.identity.code = CORE_V1_2_EFFECT_RULES_CODE;
+  return {
+    id: '00000000-0000-0000-0000-000000000013',
+    rulesetVersionId: currentRuleset().id,
+    code: CORE_V1_2_EFFECT_RULES_CODE,
+    schemaVersion: 1,
+    configHash: CORE_V1_2_EFFECT_HASH,
+    configSnapshot: snapshot,
+    ...overrides,
   };
 }
 
@@ -64,5 +98,11 @@ describe('core-v1 effect rules registry', () => {
     } catch (error) {
       expect(JSON.stringify(error)).not.toContain(CORE_V1_EFFECT_RULES_HASH);
     }
+  });
+
+  it('rejects RC1.2 effect registry schema drift', async () => {
+    const setup = client(vi.fn().mockResolvedValue(officialV12({ schemaVersion: 2 })));
+    await expect(ensureCoreV12EffectRulesVersion(setup.client, currentRuleset()))
+      .rejects.toBeInstanceOf(CoreEffectRulesVersionDriftError);
   });
 });

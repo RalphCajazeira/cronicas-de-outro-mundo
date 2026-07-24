@@ -673,6 +673,8 @@ model GameEvent {
   title          String
   payload        Json     @default("{}")
   idempotencyKey String?  @unique
+  xpSourceType   String?
+  xpSourceRef    String?
   createdAt      DateTime @default(now())
   campaign       Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   actor          Actor?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
@@ -680,6 +682,7 @@ model GameEvent {
 
   @@index([campaignId, createdAt])
   @@index([actorId, createdAt])
+  @@unique([actorId, xpSourceType, xpSourceRef], map: "GameEvent_actorId_xpSourceType_xpSourceRef_key", where: { actorId: { not: null }, xpSourceType: { not: null }, xpSourceRef: { not: null } })
 }
 
 model IdempotencyRecord {

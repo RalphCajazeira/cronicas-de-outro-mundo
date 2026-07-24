@@ -78,6 +78,7 @@ export interface SecondaryAttributeModifiers {
 
 export interface SecondaryAttributeInput {
   attributes: PrimaryAttributes;
+  maximumPrimaryAttribute?: number;
   weaponFamilyRank: number;
   magicSchoolRank: number;
   accuracyRank: number;

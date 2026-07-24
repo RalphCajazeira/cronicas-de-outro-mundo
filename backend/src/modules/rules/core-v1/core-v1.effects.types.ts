@@ -185,6 +185,7 @@ export interface CoreV1DamageApplicationInput {
   readonly rolls: CoreV1InjectedRolls;
   readonly targeting: CoreV1TargetResolutionContext;
   readonly defense: CoreV1DamageDefenseContext;
+  readonly maximumPrimaryAttribute?: number;
 }
 
 export interface CoreV1DamageApplicationResult {
@@ -282,6 +283,7 @@ export interface CoreV1EffectSequenceInput {
   readonly defense?: CoreV1DamageDefenseContext;
   readonly weaponDamageComponents?: readonly DamageComponentDefinition[];
   readonly costModifiers?: CoreV1CostModifierSet;
+  readonly maximumPrimaryAttribute?: number;
 }
 
 export interface CoreV1EffectSequenceResult {

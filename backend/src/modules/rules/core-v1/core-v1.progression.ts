@@ -10,6 +10,8 @@ export function nextLevelXp(level: number): number | null {
   return 100 + 35 * offset + 5 * offset * offset;
 }
 
+export const legacyNextLevelXp = nextLevelXp;
+
 export function equivalentCombatXp(opponentTier: number, opponentLevel: number): number {
   assertIntegerInRange(opponentTier, 1, 10, 'opponentTier');
   assertIntegerInRange(opponentLevel, 1, CORE_V1_LEVEL_CAP, 'opponentLevel');

@@ -7,7 +7,12 @@ import { resolveBase, resolvePlayer, resolveScope, type DbClient } from '../../s
 import { ConflictError, NotFoundError } from '../../shared/errors/app-error.js';
 import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import { scopedActorKey } from '../actors/actors.repository.js';
-import { createActorMechanicalState, loadActorMechanicalProjection, loadActorMechanicalSheet } from '../actors/actor-mechanics.service.js';
+import { createActorMechanicalState, loadActorMechanicalProjection } from '../actors/actor-mechanics.service.js';
+import {
+  loadActorProgression,
+  manageActorProgressionTransaction,
+  mapActorProgressionUniqueConflict,
+} from '../actors/actor-progression.service.js';
 import { findScopedContent } from '../content/content.repository.js';
 import { mapInventoryHttpError } from '../inventory/inventory-http.errors.js';
 import { manageActorInventory, projectActorInventorySummary } from '../inventory/inventory.service.js';
@@ -26,7 +31,8 @@ import { getActorEffects, resolveActorEffectTransaction } from '../effects/effec
 import { projectActorActiveEffectSummary } from '../effects/effect-state.service.js';
 import type {
   CreateEventInput, ListCampaignActorsInput, LoadGameInput, ManageActorContentInput, ManageActorInventoryInput,
-  ListPlayerWorldsInput, ListWorldCampaignsInput, PatchActorInput, ResolveActorEffectInput, StartGameInput, UpsertActorInput, UpsertContentInput,
+  ListPlayerWorldsInput, ListWorldCampaignsInput, ManageActorProgressionInput, PatchActorInput, ResolveActorEffectInput,
+  StartGameInput, UpsertActorInput, UpsertContentInput,
 } from './gpt.schemas.js';
 import type { ApiResult, GptRepository } from './gpt.types.js';
 import {
@@ -90,6 +96,7 @@ async function executeIdempotent(
   operation: string,
   request: unknown,
   work: (transaction: Prisma.TransactionClient) => Promise<ApiResult>,
+  mapUniqueConflict?: (error: unknown) => Error | undefined,
 ): Promise<ApiResult> {
   const hash = calculateGptRequestHash(request);
   try {
@@ -101,6 +108,8 @@ async function executeIdempotent(
     }, IDEMPOTENT_TRANSACTION_OPTIONS));
   } catch (error) {
     if (!isUniqueConflict(error)) throw error;
+    const mappedConflict = mapUniqueConflict?.(error);
+    if (mappedConflict !== undefined) throw mappedConflict;
     if (!isIdempotencyKeyConflict(error)) throw new ConflictError('Resource already exists');
     const persisted = await prisma.idempotencyRecord.findUnique({ where: { key } });
     const inspection = inspectIdempotencyRecord(persisted, operation, hash);
@@ -308,8 +317,7 @@ export const prismaGptRepository: GptRepository = {
 
   async startGame(input: StartGameInput) {
     return executeIdempotent(input.idempotencyKey, 'game.start', input, async (transaction) => {
-      const publicationRegistry = await observeOperationStage('rules_registry', () => resolveContentPublicationRegistryContext(transaction));
-      const officialRulesetVersion = publicationRegistry.ruleset;
+      let publicationRegistry = await observeOperationStage('rules_registry', () => resolveContentPublicationRegistryContext(transaction));
       const existingPlayer = await observeOperationStage('player_resolution', () => transaction.player.findUnique({ where: { slug: input.playerRef } }));
       if (input.playerMode === 'create' && existingPlayer !== null) throw new ConflictError('Player already exists');
       if (input.playerMode === 'reuse' && existingPlayer === null) throw new NotFoundError('Player');
@@ -329,6 +337,13 @@ export const prismaGptRepository: GptRepository = {
       if (input.worldMode === 'create' && existingWorld !== null) throw new ConflictError('World already exists');
       if (input.worldMode === 'reuse' && existingWorld === null) throw new NotFoundError('World');
       if (existingWorld !== null) {
+        if (existingWorld.defaultRulesetVersion.code !== publicationRegistry.ruleset.code) {
+          publicationRegistry = await observeOperationStage(
+            'rules_registry',
+            () => resolveContentPublicationRegistryContext(transaction, existingWorld.defaultRulesetVersion.code),
+          );
+        }
+        const officialRulesetVersion = publicationRegistry.ruleset;
         if (existingWorld.defaultRulesetVersionId !== officialRulesetVersion.id
           || existingWorld.defaultRulesetVersion.code !== officialRulesetVersion.code
           || existingWorld.defaultRulesetVersion.revision !== officialRulesetVersion.revision
@@ -341,6 +356,7 @@ export const prismaGptRepository: GptRepository = {
           throw new ConflictError('World configuration does not match');
         }
       }
+      const officialRulesetVersion = publicationRegistry.ruleset;
       const world = existingWorld ?? await observeOperationStage('world_resolution', () => transaction.world.create({
         data: {
           playerId: player.id, defaultRulesetVersionId: officialRulesetVersion.id,
@@ -556,13 +572,20 @@ export const prismaGptRepository: GptRepository = {
       });
       if (existing === null) {
         const actor = await transaction.actor.create({ data: actorCreateData(campaign.id, input), select: actorSelect });
-        await createActorMechanicalState(transaction, { actorId: actor.id, primaryAttributes: input.primaryAttributes });
+        await createActorMechanicalState(transaction, {
+          actorId: actor.id,
+          primaryAttributes: input.primaryAttributes,
+          level: actor.level,
+          progressionPrimaryAttributes: input.progressionPrimaryAttributes,
+        });
         return actorDto(transaction, actor);
       }
       await assertActorsMutableOutsideEncounter(transaction, campaign.id, [existing]);
-      const existingSheet = await loadActorMechanicalSheet(transaction, existing.id);
+      const existingProgression = await loadActorProgression(transaction, campaign.id, existing.code);
       if (existing.actorType !== input.actorType.toUpperCase() || (input.level !== undefined && existing.level !== input.level)
-        || !canonicalJsonEqual(existingSheet.primaryAttributes, input.primaryAttributes)) {
+        || !canonicalJsonEqual(existingProgression.basePrimaryAttributes, input.primaryAttributes)
+        || (input.progressionPrimaryAttributes !== undefined
+          && !canonicalJsonEqual(existingProgression.progressionPrimaryAttributes, input.progressionPrimaryAttributes))) {
         throw new ConflictError('Actor mechanics cannot be changed by upsertActor');
       }
       const actor = await transaction.actor.update({ where: { id: existing.id }, data: actorUpdateData(input), select: actorSelect });
@@ -584,11 +607,19 @@ export const prismaGptRepository: GptRepository = {
     return executeIdempotent(input.idempotencyKey, 'content.upsert', input, async (transaction) => {
       const { world } = await resolveBase(transaction, input);
       let campaignId: string | null = null;
+      let rulesetVersionId = world.defaultRulesetVersionId;
       if (input.campaignRef !== null) {
         const campaign = await transaction.campaign.findUnique({ where: { worldId_code: { worldId: world.id, code: input.campaignRef } } });
         if (campaign === null) throw new NotFoundError('Campaign');
         campaignId = campaign.id;
+        rulesetVersionId = campaign.rulesetVersionId;
       }
+      const rulesetVersion = await transaction.rulesetVersion.findUnique({
+        where: { id: rulesetVersionId },
+        select: { code: true },
+      });
+      if (rulesetVersion === null) throw new ConflictError('Ruleset version is unavailable');
+      const registry = await resolveContentPublicationRegistryContext(transaction, rulesetVersion.code);
       const type = input.contentType.toUpperCase() as ContentType;
       const content = await publishContentVersion(transaction, {
         worldId: world.id, campaignId, contentType: type, code: input.code,
@@ -596,7 +627,7 @@ export const prismaGptRepository: GptRepository = {
         inventorySpec: input.inventorySpec,
         presentation: input.presentation, tags: input.tags,
         status: input.status.toUpperCase() as ContentStatus, metadata: input.metadata ?? {},
-      });
+      }, registry);
       return publicContentDto(content);
     });
   },
@@ -699,6 +730,23 @@ export const prismaGptRepository: GptRepository = {
       if (publicError !== null) throw publicError;
       throw error;
     }
+  },
+
+  async manageActorProgression(input: ManageActorProgressionInput) {
+    if (input.operation === 'get') {
+      const { campaign } = await resolveScope(prisma, input);
+      return loadActorProgression(prisma, campaign.id, input.actorRef);
+    }
+    return executeIdempotent(
+      input.idempotencyKey ?? '',
+      `actorProgression.${input.operation}`,
+      input,
+      async (transaction) => {
+        const { campaign } = await resolveScope(transaction, input);
+        return manageActorProgressionTransaction(transaction, campaign.id, input);
+      },
+      mapActorProgressionUniqueConflict,
+    );
   },
 
   async createEvent(input: CreateEventInput) {

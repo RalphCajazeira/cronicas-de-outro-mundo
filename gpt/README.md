@@ -48,7 +48,7 @@ O corpus atual consolida somente os princípios narrativos ainda válidos, sem E
 9. provocar um `INVALID_INPUT` sem persistência e confirmar que não há retry automático do mesmo payload.
 10. iniciar uma conversa somente com “Quero começar uma nova aventura” e confirmar que o GPT pergunta como o jogador deseja ser chamado, sem mencionar `playerRef` ou outro campo da Action.
 11. reencontrar jogos perguntando pelo nome usado para salvar e confirmar que Worlds e Campaigns são apresentados somente por nomes legíveis.
-12. confirmar que o import preservou exatamente 20 `operationId`s e que todas as operações declaram explicitamente `x-openai-isConsequential: false`;
+12. confirmar que o import preservou exatamente 21 `operationId`s e que todas as operações declaram explicitamente `x-openai-isConsequential: false`;
 13. publicar o GPT, abrir uma conversa nova e, no primeiro cartão de Action que oferecer a escolha, selecionar **Sempre permitir** — não apenas **Permitir uma vez**;
 14. validar que uma intenção explícita de ataque executa carga/reuso, aproximação necessária, `resolve_beat` e narração sem confirmações textuais intermediárias.
 

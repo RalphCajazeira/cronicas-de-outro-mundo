@@ -8,9 +8,19 @@ import {
   CORE_V1_VERSION_CODE,
 } from './core-v1/core-v1.manifest.js';
 import {
+  CORE_V1_2_CONFIG_HASH,
+  CORE_V1_2_CONFIG_SNAPSHOT,
+} from './core-v1/core-v1.progression-v2.manifest.js';
+import {
+  CORE_V1_2_REVISION,
+  CORE_V1_2_SCHEMA_VERSION,
+  CORE_V1_2_VERSION_CODE,
+} from './core-v1/core-v1.progression-v2.js';
+import {
   CORE_RULESET_VERSION_DRIFT,
   CoreRulesetVersionDriftError,
   ensureCoreV1RulesetVersion,
+  validateCoreV12RulesetVersion,
   validateCoreV1RulesetVersion,
   type CoreRulesetVersion,
   type RulesetRegistryClient,
@@ -131,5 +141,30 @@ describe('core-v1 ruleset registry', () => {
     });
     expect(JSON.stringify(captured)).not.toContain('initialBudget');
     expect((captured as Error).message).not.toContain(CORE_V1_CONFIG_HASH);
+  });
+
+  it('validates the distinct RC1.2 publication without mutating RC1.1', () => {
+    const current = officialVersion({
+      code: CORE_V1_2_VERSION_CODE,
+      revision: CORE_V1_2_REVISION,
+      schemaVersion: CORE_V1_2_SCHEMA_VERSION,
+      configHash: CORE_V1_2_CONFIG_HASH,
+      configSnapshot: JSON.parse(JSON.stringify(CORE_V1_2_CONFIG_SNAPSHOT)) as Prisma.JsonValue,
+    });
+    expect(validateCoreV12RulesetVersion(current)).toBe(current);
+    expect(CORE_V1_CONFIG_HASH).toBe('2cfe9c45585ef51f3a06f2c9dc11e5cd6a5274d3eb77f96271daf2613fc1e4df');
+    expect(CORE_V1_2_CONFIG_HASH).not.toBe(CORE_V1_CONFIG_HASH);
+  });
+
+  it('rejects a version code that does not match either immutable publication', () => {
+    expect(() => validateCoreV1RulesetVersion(officialVersion({ code: 'core-v1-copy' })))
+      .toThrow(expect.objectContaining({ fields: ['versionCode'] }));
+    expect(() => validateCoreV12RulesetVersion(officialVersion({
+      code: CORE_V1_VERSION_CODE,
+      revision: CORE_V1_2_REVISION,
+      schemaVersion: CORE_V1_2_SCHEMA_VERSION,
+      configHash: CORE_V1_2_CONFIG_HASH,
+      configSnapshot: JSON.parse(JSON.stringify(CORE_V1_2_CONFIG_SNAPSHOT)) as Prisma.JsonValue,
+    }))).toThrow(expect.objectContaining({ fields: ['versionCode'] }));
   });
 });

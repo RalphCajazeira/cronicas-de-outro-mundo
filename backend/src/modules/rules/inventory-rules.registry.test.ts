@@ -1,14 +1,19 @@
 import { Prisma } from '../../generated/prisma/client.js';
 import { describe, expect, it, vi } from 'vitest';
 import { CORE_V1_CONFIG_HASH, CORE_V1_CONFIG_SNAPSHOT } from './core-v1/core-v1.manifest.js';
+import { CORE_V1_2_CONFIG_HASH, CORE_V1_2_CONFIG_SNAPSHOT } from './core-v1/core-v1.progression-v2.manifest.js';
 import { CORE_V1_INVENTORY_RULES_HASH, CORE_V1_INVENTORY_RULES_SNAPSHOT } from './core-v1/core-v1.inventory.manifest.js';
 import {
   CoreInventoryRulesVersionDriftError,
+  CORE_V1_2_INVENTORY_HASH,
+  CORE_V1_2_INVENTORY_RULES_CODE,
+  ensureCoreV12InventoryRulesVersion,
   ensureCoreV1InventoryRulesVersion,
   validateCoreV1InventoryRulesVersion,
   type CoreInventoryRulesVersion,
   type InventoryRulesRegistryClient,
 } from './inventory-rules.registry.js';
+import type { CoreRulesetVersion } from './ruleset.registry.js';
 
 const rulesetId = '00000000-0000-0000-0000-000000000001';
 const rulesetVersionId = '00000000-0000-0000-0000-000000000002';
@@ -18,6 +23,35 @@ function official(overrides: Partial<CoreInventoryRulesVersion> = {}): CoreInven
     id: '00000000-0000-0000-0000-000000000003', rulesetVersionId,
     code: 'core-v1-inventory-v1', schemaVersion: 1, configHash: CORE_V1_INVENTORY_RULES_HASH,
     configSnapshot: structuredClone(CORE_V1_INVENTORY_RULES_SNAPSHOT), ...overrides,
+  };
+}
+
+function currentRuleset(): CoreRulesetVersion {
+  return {
+    id: '00000000-0000-0000-0000-000000000012',
+    rulesetId,
+    code: 'core-v1.2',
+    revision: 'RC1.2',
+    schemaVersion: 1,
+    configHash: CORE_V1_2_CONFIG_HASH,
+    configSnapshot: structuredClone(CORE_V1_2_CONFIG_SNAPSHOT),
+    ruleset: { code: 'core' },
+  };
+}
+
+function officialV12(overrides: Partial<CoreInventoryRulesVersion> = {}): CoreInventoryRulesVersion {
+  const snapshot = structuredClone(CORE_V1_INVENTORY_RULES_SNAPSHOT) as unknown as {
+    identity: { code: string };
+  };
+  snapshot.identity.code = CORE_V1_2_INVENTORY_RULES_CODE;
+  return {
+    id: '00000000-0000-0000-0000-000000000013',
+    rulesetVersionId: currentRuleset().id,
+    code: CORE_V1_2_INVENTORY_RULES_CODE,
+    schemaVersion: 1,
+    configHash: CORE_V1_2_INVENTORY_HASH,
+    configSnapshot: snapshot,
+    ...overrides,
   };
 }
 
@@ -59,5 +93,11 @@ describe('core-v1 inventory rules registry', () => {
     expect(captured).toBeInstanceOf(CoreInventoryRulesVersionDriftError);
     expect(captured).toMatchObject({ fields: ['schemaVersion', 'configHash', 'configSnapshot'] });
     expect(JSON.stringify(captured)).not.toContain(CORE_V1_INVENTORY_RULES_HASH);
+  });
+
+  it('rejects RC1.2 inventory registry schema drift', async () => {
+    const setup = client(vi.fn().mockResolvedValue(officialV12({ schemaVersion: 2 })));
+    await expect(ensureCoreV12InventoryRulesVersion(setup.client, currentRuleset()))
+      .rejects.toBeInstanceOf(CoreInventoryRulesVersionDriftError);
   });
 });
