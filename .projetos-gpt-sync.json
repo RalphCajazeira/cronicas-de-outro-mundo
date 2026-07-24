@@ -1,0 +1,51 @@
+{
+  "sourceRepository": "https://github.com/RalphCajazeira/Projetos_Gpt.git",
+  "sourceBranch": "main",
+  "sourceCommit": "e6925ae0681dea26748cefb47c2844821fa11a1b",
+  "projectSlug": "game-gpt",
+  "syncedAtUtc": "2026-07-24T03:35:29.6473037Z",
+  "managedPaths": [
+    "AGENTS.md",
+    "BOOTSTRAP_PROJETO_VAZIO.md",
+    "MAINTAIN_PROJETOS_GPT.md",
+    "SYNC_FROM_PROJETOS_GPT.md",
+    ".agents/skills/",
+    "docs/ai/*.md",
+    "templates/eslint/",
+    "scripts/bootstrap-projetos-gpt.ps1",
+    "scripts/sync-projetos-gpt.ps1",
+    "AGENTS-PROJECT.md",
+    "docs/ai/project/*.md",
+    "docs/ai/project/codex/*.md"
+  ],
+  "managedDocFiles": [
+    "ai-workflow.md",
+    "architecture.md",
+    "codex-task-template.md",
+    "decision-log.md",
+    "eslint-and-code-quality.md",
+    "legacy-migration.md",
+    "project-context.md",
+    "reuse-and-maintainability.md",
+    "security-and-sensitive-features.md",
+    "skills-index.md",
+    "structure-and-responsibilities.md",
+    "tech-recommendations.md",
+    "validation.md"
+  ],
+  "projectAgentManaged": true,
+  "managedProjectDocFiles": [
+    "CURRENT_STATE.md",
+    "PROJECT_RULES.md",
+    "PROJECT_SOURCE.md",
+    "ROADMAP.md"
+  ],
+  "managedProjectCodexDocFiles": [],
+  "preservedPaths": [
+    "backend/",
+    "frontend/",
+    "prisma/",
+    "infra/",
+    "arquivos fora do manifesto gerenciado"
+  ]
+}

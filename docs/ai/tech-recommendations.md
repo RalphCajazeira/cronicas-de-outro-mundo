@@ -57,11 +57,11 @@ React opcional: eslint-plugin-react quando o projeto precisar de regras JSX/Reac
 
 Regras:
 
-- ESLint deve ser considerado cedo em projeto novo JavaScript/TypeScript quando essa stack estiver confirmada.
-- Em projeto legado sem lint, propor ESLint em task própria e pequena antes de grandes refactors.
+- ESLint deve entrar cedo em projeto novo JavaScript/TypeScript.
+- Em projeto legado sem lint, adicionar ESLint em task própria e pequena antes de grandes refactors.
 - Não misturar instalação/configuração de ESLint com feature de negócio, salvo autorização explícita.
 - Usar `eslint.config.js` ou `eslint.config.mjs` no formato flat config.
-- Adicionar script `lint` no `package.json` do escopo afetado quando ESLint for adotado.
+- Adicionar script `lint` no `package.json` do escopo afetado.
 - Não ativar regras extremamente rígidas de uma vez em projeto legado; começar com configuração recomendada e endurecer gradualmente.
 - Se o projeto já usa outro linter ou formatter, diagnosticar antes de trocar.
 

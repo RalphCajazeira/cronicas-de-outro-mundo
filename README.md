@@ -1,6 +1,6 @@
 # Crônicas de Outro Mundo
 
-Nova plataforma do RPG narrativo **Crônicas de Outro Mundo**. O runtime ativo é uma API Node.js + TypeScript em `backend/`; a versão Supabase/GPT Actions anterior está preservada, sem uso automático, em `legacy/supabase-gpt-v1/`.
+Nova plataforma do RPG narrativo **Crônicas de Outro Mundo**. O runtime ativo é uma API Node.js + TypeScript em `backend/`; a implementação Supabase/GPT Actions anterior foi descontinuada e removida do repositório.
 
 ## Arquitetura ativa
 
@@ -16,7 +16,6 @@ Nova plataforma do RPG narrativo **Crônicas de Outro Mundo**. O runtime ativo �
 backend/                  API, Prisma, seed e testes
 gpt/                      OpenAPI, instruções e Knowledge ativos
 docs/ai/                  contexto, arquitetura e decisões ativas
-legacy/supabase-gpt-v1/   referência histórica, fora do runtime
 render.yaml               Blueprint nativo Node, sem Docker
 ```
 
@@ -77,7 +76,7 @@ O banco PostgreSQL local `game_gpt_dev` existe, recebeu a migration inicial e o 
 
 O contrato oficial ativo é `gpt/openapi.json` e também é servido em `GET /openapi.json`. A API carrega campanha, lista/cria/atualiza atores, cria definições de conteúdo, gerencia vínculos/progressão e registra eventos. Escritas usam `idempotencyKey`; a reserva, a mudança e a resposta são persistidas na mesma transação em `IdempotencyRecord`. Repetição idêntica devolve a resposta salva e reutilização incompatível retorna `409`.
 
-Os contratos e Actions em `legacy/supabase-gpt-v1/` não são ativos. Para configurar o GPT no navegador, siga `gpt/README.md` depois que a API estiver publicada e validada.
+Para configurar o GPT no navegador, siga `gpt/README.md` depois que a API estiver publicada e validada.
 
 ## Produção futura: GitHub → Render → Supabase
 

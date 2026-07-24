@@ -23,14 +23,12 @@ Adicionar, manter ou corrigir ESLint sem bagunçar o projeto, sem trocar ferrame
 4. Verificar scripts reais em `package.json`.
 5. Verificar se o escopo é backend, frontend, mobile ou raiz.
 6. Propor dependências antes de instalar, salvo autorização explícita.
-7. Usar flat config em projeto novo quando ESLint for adotado.
+7. Usar flat config em projeto novo.
 8. Em legado, começar com configuração recomendada e baixo risco.
 9. Rodar lint e corrigir somente problemas seguros dentro do escopo.
 10. Relatar erros restantes e plano incremental.
 
 ## Preferências de dependências
-
-São referências para propor antes de instalar. Não instalar preventivamente.
 
 ### TypeScript geral/backend
 
