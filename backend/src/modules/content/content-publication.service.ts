@@ -11,6 +11,7 @@ import { normalizeEnum } from '../../shared/http/normalize-enum.js';
 import { canonicalJson, canonicalizeJson, type CanonicalJsonValue } from '../../shared/json/canonical-json.js';
 import {
   ensureCoreV12ContentProfileVersion,
+  ensureCoreV13ContentProfileVersion,
   ensureCoreV1ContentProfileVersion,
   type ContentProfileRegistryClient,
   type CoreContentProfileVersion,
@@ -25,22 +26,25 @@ import {
 } from '../rules/core-v1/index.js';
 import {
   ensureCoreV12InventoryRulesVersion,
+  ensureCoreV13InventoryRulesVersion,
   ensureCoreV1InventoryRulesVersion,
   type InventoryRulesRegistryClient,
   type CoreInventoryRulesVersion,
 } from '../rules/inventory-rules.registry.js';
 import {
   ensureCoreV12EffectRulesVersion,
+  ensureCoreV13EffectRulesVersion,
   ensureCoreV1EffectRulesVersion,
   type EffectRulesRegistryClient,
   type CoreEffectRulesVersion,
 } from '../rules/effect-rules.registry.js';
 import {
   ensureCoreV1RulesetVersion,
+  ensureCoreV12RulesetVersion,
   ensureCurrentCoreRulesetVersion,
   type CoreRulesetVersion,
 } from '../rules/ruleset.registry.js';
-import { CORE_V1_2_VERSION_CODE } from '../rules/core-v1/index.js';
+import { CORE_V1_2_VERSION_CODE, CORE_V1_3_VERSION_CODE } from '../rules/core-v1/index.js';
 
 export const CANONICAL_CONTENT_TYPES = Object.freeze([
   'weapon', 'armor', 'shield', 'clothing', 'spell', 'skill', 'talent', 'item',
@@ -194,21 +198,30 @@ export interface ContentPublicationRegistryContext {
 
 export async function resolveContentPublicationRegistryContext(
   client: ContentPublicationClient,
-  requestedRulesetVersionCode: string = CORE_V1_2_VERSION_CODE,
+  requestedRulesetVersionCode: string = CORE_V1_3_VERSION_CODE,
 ): Promise<ContentPublicationRegistryContext> {
-  const current = requestedRulesetVersionCode === CORE_V1_2_VERSION_CODE;
+  const current = requestedRulesetVersionCode === CORE_V1_3_VERSION_CODE;
+  const previous = requestedRulesetVersionCode === CORE_V1_2_VERSION_CODE;
   const ruleset = current
     ? await ensureCurrentCoreRulesetVersion(client)
-    : await ensureCoreV1RulesetVersion(client);
+    : previous
+      ? await ensureCoreV12RulesetVersion(client)
+      : await ensureCoreV1RulesetVersion(client);
   const contentProfile = current
-    ? await ensureCoreV12ContentProfileVersion(client, ruleset)
-    : await ensureCoreV1ContentProfileVersion(client, ruleset);
+    ? await ensureCoreV13ContentProfileVersion(client, ruleset)
+    : previous
+      ? await ensureCoreV12ContentProfileVersion(client, ruleset)
+      : await ensureCoreV1ContentProfileVersion(client, ruleset);
   const inventoryRules = current
-    ? await ensureCoreV12InventoryRulesVersion(client, ruleset)
-    : await ensureCoreV1InventoryRulesVersion(client, ruleset);
+    ? await ensureCoreV13InventoryRulesVersion(client, ruleset)
+    : previous
+      ? await ensureCoreV12InventoryRulesVersion(client, ruleset)
+      : await ensureCoreV1InventoryRulesVersion(client, ruleset);
   const effectRules = current
-    ? await ensureCoreV12EffectRulesVersion(client, ruleset)
-    : await ensureCoreV1EffectRulesVersion(client, ruleset);
+    ? await ensureCoreV13EffectRulesVersion(client, ruleset)
+    : previous
+      ? await ensureCoreV12EffectRulesVersion(client, ruleset)
+      : await ensureCoreV1EffectRulesVersion(client, ruleset);
   return { ruleset, contentProfile, inventoryRules, effectRules };
 }
 
@@ -410,6 +423,18 @@ export async function publishContentVersion(
   }
 
   const validated = validateProfile(input);
+  if (persistedRuleset.code !== CORE_V1_3_VERSION_CODE
+    && validated.profile?.profileMode === 'mechanical') {
+    const usesV13Secondary = (validated.profile.passiveModifiers ?? [])
+      .some((modifier) => modifier.target === 'stealth' || modifier.target === 'detection')
+      || (validated.profile.effects ?? []).some((effect) => (
+        effect.type === 'modify_secondary_attribute'
+        && (effect.secondaryCode === 'stealth' || effect.secondaryCode === 'detection')
+      ));
+    if (usesV13Secondary) {
+      throw new ConflictError('Stealth and detection content requires the core-v1.3 campaign ruleset');
+    }
+  }
   const inventorySpec = validateInventorySpec(input, validated.profile);
   const inventorySpecHash = inventorySpec === null
     ? null

@@ -40,6 +40,11 @@ import {
 export const CORE_V1_CONTENT_PROFILE_CODE = 'core-v1-content-v1' as const;
 export const CORE_V1_CONTENT_PROFILE_SCHEMA_VERSION = 1 as const;
 
+const LEGACY_CORE_V1_SECONDARY_MODIFIER_CODES = CORE_V1_SECONDARY_MODIFIER_CODES
+  .filter((code) => code !== 'stealth' && code !== 'detection');
+const LEGACY_CORE_V1_PASSIVE_MODIFIER_TARGETS = CORE_V1_PASSIVE_MODIFIER_TARGETS
+  .filter((code) => code !== 'stealth' && code !== 'detection');
+
 function deepFreeze<T>(value: T): Readonly<T> {
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
     for (const child of Object.values(value)) deepFreeze(child);
@@ -73,8 +78,8 @@ export const CORE_V1_CONTENT_PROFILE_SNAPSHOT = deepFreeze({
     stackingTypes: ['none', 'refresh', 'stack_intensity', 'stack_duration', 'replace'],
     effects: [...CORE_V1_CONTENT_EFFECTS],
     primaryAttributes: [...CORE_V1_PRIMARY_ATTRIBUTES],
-    secondaryModifiers: [...CORE_V1_SECONDARY_MODIFIER_CODES],
-    passiveModifierTargets: [...CORE_V1_PASSIVE_MODIFIER_TARGETS],
+    secondaryModifiers: [...LEGACY_CORE_V1_SECONDARY_MODIFIER_CODES],
+    passiveModifierTargets: [...LEGACY_CORE_V1_PASSIVE_MODIFIER_TARGETS],
     modifierSourceRules: [...CORE_V1_MODIFIER_SOURCE_RULES],
     equipmentSlots: [...CORE_V1_EQUIPMENT_SLOTS],
   },

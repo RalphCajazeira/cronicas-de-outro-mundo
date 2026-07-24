@@ -16,7 +16,17 @@ Habilidades, magias e outros conceitos podem existir como `ContentDefinition` e 
 
 Uma espécie nominal usa `species`. Conteúdo `race` só é criado quando houver regra mecânica real. Condições canônicas usam `status_effect`, versão exata, duração/stacking allowlisted e persistência em `ActiveEffect`. Elas não são equipamento e sua projeção completa fica em `resolveActorEffect(operation=get)`.
 
-O backend calcula máximos, poderes do ator, defesas, precisão, evasão, velocidades, crítico, movimento, capacidade, resistências e regenerações pelo `core-v1`. O GPT nunca envia esses resultados como autoridade. Modificadores de um item são aplicados ao snapshot somente enquanto sua instância estiver equipada; itens apenas carregados, reservados, consumidos ou destruídos não contribuem.
+O backend calcula máximos, poderes do ator, defesas, precisão, evasão, furtividade, detecção, velocidades, crítico, movimento, capacidade, resistências e regenerações pelo `core-v1`. O GPT nunca envia esses resultados como autoridade. Modificadores de um item são aplicados ao snapshot somente enquanto sua instância estiver equipada; itens apenas conhecidos, carregados, reservados, consumidos ou destruídos não contribuem.
+
+## Furtividade, detecção e surpresa (RC1.3)
+
+`stealth = floor((2×agility + dexterity + perception + luck)/2)` e `detection = floor((2×perception + wisdom + intelligence + luck)/2)`, ambos mais modificadores autoritativos. São scores mecânicos brutos não percentuais: não há cap de gameplay em 100; o único envelope é o `INTEGER` não negativo do snapshot. Assim, progressão, Bota Élfica, Véu e debuffs continuam relevantes em níveis altos. O confronto calcula `stealth + contexto + contribuição do roll - detection - contribuição do roll`; empate (`0`) é sucesso, margem `>=20` é `high_success`, `0..19` é `success`, `-1..-19` é `failure` e `<=-20` é `critical_failure`. Luz, cobertura, ruído e ritmo usam enums fechados; o cliente nunca envia sucesso, margem ou roll.
+
+Ocultação geral é `exposed|obscured|hidden`, mas a consciência é por observador: `unaware|suspicious|detected|tracking`. A cena pública mostra somente faixa de margem, nunca roll ou margem numérica. `hide` testa observadores hostis elegíveis; `sneak_move` também executa uma transição legal de zona e sofre penalidade por ritmo. `observe` pode atualizar a consciência.
+
+Ataque surpresa só se aplica contra o alvo que ainda está `unaware`: +1500 bps de acerto e +1000 bps de chance crítica. Em dano que pode critar, a chance final segue o envelope normal de 100–2500 bps; `forcedCritical` é emitido pelo backend somente com margem `high_success` ou tag mecânica específica já persistida no conteúdo. Reação permanece normal. Cada alvo consulta a própria consciência e cada componente de dano usa o crítico autoritativo daquela resolução. O primeiro ataque revelador muda o atacante para exposto/tracking e consome a janela; replay devolve a resolução persistida. Véu das Trevas, sozinho, não torna invisível nem garante crítico.
+
+Bota Élfica usa `secondary_modifier_equipment`, slot `feet`, peso 1 e quatro modificadores equipados: `evasion +2`, `movementSpeed +1`, `physicalDefense +2`, `magicalDefense +5`. Conhecer ou carregar o item não concede bônus; a versão possuída permanece pinada e só o equipamento efetivo contribui. Véu das Trevas custa 4 Mana, alvo self, aplica por cena o status Envolto em Sombras (`stealth +4`, `evasion +2`, `movementSpeed +1`, stacking refresh). O status melhora uma nova tentativa de `hide`, mas não altera consciência anterior, não força `hidden` e pode continuar ativo depois da revelação; fim da cena/remoção encerra todos os modificadores.
 
 Peso e equipamento alteram `mechanicsStateVersion`, recompõem o snapshot e podem mudar encumbrance. Itens multisslot contam uma vez; remover ou mudar lifecycle de uma entrada equipada é rejeitado até o unequip explícito.
 
@@ -30,7 +40,7 @@ Durante o encontro persistente, o participante carrega versões da ficha, recurs
 
 ## Blueprints canônicos de início
 
-Em `startGame.initialContentPackages[].definition` com `mode=create`, adapte nome/code sem retirar campos mecânicos. A definição física recebe também o `inventorySpec` indicado. Depois, conceda a versão exata em `initialInventory`; arma e armadura devem ser equipadas nos slots declarados. Estes são modelos válidos, não texto narrativo disfarçado de mecânica.
+Na Criação Rápida, envie um `starterBlueprint` fechado e omita `profile`/`inventorySpec`; o backend materializa estes modelos com o `code` e `name` propostos. Os JSON abaixo auditam a mecânica completa também para criação avançada. Depois, `initialInventory` concede a versão publicada; arma/armadura são equipadas nos slots declarados. Vínculo conceitual não é posse.
 
 ### Adaga inicial
 
@@ -85,6 +95,21 @@ Em `startGame.initialContentPackages[].definition` com `mode=create`, adapte nom
 }
 ```
 
+### Passo ágil
+
+```json
+{
+  "contentType": "skill",
+  "profile": {
+    "schemaVersion": 1, "rulesetCode": "core-v1", "profileMode": "mechanical",
+    "contentKind": "skill", "code": "starter-step", "name": "Passo ágil",
+    "tier": 1, "rarity": "common", "activation": { "type": "active" },
+    "cost": { "type": "sp", "amount": 3 }, "actionProfile": "quick",
+    "effects": [{ "type": "movement", "from": "near", "to": "engaged", "maximumTransitions": 1 }]
+  }
+}
+```
+
 ### Poção de cura
 
 ```json
@@ -103,6 +128,21 @@ Em `startGame.initialContentPackages[].definition` com `mode=create`, adapte nom
   }
 }
 ```
+
+### Diário de viagem narrativo
+
+```json
+{
+  "contentType": "other",
+  "profile": null,
+  "inventorySpec": {
+    "schemaVersion": 1, "rulesetCode": "core-v1", "inventoryRulesCode": "core-v1-inventory-v1",
+    "unitWeight": 1, "stacking": { "mode": "unique" }
+  }
+}
+```
+
+Este item pode ser possuído, mas não possui bônus, ação ou slot e nunca é equipado.
 
 ### Armadura de corpo inteiro
 

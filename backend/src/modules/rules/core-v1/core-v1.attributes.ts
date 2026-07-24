@@ -17,6 +17,11 @@ import type {
   ValidationResult,
 } from './core-v1.types.js';
 
+// ActorDerivedSnapshot stores scores in PostgreSQL INTEGER columns. This is a
+// storage envelope, not a gameplay cap: RC1.3 progression must keep changing
+// stealth and detection after the former 0..100 UI-scale range.
+export const CORE_V1_3_SECONDARY_SCORE_STORAGE_MAXIMUM = 2_147_483_647 as const;
+
 function assertKnownKeys(value: unknown, allowedKeys: readonly string[], name: string): void {
   if (!isPlainRecord(value)) throw new TypeError(`${name} must be a plain object`);
   const unknownKey = Object.keys(value).find((key) => !allowedKeys.includes(key));
@@ -29,6 +34,17 @@ function sumWithModifiers(
   name: string,
 ): number {
   return safeIntegerSum([...values, sumAuthorizedModifiers(modifiers, `${name}Modifiers`)], name);
+}
+
+function calculateNonNegativeSecondaryScore(
+  values: readonly number[],
+  modifiers: readonly AuthorizedNumericModifier[] | undefined,
+  name: string,
+): number {
+  const total = sumWithModifiers(values, modifiers, name);
+  if (total <= 0) return 0;
+  assertIntegerInRange(total, 0, CORE_V1_3_SECONDARY_SCORE_STORAGE_MAXIMUM, name);
+  return total;
 }
 
 export function validateInitialPrimaryAttributes(input: unknown): ValidationResult<PrimaryAttributes> {
@@ -229,6 +245,38 @@ export function calculateEvasion(
   ], modifiers, 'evasion'));
 }
 
+export function calculateStealth(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
+  return calculateNonNegativeSecondaryScore([
+    Math.floor((
+      2 * attributes.agility
+      + attributes.dexterity
+      + attributes.perception
+      + attributes.luck
+    ) / 2),
+  ], modifiers, 'stealth');
+}
+
+export function calculateDetection(
+  attributes: PrimaryAttributes,
+  modifiers?: readonly AuthorizedNumericModifier[],
+  maximumPrimaryAttribute = CORE_V1_ATTRIBUTE_HARD_CAP,
+): number {
+  assertPrimaryAttributes(attributes, maximumPrimaryAttribute);
+  return calculateNonNegativeSecondaryScore([
+    Math.floor((
+      2 * attributes.perception
+      + attributes.wisdom
+      + attributes.intelligence
+      + attributes.luck
+    ) / 2),
+  ], modifiers, 'detection');
+}
+
 export function calculateBaseAttackSpeedBps(
   attributes: PrimaryAttributes,
   modifiers?: readonly AuthorizedNumericModifier[],
@@ -387,7 +435,7 @@ export function calculateSecondaryAttributes(input: SecondaryAttributeInput): Se
   const maximumPrimaryAttribute = input.maximumPrimaryAttribute ?? CORE_V1_ATTRIBUTE_HARD_CAP;
   assertKnownKeys(modifiers, [
     'physicalPower', 'magicalPower', 'physicalFlatDefense', 'magicalFlatDefense', 'accuracy',
-    'evasion', 'attackSpeedBps', 'castingSpeedBps', 'criticalChanceBps', 'criticalDamageBps',
+    'evasion', 'stealth', 'detection', 'attackSpeedBps', 'castingSpeedBps', 'criticalChanceBps', 'criticalDamageBps',
     'movementSpeed', 'carryingCapacity', 'physicalResistanceBps', 'magicalResistanceBps',
     'elementalResistanceBps', 'hpRegen', 'manaRegen', 'spRegen',
   ], 'secondaryAttributeModifiers');
@@ -399,6 +447,8 @@ export function calculateSecondaryAttributes(input: SecondaryAttributeInput): Se
     magicalDefense: calculateMagicalDefense(attributes, modifiers.magicalFlatDefense, maximumPrimaryAttribute),
     accuracy: calculateAccuracy(attributes, input.accuracyRank, modifiers.accuracy, maximumPrimaryAttribute),
     evasion: calculateEvasion(attributes, input.evasionRank, input.encumbrancePenalty, modifiers.evasion, maximumPrimaryAttribute),
+    stealth: calculateStealth(attributes, modifiers.stealth, maximumPrimaryAttribute),
+    detection: calculateDetection(attributes, modifiers.detection, maximumPrimaryAttribute),
     baseAttackSpeedBps: calculateBaseAttackSpeedBps(attributes, modifiers.attackSpeedBps, maximumPrimaryAttribute),
     baseCastingSpeedBps: calculateBaseCastingSpeedBps(attributes, modifiers.castingSpeedBps, maximumPrimaryAttribute),
     criticalChanceBps: calculateCriticalChanceBps(attributes, modifiers.criticalChanceBps, maximumPrimaryAttribute),

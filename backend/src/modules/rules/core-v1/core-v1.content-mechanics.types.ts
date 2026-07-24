@@ -123,6 +123,8 @@ export type CoreV1SecondaryModifierCode =
   | 'magicalDefense'
   | 'accuracy'
   | 'evasion'
+  | 'stealth'
+  | 'detection'
   | 'attackSpeedBps'
   | 'castingSpeedBps'
   | 'criticalChanceBps'

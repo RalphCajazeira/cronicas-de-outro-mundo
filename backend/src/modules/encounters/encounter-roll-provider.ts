@@ -6,7 +6,7 @@ import { EncounterError } from './encounter.errors.js';
 
 export interface ConsumedEncounterRoll {
   readonly rollRef: string;
-  readonly kind: 'tie_break' | 'hit' | 'critical' | 'concentration';
+  readonly kind: 'tie_break' | 'hit' | 'critical' | 'concentration' | 'stealth' | 'detection';
   readonly ordinal: number;
   readonly actionRef?: string;
   readonly sourceActorRef: string;
@@ -36,7 +36,9 @@ export class RecordingEncounterRollProvider implements EncounterRollProvider {
     request: Omit<ConsumedEncounterRoll, 'kind' | 'ordinal' | 'inputHash' | 'resultSnapshot' | 'resultHash' | 'rollRef'>
       & { readonly encounterRef: string },
   ): number {
-    const rollBps = this.#source.nextBps(kind === 'tie_break' ? 'hit' : kind);
+    const rollBps = this.#source.nextBps(
+      kind === 'tie_break' || kind === 'stealth' || kind === 'detection' ? 'hit' : kind,
+    );
     if (!Number.isSafeInteger(rollBps) || rollBps < 1 || rollBps > 10_000) {
       throw new EncounterError('ENCOUNTER_ROLL_INVALID');
     }
@@ -77,5 +79,25 @@ export class RecordingEncounterRollProvider implements EncounterRollProvider {
       hitRollBps: { enumerable: true, get: () => (hit ??= this.#consume('hit', common)) },
       criticalRollBps: { enumerable: true, get: () => (critical ??= this.#consume('critical', common)) },
     }) as CoreV1InjectedRolls;
+  }
+
+  stealthContest(request: {
+    readonly encounterRef: string;
+    readonly actionRef: string;
+    readonly sourceActorRef: string;
+    readonly observerActorRef: string;
+    readonly observerOrdinal: number;
+  }): { readonly agentRollBps: number; readonly observerRollBps: number } {
+    const common = {
+      encounterRef: request.encounterRef,
+      actionRef: request.actionRef,
+      sourceActorRef: request.sourceActorRef,
+      targetActorRef: request.observerActorRef,
+      targetOrdinal: request.observerOrdinal,
+    };
+    return {
+      agentRollBps: this.#consume('stealth', common),
+      observerRollBps: this.#consume('detection', common),
+    };
   }
 }

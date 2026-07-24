@@ -85,7 +85,7 @@ export const CORE_V1_AREA_SHAPES = Object.freeze([
 
 export const CORE_V1_SECONDARY_MODIFIER_CODES = Object.freeze([
   'actorPhysicalPower', 'actorMagicalPower', 'physicalDefense', 'magicalDefense', 'accuracy',
-  'evasion', 'attackSpeedBps', 'castingSpeedBps', 'criticalChanceBps', 'criticalDamageBps',
+  'evasion', 'stealth', 'detection', 'attackSpeedBps', 'castingSpeedBps', 'criticalChanceBps', 'criticalDamageBps',
   'movementSpeed', 'carryingCapacity', 'physicalResistanceBps', 'magicalResistanceBps',
   'maxHp', 'maxMana', 'maxSp',
 ] as const) satisfies readonly CoreV1SecondaryModifierCode[];

@@ -7,6 +7,7 @@ import {
   createCoreV1EmptyEquipmentLoadout,
   createCoreV1EncounterState,
   getInitialAttributePreset,
+  initializeCoreV13EncounterStealthState,
   processCoreV1EncounterBatch,
   scheduleCoreV1EncounterAction,
   validateCoreV1EncounterState,
@@ -23,6 +24,9 @@ import type {
 } from '../rules/core-v1/index.js';
 import { CORE_V1_MAX_TECHNICAL_TICK } from '../rules/core-v1/core-v1.action-economy.config.js';
 import { CORE_V1_MAX_ENCOUNTER_TICK } from '../rules/core-v1/index.js';
+import { CORE_V1_VERSION_CODE } from '../rules/core-v1/core-v1.manifest.js';
+import { CORE_V1_2_VERSION_CODE } from '../rules/core-v1/core-v1.progression-v2.js';
+import { CORE_V1_3_VERSION_CODE } from '../rules/core-v1/core-v1.progression-v3.js';
 import { canonicalJson } from '../../shared/json/canonical-json.js';
 import {
   createCoreV1EncounterSnapshotHash,
@@ -113,11 +117,32 @@ function realEncounterState(): CoreV1EncounterState {
       { leftActorRef: 'slime', rightActorRef: 'slime', relation: 'self' },
     ],
   };
-  return expectOk(createCoreV1EncounterState(input));
+  return initializeCoreV13EncounterStealthState(expectOk(createCoreV1EncounterState(input)));
 }
 
 function mutableSnapshot(): Record<string, unknown> {
   return structuredClone(serializeCoreV1EncounterState(realEncounterState()));
+}
+
+/**
+ * Historical RC1.1/RC1.2 fixture serializer. It deliberately models the
+ * pre-RC1.3 wire format instead of serializing RC1.3 and deleting its fields.
+ */
+function historicalSnapshot(state: CoreV1EncounterState, encounterRef: string): Record<string, unknown> {
+  const encoded = JSON.parse(JSON.stringify(state, (_key, value: unknown) => (
+    typeof value === 'bigint' ? value.toString(10) : value
+  ))) as Record<string, unknown>;
+  const participants = (encoded.participants as Array<Record<string, unknown>>).map((participant) => {
+    const historicalParticipant = { ...participant };
+    const secondaryAttributes = historicalParticipant.secondaryAttributes as Record<string, unknown>;
+    delete historicalParticipant.stealthState;
+    delete historicalParticipant.secondaryAttributes;
+    const historicalSecondary = { ...secondaryAttributes };
+    delete historicalSecondary.stealth;
+    delete historicalSecondary.detection;
+    return { ...historicalParticipant, secondaryAttributes: historicalSecondary };
+  });
+  return { ...encoded, snapshotSchemaVersion: 1, encounterRef, participants };
 }
 
 function encounterWithStoredRuntimeStructures(manaCostModifierBps?: number): CoreV1EncounterState {
@@ -267,13 +292,91 @@ function mutableRuntimeSnapshot(): {
 }
 
 describe('EncounterStateSnapshotV1', () => {
+  it('accepts fixed RC1.1 and RC1.2 historical fixtures without rewriting their canonical shape', () => {
+    const rc11 = historicalSnapshot(realEncounterState(), 'historical-rc11');
+    const rc12 = historicalSnapshot(realEncounterState(), 'historical-rc12');
+    const beforeRc11 = structuredClone(rc11);
+    const beforeRc12 = structuredClone(rc12);
+
+    const parsedRc11 = parseCoreV1EncounterSnapshot(rc11, CORE_V1_VERSION_CODE);
+    const parsedRc12 = parseCoreV1EncounterSnapshot(rc12, CORE_V1_2_VERSION_CODE);
+
+    expect(parsedRc11.participants.every((participant) => participant.stealthState === undefined)).toBe(true);
+    expect(parsedRc12.participants.every((participant) => participant.stealthState === undefined)).toBe(true);
+    expect(parsedRc11.participants.every((participant) => participant.secondaryAttributes.stealth === 0
+      && participant.secondaryAttributes.detection === 0)).toBe(true);
+    expect(parsedRc12.participants.every((participant) => participant.secondaryAttributes.stealth === 0
+      && participant.secondaryAttributes.detection === 0)).toBe(true);
+    expect(rc11).toEqual(beforeRc11);
+    expect(rc12).toEqual(beforeRc12);
+    expect(createCoreV1EncounterSnapshotHash(rc11, CORE_V1_VERSION_CODE)).toBe('49ef390a9707a4d2971b11ea7da4dcea479f8779ef96bd6ef782bbe6405e5da7');
+    expect(createCoreV1EncounterSnapshotHash(rc12, CORE_V1_2_VERSION_CODE)).toBe('37f809f7818148b589259745d2c73ec03abf304a00a0d35071274b395725a50f');
+  });
+
+  it('requires the complete RC1.3 stealth projection and keeps its hash fixed', () => {
+    const snapshot = mutableSnapshot();
+    const before = structuredClone(snapshot);
+    const participant = (snapshot.participants as Array<Record<string, unknown>>)[0]!;
+    const secondary = participant.secondaryAttributes as Record<string, unknown>;
+
+    expect(createCoreV1EncounterSnapshotHash(snapshot, CORE_V1_3_VERSION_CODE)).toBe('44401be022af3c5321d21b3d21683ce6bab357afee923abb23dff738106997a6');
+    const withoutStealth = { ...secondary };
+    delete withoutStealth.stealth;
+    const withoutDetection = { ...secondary };
+    delete withoutDetection.detection;
+    const withoutStealthState = (snapshot.participants as Array<Record<string, unknown>>).map((entry) => {
+      const copy = { ...entry };
+      delete copy.stealthState;
+      return copy;
+    });
+    expect(() => parseCoreV1EncounterSnapshot({
+      ...snapshot,
+      participants: [{ ...participant, secondaryAttributes: withoutStealth }],
+    }, CORE_V1_3_VERSION_CODE)).toThrow(/stealth.*required|snapshot schema/i);
+    expect(() => parseCoreV1EncounterSnapshot({
+      ...snapshot,
+      participants: [{ ...participant, secondaryAttributes: withoutDetection }],
+    }, CORE_V1_3_VERSION_CODE)).toThrow(/detection.*required|snapshot schema/i);
+    expect(() => parseCoreV1EncounterSnapshot({
+      ...snapshot,
+      participants: withoutStealthState,
+    }, CORE_V1_3_VERSION_CODE)).toThrow(/stealthState.*required|snapshot schema/i);
+    expect(snapshot).toEqual(before);
+  });
+
+  it('never accepts RC1.3 fields or a schema-two payload as a historical snapshot', () => {
+    const historical = historicalSnapshot(realEncounterState(), 'historical-no-upgrade');
+    const participant = (historical.participants as Array<Record<string, unknown>>)[0]!;
+    const secondary = participant.secondaryAttributes as Record<string, unknown>;
+    const injected = {
+      ...historical,
+      participants: [{ ...participant, secondaryAttributes: { ...secondary, stealth: 0, detection: 0 } }],
+    };
+
+    expect(() => parseCoreV1EncounterSnapshot(injected, CORE_V1_VERSION_CODE)).toThrow(/not part of snapshot schema/i);
+    expect(() => parseCoreV1EncounterSnapshot({ ...historical, snapshotSchemaVersion: 2 }, CORE_V1_VERSION_CODE)).toThrow(/schema version/i);
+    expect(() => parseCoreV1EncounterSnapshot(historical, CORE_V1_3_VERSION_CODE)).toThrow(/schema version/i);
+  });
+
+  it('detects historical and RC1.3 snapshot tampering through their versioned canonical hashes', () => {
+    const historical = historicalSnapshot(realEncounterState(), 'historical-tampered');
+    const modern = mutableSnapshot();
+    const historicalHash = createCoreV1EncounterSnapshotHash(historical, CORE_V1_2_VERSION_CODE);
+    const modernHash = createCoreV1EncounterSnapshotHash(modern, CORE_V1_3_VERSION_CODE);
+    const tamperedHistorical = { ...historical, actionSequence: 999 };
+    const tamperedModern = { ...modern, actionSequence: 999 };
+
+    expect(createCoreV1EncounterSnapshotHash(tamperedHistorical, CORE_V1_2_VERSION_CODE)).not.toBe(historicalHash);
+    expect(createCoreV1EncounterSnapshotHash(tamperedModern, CORE_V1_3_VERSION_CODE)).not.toBe(modernHash);
+  });
+
   it('round-trips a real Phase 1K state and converts every present bigint tick to canonical decimal strings', () => {
     const state = realEncounterState();
     const before = structuredClone(state);
     const snapshot = serializeCoreV1EncounterState(state);
     const json = canonicalJson(snapshot);
 
-    expect(snapshot.snapshotSchemaVersion).toBe(1);
+    expect(snapshot.snapshotSchemaVersion).toBe(2);
     expect(snapshot.schemaVersion).toBe(1);
     expect(snapshot.rulesetCode).toBe('core-v1');
     expect(snapshot.currentTick).toBe('125');
@@ -557,9 +660,10 @@ describe('EncounterStateSnapshotV1', () => {
         timelineEvent: { ...source.timelineEvent, eventId: eventRef, sequence: index + 1, stableRef: eventRef },
       };
     }).sort((left, right) => compareTimelineEvents(left.timelineEvent, right.timelineEvent));
-    const snapshot = serializeCoreV1EncounterState({ ...created, scheduledEvents });
+    const expected = initializeCoreV13EncounterStealthState({ ...created, scheduledEvents });
+    const snapshot = serializeCoreV1EncounterState(expected);
 
     expect(Buffer.byteLength(canonicalJson(snapshot), 'utf8')).toBeLessThanOrEqual(ENCOUNTER_STATE_SNAPSHOT_MAX_BYTES);
-    expect(parseCoreV1EncounterSnapshot(snapshot)).toEqual({ ...created, scheduledEvents });
+    expect(parseCoreV1EncounterSnapshot(snapshot)).toEqual(expected);
   });
 });

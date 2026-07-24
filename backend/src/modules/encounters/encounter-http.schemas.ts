@@ -144,6 +144,13 @@ const beatComponentSchema = z.discriminatedUnion('type', [
   z.strictObject({ ...beatComponentFields, type: z.literal('assist'), targetRef: codeSchema }),
   z.strictObject({ ...beatComponentFields, type: z.literal('flee'), destination: z.enum(['far', 'out_of_range']).optional() }),
   z.strictObject({ ...beatComponentFields, type: z.literal('observe'), targetRef: codeSchema.optional() }),
+  z.strictObject({ ...beatComponentFields, type: z.literal('hide') }),
+  z.strictObject({
+    ...beatComponentFields,
+    type: z.literal('sneak_move'),
+    destination: zoneSchema,
+    pace: z.enum(['careful', 'normal', 'fast']).optional(),
+  }),
   z.strictObject({ ...beatComponentFields, type: z.literal('interact'), targetRef: codeSchema, description: z.string().trim().min(1).max(500).optional() }),
   z.strictObject({ ...beatComponentFields, type: z.literal('improvise'), description: z.string().trim().min(1).max(500), targetRef: codeSchema.optional() }),
   z.strictObject({ ...beatComponentFields, type: z.literal('use_item'), inventoryEntryRef: codeSchema, targetRefs: beatTargetRefsSchema.optional() }),
@@ -311,6 +318,9 @@ const createAssistedSchema = z.strictObject({
   environmentalContext: z.strictObject({
     summary: z.string().trim().min(1).max(500),
     tags: z.array(codeSchema).max(12).optional(),
+    lighting: z.enum(['bright', 'normal', 'dim', 'dark', 'magical_darkness']).optional(),
+    cover: z.enum(['none', 'partial', 'substantial', 'full']).optional(),
+    ambientNoise: z.enum(['silent', 'low', 'normal', 'loud']).optional(),
   }).optional(),
 }).superRefine((input, context) => {
   const groups = [

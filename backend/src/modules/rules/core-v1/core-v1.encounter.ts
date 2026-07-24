@@ -11,6 +11,7 @@ import {
   CORE_V1_MAX_DURATION_TICKS,
 } from './core-v1.content-mechanics.config.js';
 import { CORE_V1_MAX_DAMAGE_COMPONENTS } from './core-v1.config.js';
+import { coreV13SurpriseAttackProfile } from './core-v1.stealth.js';
 import {
   calculateMovement,
   calculateMobileCastTime,
@@ -643,7 +644,7 @@ function participantIssues(participant: unknown, path: string): ValidationIssue[
     'actorRef', 'sideRef', 'actorStateVersion', 'mechanicsStateVersion', 'inventoryStateVersion',
     'effectsStateVersion', 'zone', 'combatState', 'primaryAttributes', 'resources',
     'secondaryAttributes', 'activeEffects', 'actionSlots', 'reactionCapabilities',
-    'equipmentContext', 'initiative',
+    'equipmentContext', 'initiative', 'stealthState',
   ]), path);
   if (!isStableRef(participant.actorRef)) result.push(issue(`${path}.actorRef`, 'PUBLIC_REF', 'Actor ref must be stable and must not be a UUID'));
   if (!isStableRef(participant.sideRef)) result.push(issue(`${path}.sideRef`, 'PUBLIC_REF', 'Side ref must be stable and must not be a UUID'));
@@ -709,6 +710,58 @@ function participantIssues(participant: unknown, path: string): ValidationIssue[
   } else {
     try { assertCombatTick(participant.initiative.firstReadyTick as bigint, 'firstReadyTick'); } catch {
       result.push(issue(`${path}.initiative.firstReadyTick`, 'TICK', 'First ready tick is invalid'));
+    }
+  }
+  if (participant.stealthState !== undefined) {
+    const stealthState = participant.stealthState;
+    const visibility = new Set(['exposed', 'obscured', 'hidden']);
+    const awareness = new Set(['unaware', 'suspicious', 'detected', 'tracking']);
+    const tiers = new Set(['critical_failure', 'failure', 'success', 'high_success']);
+    if (!isPlainRecord(stealthState)
+      || !visibility.has(stealthState.visibility as string)
+      || !isArrayValue(stealthState.observerAwareness)) {
+      result.push(issue(`${path}.stealthState`, 'STEALTH_STATE', 'Stealth state is invalid'));
+    } else {
+      const observers = new Set<string>();
+      const validatedAwareness: string[] = [];
+      (stealthState.observerAwareness as unknown[]).forEach((entry, index) => {
+        const structurallyValid = isPlainRecord(entry)
+          && isStableRef(entry.observerActorRef)
+          && awareness.has(entry.awareness as string)
+          && Number.isSafeInteger(entry.margin)
+          && tiers.has(entry.marginTier as string)
+          && !observers.has(entry.observerActorRef);
+        const margin = structurallyValid ? entry.margin as number : 0;
+        const expectedTier = margin >= 20 ? 'high_success'
+          : margin >= 0 ? 'success'
+            : margin > -20 ? 'failure'
+              : 'critical_failure';
+        const expectedAwareness = margin >= 0 ? 'unaware'
+          : margin > -20 ? 'suspicious'
+            : 'detected';
+        const awarenessValid = structurallyValid && (
+          entry.awareness === expectedAwareness
+          || (entry.awareness === 'tracking' && margin <= -20)
+        );
+        if (!structurallyValid || entry.marginTier !== expectedTier || !awarenessValid) {
+          result.push(issue(`${path}.stealthState.observerAwareness.${index}`, 'OBSERVER_AWARENESS', 'Observer awareness is invalid'));
+        } else {
+          validatedAwareness.push(entry.awareness as string);
+        }
+        if (isPlainRecord(entry) && isStableRef(entry.observerActorRef)) {
+          observers.add(entry.observerActorRef);
+        }
+      });
+      if (validatedAwareness.length === (stealthState.observerAwareness as unknown[]).length) {
+        const expectedVisibility = validatedAwareness.length === 0 || validatedAwareness.every((value) => value === 'unaware')
+          ? 'hidden'
+          : validatedAwareness.some((value) => value === 'unaware' || value === 'suspicious')
+            ? 'obscured'
+            : 'exposed';
+        if (stealthState.visibility !== expectedVisibility) {
+          result.push(issue(`${path}.stealthState.visibility`, 'STEALTH_VISIBILITY', 'Stealth visibility does not match observer awareness'));
+        }
+      }
     }
   }
   return result;
@@ -2208,6 +2261,11 @@ function processEffectEvent(
       : undefined;
   const defense = action.executionPlan.defenses[target.actorRef] ?? { blockValue: 0, completeBlock: false };
   const sourceActor = participantActor(source);
+  const surprise = coreV13SurpriseAttackProfile(
+    source,
+    target.actorRef,
+    action.executionPlan.profile?.tags ?? [],
+  );
   const sequenceInput: CoreV1EffectSequenceInput = {
     profile: adjusted.value.profile,
     sourceContent: action.executionPlan.contentRef ?? {
@@ -2222,6 +2280,11 @@ function processEffectEvent(
     ...(rolls === undefined ? {} : { rolls }),
     targeting: targetInfo,
     defense,
+    ...(surprise.applies ? {
+      situationalHitModifiersBps: surprise.accuracyModifierBps,
+      criticalChanceModifierBps: surprise.criticalChanceModifierBps,
+      forcedCritical: surprise.guaranteedCritical,
+    } : {}),
     ...(action.executionPlan.weaponDamageComponents.length === 0
       ? {} : { weaponDamageComponents: action.executionPlan.weaponDamageComponents }),
     ...(action.executionPlan.costModifiers === undefined

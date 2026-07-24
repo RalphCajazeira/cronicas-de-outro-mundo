@@ -126,7 +126,13 @@ describe('encounter public DTO mapper', () => {
           status: 'complete', sourceActionCount: 0, detailedActionCount: 0,
           omittedBlockedActionCount: 0, summarizedActorRefs: [], summarizedCategories: [],
         },
-        environment: { zoneModel: 'abstract_bands', summary: null, tags: [], notes: ['Exact geometry is not inferred.'] },
+        environment: {
+          zoneModel: 'abstract_bands',
+          summary: null,
+          tags: [],
+          stealthContext: { lighting: 'normal', cover: 'none', ambientNoise: 'normal' },
+          notes: ['Exact geometry is not inferred.'],
+        },
         participants: [{
           actorRef: 'hero', role: 'guardian', sideRef: 'party',
           relations: { allies: [], hostiles: [], neutrals: [] }, zone: 'near', combatState: 'ready',

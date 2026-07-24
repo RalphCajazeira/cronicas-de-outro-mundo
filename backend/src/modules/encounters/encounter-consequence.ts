@@ -345,14 +345,25 @@ export function parseEncounterContext(value: unknown): EncounterContextV1 {
     || new Set(root.protectedActorRefs).size !== root.protectedActorRefs.length) {
     throw new TypeError('Encounter context is invalid');
   }
-  const environment = closedRecord(root.environment, ['summary', 'tags'], '$.encounterContext.environment');
+  const environment = closedOptionalRecord(
+    root.environment,
+    ['summary', 'tags'],
+    ['lighting', 'cover', 'ambientNoise'],
+    '$.encounterContext.environment',
+  );
   if ((environment.summary !== null
       && (typeof environment.summary !== 'string' || environment.summary.length < 1 || environment.summary.length > 500))
     || !Array.isArray(environment.tags)
     || Object.keys(environment.tags).length !== environment.tags.length
     || environment.tags.length > 12
     || environment.tags.some((tag) => typeof tag !== 'string' || !publicRefPattern.test(tag))
-    || new Set(environment.tags).size !== environment.tags.length) {
+    || new Set(environment.tags).size !== environment.tags.length
+    || (environment.lighting !== undefined
+      && !['bright', 'normal', 'dim', 'dark', 'magical_darkness'].includes(environment.lighting as string))
+    || (environment.cover !== undefined
+      && !['none', 'partial', 'substantial', 'full'].includes(environment.cover as string))
+    || (environment.ambientNoise !== undefined
+      && !['silent', 'low', 'normal', 'loud'].includes(environment.ambientNoise as string))) {
     throw new TypeError('Encounter environment context is invalid');
   }
   return structuredClone(value) as EncounterContextV1;

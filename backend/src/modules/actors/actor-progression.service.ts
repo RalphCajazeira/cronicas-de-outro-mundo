@@ -9,7 +9,6 @@ import {
   CORE_V1_PRIMARY_ATTRIBUTES,
   CORE_V1_2_TECHNICAL_LEVEL_MAXIMUM,
   CORE_V1_2_XP_STORAGE_MAXIMUM,
-  CORE_V1_2_VERSION_CODE,
   legacyNextLevelXp,
   nextCoreV12LevelXp,
   type PrimaryAttributeCode,
@@ -376,7 +375,7 @@ export async function manageActorProgressionTransaction(
       ? nextCoreV12LevelXp(actor.level)
       : legacyNextLevelXp(actor.level);
     if (required === null) {
-      if (actor.campaign.rulesetVersion.code === CORE_V1_2_VERSION_CODE) throw technicalLevelRangeReached();
+      if (policy === 'unbounded_core_v1_2') throw technicalLevelRangeReached();
       throw levelCapReached();
     }
     if (actor.xp < required) throw insufficientXp();

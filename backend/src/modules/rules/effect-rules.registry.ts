@@ -22,6 +22,11 @@ const coreV12EffectSnapshot = structuredClone(CORE_V1_EFFECT_RULES_SNAPSHOT) as 
 coreV12EffectSnapshot.identity.code = CORE_V1_2_EFFECT_RULES_CODE;
 const CORE_V1_2_EFFECT_CANONICAL_JSON = canonicalJson(coreV12EffectSnapshot);
 export const CORE_V1_2_EFFECT_HASH = createHash('sha256').update(CORE_V1_2_EFFECT_CANONICAL_JSON).digest('hex');
+export const CORE_V1_3_EFFECT_RULES_CODE = 'core-v1.3-effects-v1' as const;
+const coreV13EffectSnapshot = structuredClone(CORE_V1_EFFECT_RULES_SNAPSHOT) as { identity: { code: string } };
+coreV13EffectSnapshot.identity.code = CORE_V1_3_EFFECT_RULES_CODE;
+const CORE_V1_3_EFFECT_CANONICAL_JSON = canonicalJson(coreV13EffectSnapshot);
+export const CORE_V1_3_EFFECT_HASH = createHash('sha256').update(CORE_V1_3_EFFECT_CANONICAL_JSON).digest('hex');
 
 export const CORE_EFFECT_RULES_VERSION_DRIFT = 'CORE_EFFECT_RULES_VERSION_DRIFT' as const;
 export type EffectRulesDriftField = 'rulesetVersion' | 'code' | 'schemaVersion' | 'configHash' | 'configSnapshot';
@@ -121,6 +126,40 @@ export async function ensureCoreV12EffectRulesVersion(
     || version.schemaVersion !== CORE_V1_EFFECT_SCHEMA_VERSION
     || version.configHash !== CORE_V1_2_EFFECT_HASH
     || canonicalJson(version.configSnapshot) !== CORE_V1_2_EFFECT_CANONICAL_JSON) {
+    throw new CoreEffectRulesVersionDriftError(['rulesetVersion']);
+  }
+  return version;
+}
+
+export async function ensureCoreV13EffectRulesVersion(
+  client: EffectRulesRegistryClient,
+  rulesetVersion: CoreRulesetVersion,
+): Promise<CoreEffectRulesVersion> {
+  let version = await client.effectRulesVersion.findUnique({
+    where: { code: CORE_V1_3_EFFECT_RULES_CODE }, select: effectRulesSelect,
+  });
+  version ??= await createAfterExpectedUnique(
+    client,
+    'ensure_core_v1_3_effects',
+    () => client.effectRulesVersion.create({
+      data: {
+        rulesetVersionId: rulesetVersion.id,
+        code: CORE_V1_3_EFFECT_RULES_CODE,
+        schemaVersion: CORE_V1_EFFECT_SCHEMA_VERSION,
+        configHash: CORE_V1_3_EFFECT_HASH,
+        configSnapshot: JSON.parse(CORE_V1_3_EFFECT_CANONICAL_JSON) as Prisma.InputJsonValue,
+      },
+      select: effectRulesSelect,
+    }),
+    () => client.effectRulesVersion.findUnique({
+      where: { code: CORE_V1_3_EFFECT_RULES_CODE }, select: effectRulesSelect,
+    }),
+    { modelName: 'EffectRulesVersion', fields: ['code'], index: 'EffectRulesVersion_code_key', allowModelOnly: true },
+  );
+  if (version.rulesetVersionId !== rulesetVersion.id || version.code !== CORE_V1_3_EFFECT_RULES_CODE
+    || version.schemaVersion !== CORE_V1_EFFECT_SCHEMA_VERSION
+    || version.configHash !== CORE_V1_3_EFFECT_HASH
+    || canonicalJson(version.configSnapshot) !== CORE_V1_3_EFFECT_CANONICAL_JSON) {
     throw new CoreEffectRulesVersionDriftError(['rulesetVersion']);
   }
   return version;

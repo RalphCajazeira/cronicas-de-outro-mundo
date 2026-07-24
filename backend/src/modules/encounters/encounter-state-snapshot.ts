@@ -7,10 +7,19 @@ import {
 } from '../rules/core-v1/index.js';
 import type { CoreV1EncounterCompletionCandidate, CoreV1EncounterState } from '../rules/core-v1/index.js';
 import { CORE_V1_MAX_TECHNICAL_TICK } from '../rules/core-v1/core-v1.action-economy.config.js';
+import { CORE_V1_VERSION_CODE } from '../rules/core-v1/core-v1.manifest.js';
+import { CORE_V1_2_VERSION_CODE } from '../rules/core-v1/core-v1.progression-v2.js';
+import { CORE_V1_3_VERSION_CODE } from '../rules/core-v1/core-v1.progression-v3.js';
 import { canonicalJson, canonicalizeJson } from '../../shared/json/canonical-json.js';
 
-export const ENCOUNTER_STATE_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+export const LEGACY_ENCOUNTER_STATE_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+export const ENCOUNTER_STATE_SNAPSHOT_SCHEMA_VERSION = 2 as const;
 export const ENCOUNTER_STATE_SNAPSHOT_MAX_BYTES = 1024 * 1024;
+
+export type CoreV1EncounterSnapshotRulesetVersionCode =
+  | typeof CORE_V1_VERSION_CODE
+  | typeof CORE_V1_2_VERSION_CODE
+  | typeof CORE_V1_3_VERSION_CODE;
 
 type SnapshotValue<T> = T extends bigint
   ? string
@@ -21,8 +30,14 @@ type SnapshotValue<T> = T extends bigint
       : T;
 
 export type EncounterStateSnapshotV1 = SnapshotValue<CoreV1EncounterState> & {
+  readonly snapshotSchemaVersion: typeof LEGACY_ENCOUNTER_STATE_SNAPSHOT_SCHEMA_VERSION;
+};
+
+export type EncounterStateSnapshotV2 = SnapshotValue<CoreV1EncounterState> & {
   readonly snapshotSchemaVersion: typeof ENCOUNTER_STATE_SNAPSHOT_SCHEMA_VERSION;
 };
+
+export type EncounterStateSnapshot = EncounterStateSnapshotV1 | EncounterStateSnapshotV2;
 
 type PlainRecord = Record<string, unknown>;
 
@@ -37,9 +52,16 @@ const primaryAttributeFields = [
   'strength', 'vitality', 'agility', 'dexterity', 'intelligence',
   'wisdom', 'perception', 'willpower', 'luck',
 ] as const;
-const secondaryAttributeFields = [
+const legacySecondaryAttributeFields = [
   'actorPhysicalPower', 'actorMagicalPower', 'physicalDefense', 'magicalDefense',
   'accuracy', 'evasion', 'baseAttackSpeedBps', 'baseCastingSpeedBps',
+  'criticalChanceBps', 'criticalDamageBps', 'movementSpeed', 'carryingCapacity',
+  'physicalResistanceBps', 'magicalResistanceBps', 'elementalResistanceBps',
+  'hpRegen', 'manaRegen', 'spRegen',
+] as const;
+const currentSecondaryAttributeFields = [
+  'actorPhysicalPower', 'actorMagicalPower', 'physicalDefense', 'magicalDefense',
+  'accuracy', 'evasion', 'stealth', 'detection', 'baseAttackSpeedBps', 'baseCastingSpeedBps',
   'criticalChanceBps', 'criticalDamageBps', 'movementSpeed', 'carryingCapacity',
   'physicalResistanceBps', 'magicalResistanceBps', 'elementalResistanceBps',
   'hpRegen', 'manaRegen', 'spRegen',
@@ -170,16 +192,22 @@ function assertActiveEffect(value: unknown, path: string): void {
   assertActiveEffectPayload(effect.payload, `${path}.payload`);
 }
 
-function assertParticipant(value: unknown, path: string): void {
+function assertParticipant(value: unknown, path: string, requiresStealthState: boolean): void {
   const participant = exactKeys(value, [
     'actorRef', 'sideRef', 'actorStateVersion', 'mechanicsStateVersion', 'inventoryStateVersion',
     'effectsStateVersion', 'zone', 'combatState', 'primaryAttributes', 'resources',
     'secondaryAttributes', 'activeEffects', 'actionSlots', 'reactionCapabilities',
     'equipmentContext', 'initiative',
+    ...(requiresStealthState ? ['stealthState'] : []),
   ], [], path);
   const resources = exactKeys(participant.resources, ['hp', 'mana', 'sp'], ['customResources'], `${path}.resources`);
   exactKeys(participant.primaryAttributes, primaryAttributeFields, [], `${path}.primaryAttributes`);
-  exactKeys(participant.secondaryAttributes, secondaryAttributeFields, [], `${path}.secondaryAttributes`);
+  exactKeys(
+    participant.secondaryAttributes,
+    requiresStealthState ? currentSecondaryAttributeFields : legacySecondaryAttributeFields,
+    [],
+    `${path}.secondaryAttributes`,
+  );
   for (const pool of ['hp', 'mana', 'sp']) exactKeys(resources[pool], ['current', 'maximum'], [], `${path}.resources.${pool}`);
   for (const [index, effect] of arrayValue(participant.activeEffects, `${path}.activeEffects`).entries()) {
     assertActiveEffect(effect, `${path}.activeEffects.${index}`);
@@ -209,6 +237,25 @@ function assertParticipant(value: unknown, path: string): void {
     exactKeys(contentRef, ['contentKind', 'code'], [], `${path}.equipmentContext.requirements.knownContentRefs.${index}`);
   }
   exactKeys(participant.initiative, ['score', 'tieBreak', 'firstReadyTick', 'surprised'], [], `${path}.initiative`);
+  if (requiresStealthState) {
+    const stealthState = exactKeys(
+      participant.stealthState,
+      ['visibility', 'observerAwareness'],
+      [],
+      `${path}.stealthState`,
+    );
+    for (const [index, awareness] of arrayValue(
+      stealthState.observerAwareness,
+      `${path}.stealthState.observerAwareness`,
+    ).entries()) {
+      exactKeys(
+        awareness,
+        ['observerActorRef', 'awareness', 'margin', 'marginTier'],
+        [],
+        `${path}.stealthState.observerAwareness.${index}`,
+      );
+    }
+  }
 }
 
 function assertTimelineEvent(value: unknown, path: string): void {
@@ -341,18 +388,43 @@ function assertCompletionCandidate(value: unknown, path: string): void {
   }
 }
 
-function assertClosedSnapshot(value: unknown): asserts value is EncounterStateSnapshotV1 {
+function snapshotSchemaVersionForRulesetVersionCode(
+  rulesetVersionCode: CoreV1EncounterSnapshotRulesetVersionCode,
+): 1 | 2 {
+  return rulesetVersionCode === CORE_V1_3_VERSION_CODE
+    ? ENCOUNTER_STATE_SNAPSHOT_SCHEMA_VERSION
+    : LEGACY_ENCOUNTER_STATE_SNAPSHOT_SCHEMA_VERSION;
+}
+
+export function encounterSnapshotSchemaVersionForRulesetVersionCode(
+  rulesetVersionCode: string,
+): 1 | 2 {
+  assertRulesetVersionCode(rulesetVersionCode);
+  return snapshotSchemaVersionForRulesetVersionCode(rulesetVersionCode);
+}
+
+function assertRulesetVersionCode(value: string): asserts value is CoreV1EncounterSnapshotRulesetVersionCode {
+  if (value !== CORE_V1_VERSION_CODE && value !== CORE_V1_2_VERSION_CODE && value !== CORE_V1_3_VERSION_CODE) {
+    throw new TypeError('Encounter snapshot ruleset version is not supported');
+  }
+}
+
+function assertClosedSnapshot(
+  value: unknown,
+  rulesetVersionCode: CoreV1EncounterSnapshotRulesetVersionCode,
+): asserts value is EncounterStateSnapshot {
   const snapshot = exactKeys(value, [
     'snapshotSchemaVersion', 'schemaVersion', 'rulesetCode', 'encounterRulesCode', 'encounterRef',
     'partySideRef', 'currentTick', 'stateVersion', 'actionSequence', 'status', 'participants',
     'relations', 'scheduledEvents', 'activeActions', 'cooldowns', 'actionPlans', 'completionCandidate',
   ], [], '$');
-  if (snapshot.snapshotSchemaVersion !== ENCOUNTER_STATE_SNAPSHOT_SCHEMA_VERSION) {
+  const requiresStealthState = rulesetVersionCode === CORE_V1_3_VERSION_CODE;
+  if (snapshot.snapshotSchemaVersion !== snapshotSchemaVersionForRulesetVersionCode(rulesetVersionCode)) {
     throw new TypeError('Snapshot schema version is not supported');
   }
   assertCompletionCandidate(snapshot.completionCandidate, '$.completionCandidate');
   for (const [index, participant] of arrayValue(snapshot.participants, '$.participants').entries()) {
-    assertParticipant(participant, `$.participants.${index}`);
+    assertParticipant(participant, `$.participants.${index}`, requiresStealthState);
   }
   for (const [index, relation] of arrayValue(snapshot.relations, '$.relations').entries()) {
     exactKeys(relation, ['leftActorRef', 'rightActorRef', 'relation'], [], `$.relations.${index}`);
@@ -411,8 +483,8 @@ function decodeBigInts(value: unknown, path = '$', field?: string): unknown {
   return value;
 }
 
-function canonicalSnapshot(value: unknown): EncounterStateSnapshotV1 {
-  return canonicalizeJson(value) as unknown as EncounterStateSnapshotV1;
+function canonicalSnapshot(value: unknown): EncounterStateSnapshot {
+  return canonicalizeJson(value) as unknown as EncounterStateSnapshot;
 }
 
 function assertSnapshotSize(value: unknown): void {
@@ -422,31 +494,82 @@ function assertSnapshotSize(value: unknown): void {
   }
 }
 
-export function serializeCoreV1EncounterState(state: CoreV1EncounterState): EncounterStateSnapshotV1 {
+function legacySnapshotState(encodedState: PlainRecord): PlainRecord {
+  return {
+    ...encodedState,
+    participants: arrayValue(encodedState.participants, '$.participants').map((participant, index) => {
+      const record = plainRecord(participant, `$.participants.${index}`);
+      const legacyParticipant = { ...record };
+      delete legacyParticipant.stealthState;
+      const secondary = plainRecord(record.secondaryAttributes, `$.participants.${index}.secondaryAttributes`);
+      const legacySecondary = { ...secondary };
+      delete legacySecondary.stealth;
+      delete legacySecondary.detection;
+      return { ...legacyParticipant, secondaryAttributes: legacySecondary };
+    }),
+  };
+}
+
+function projectLegacySnapshotState(decodedState: PlainRecord): PlainRecord {
+  return {
+    ...decodedState,
+    participants: arrayValue(decodedState.participants, '$.participants').map((participant, index) => {
+      const record = plainRecord(participant, `$.participants.${index}`);
+      const secondary = plainRecord(record.secondaryAttributes, `$.participants.${index}.secondaryAttributes`);
+      return {
+        ...record,
+        secondaryAttributes: { ...secondary, stealth: 0, detection: 0 },
+      };
+    }),
+  };
+}
+
+export function serializeCoreV1EncounterState(
+  state: CoreV1EncounterState,
+  rulesetVersionCode: string = CORE_V1_3_VERSION_CODE,
+): EncounterStateSnapshot {
+  assertRulesetVersionCode(rulesetVersionCode);
   const validated = validateCoreV1EncounterState(state);
   if (!validated.ok) throw new TypeError('Core-v1 encounter state is invalid');
+  const encodedState = plainRecord(encodeBigInts(validated.value), '$');
   const encoded = {
-    snapshotSchemaVersion: ENCOUNTER_STATE_SNAPSHOT_SCHEMA_VERSION,
-    ...plainRecord(encodeBigInts(validated.value), '$'),
+    snapshotSchemaVersion: snapshotSchemaVersionForRulesetVersionCode(rulesetVersionCode),
+    ...(rulesetVersionCode === CORE_V1_3_VERSION_CODE ? encodedState : legacySnapshotState(encodedState)),
   };
-  assertClosedSnapshot(encoded);
+  assertClosedSnapshot(encoded, rulesetVersionCode);
   assertSnapshotSize(encoded);
   return canonicalSnapshot(encoded);
 }
 
-export function parseCoreV1EncounterSnapshot(snapshot: unknown): CoreV1EncounterState {
+export function parseCoreV1EncounterSnapshot(
+  snapshot: unknown,
+  rulesetVersionCode: string = CORE_V1_3_VERSION_CODE,
+): CoreV1EncounterState {
+  assertRulesetVersionCode(rulesetVersionCode);
   assertSnapshotSize(snapshot);
-  assertClosedSnapshot(snapshot);
+  assertClosedSnapshot(snapshot, rulesetVersionCode);
   const encodedState = Object.fromEntries(
     Object.entries(snapshot).filter(([key]) => key !== 'snapshotSchemaVersion'),
   );
-  const decoded = decodeBigInts(encodedState);
-  const validated = validateCoreV1EncounterState(decoded);
+  const decoded = plainRecord(decodeBigInts(encodedState), '$');
+  const projected = rulesetVersionCode === CORE_V1_3_VERSION_CODE
+    ? decoded
+    : projectLegacySnapshotState(decoded);
+  const validated = validateCoreV1EncounterState(projected);
   if (!validated.ok) throw new TypeError('Encounter state snapshot does not contain a valid core-v1 state');
   return validated.value;
 }
 
-export function createCoreV1EncounterSnapshotHash(snapshot: unknown): string {
-  const canonical = serializeCoreV1EncounterState(parseCoreV1EncounterSnapshot(snapshot));
+export function createCoreV1EncounterSnapshotHash(
+  snapshot: unknown,
+  rulesetVersionCode: string = CORE_V1_3_VERSION_CODE,
+): string {
+  assertRulesetVersionCode(rulesetVersionCode);
+  // Parsing is intentionally performed before hashing so malformed historical
+  // payloads never become acceptable merely because their raw JSON can hash.
+  parseCoreV1EncounterSnapshot(snapshot, rulesetVersionCode);
+  const canonical = rulesetVersionCode === CORE_V1_3_VERSION_CODE
+    ? serializeCoreV1EncounterState(parseCoreV1EncounterSnapshot(snapshot, rulesetVersionCode), rulesetVersionCode)
+    : canonicalSnapshot(snapshot);
   return createHash('sha256').update(canonicalJson(canonical)).digest('hex');
 }

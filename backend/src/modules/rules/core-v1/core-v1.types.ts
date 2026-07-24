@@ -62,6 +62,8 @@ export interface SecondaryAttributeModifiers {
   magicalFlatDefense?: readonly AuthorizedNumericModifier[];
   accuracy?: readonly AuthorizedNumericModifier[];
   evasion?: readonly AuthorizedNumericModifier[];
+  stealth?: readonly AuthorizedNumericModifier[];
+  detection?: readonly AuthorizedNumericModifier[];
   attackSpeedBps?: readonly AuthorizedNumericModifier[];
   castingSpeedBps?: readonly AuthorizedNumericModifier[];
   criticalChanceBps?: readonly AuthorizedNumericModifier[];
@@ -94,6 +96,8 @@ export interface SecondaryAttributes {
   magicalDefense: number;
   accuracy: number;
   evasion: number;
+  stealth: number;
+  detection: number;
   baseAttackSpeedBps: number;
   baseCastingSpeedBps: number;
   criticalChanceBps: number;

@@ -10,6 +10,11 @@ import {
   CORE_V1_CONTENT_PROFILE_SNAPSHOT,
 } from './core-v1/core-v1.content-profile.manifest.js';
 import {
+  CORE_V1_3_CONTENT_PROFILE_CANONICAL_JSON,
+  CORE_V1_3_CONTENT_PROFILE_CODE,
+  CORE_V1_3_CONTENT_PROFILE_HASH,
+} from './core-v1/core-v1.content-profile-v3.manifest.js';
+import {
   ensureCoreV1RulesetVersion,
   type CoreRulesetVersion,
   type RulesetRegistryClient,
@@ -135,6 +140,43 @@ export async function ensureCoreV12ContentProfileVersion(
     || version.schemaVersion !== CORE_V1_CONTENT_PROFILE_SCHEMA_VERSION
     || version.configHash !== CORE_V1_2_CONTENT_PROFILE_HASH
     || canonicalJson(version.configSnapshot) !== CORE_V1_2_CONTENT_PROFILE_CANONICAL_JSON) {
+    throw new CoreContentProfileVersionDriftError(['rulesetVersion']);
+  }
+  return version;
+}
+
+export async function ensureCoreV13ContentProfileVersion(
+  client: ContentProfileRegistryClient,
+  rulesetVersion: CoreRulesetVersion,
+): Promise<CoreContentProfileVersion> {
+  let version = await client.contentProfileVersion.findUnique({
+    where: { code: CORE_V1_3_CONTENT_PROFILE_CODE },
+    select: contentProfileSelect,
+  });
+  version ??= await createAfterExpectedUnique(
+    client,
+    'ensure_core_v1_3_content_profile',
+    () => client.contentProfileVersion.create({
+      data: {
+        rulesetVersionId: rulesetVersion.id,
+        code: CORE_V1_3_CONTENT_PROFILE_CODE,
+        schemaVersion: CORE_V1_CONTENT_PROFILE_SCHEMA_VERSION,
+        configHash: CORE_V1_3_CONTENT_PROFILE_HASH,
+        configSnapshot: JSON.parse(CORE_V1_3_CONTENT_PROFILE_CANONICAL_JSON) as Prisma.InputJsonValue,
+      },
+      select: contentProfileSelect,
+    }),
+    () => client.contentProfileVersion.findUnique({
+      where: { code: CORE_V1_3_CONTENT_PROFILE_CODE },
+      select: contentProfileSelect,
+    }),
+    { modelName: 'ContentProfileVersion', fields: ['code'], index: 'ContentProfileVersion_code_key', allowModelOnly: true },
+  );
+  if (version.rulesetVersionId !== rulesetVersion.id
+    || version.code !== CORE_V1_3_CONTENT_PROFILE_CODE
+    || version.schemaVersion !== CORE_V1_CONTENT_PROFILE_SCHEMA_VERSION
+    || version.configHash !== CORE_V1_3_CONTENT_PROFILE_HASH
+    || canonicalJson(version.configSnapshot) !== CORE_V1_3_CONTENT_PROFILE_CANONICAL_JSON) {
     throw new CoreContentProfileVersionDriftError(['rulesetVersion']);
   }
   return version;

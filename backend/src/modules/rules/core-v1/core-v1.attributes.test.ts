@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   CORE_V1_INITIAL_ATTRIBUTE_BUDGET,
   CORE_V1_PRIMARY_ATTRIBUTES,
+  CORE_V1_3_SECONDARY_SCORE_STORAGE_MAXIMUM,
   calculateCriticalProfile,
+  calculateDetection,
   calculateEffectiveAttribute,
   calculateEffectiveAttributes,
   calculateHitChanceBps,
   calculateResourceMaximums,
   calculateSecondaryAttributes,
+  calculateStealth,
   ceilDiv,
   clamp,
   getInitialAttributePreset,
@@ -16,6 +19,10 @@ import {
 } from './index.js';
 import type { AuthorizedNumericModifier, PrimaryAttributes } from './index.js';
 import { CORE_V1_ATTRIBUTE_PRESETS } from './core-v1.config.js';
+import {
+  CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM,
+  coreV12EarnedAttributePoints,
+} from './core-v1.progression-v2.js';
 
 const modifier = (value: number): AuthorizedNumericModifier => ({
   source: { type: 'equipment', ref: 'test-equipment' }, value,
@@ -214,9 +221,9 @@ describe('core-v1 resources and effective attributes', () => {
 
 describe('core-v1 secondary attributes', () => {
   it.each([
-    ['balanced', { actorPhysicalPower: 5, actorMagicalPower: 5, physicalDefense: 4, magicalDefense: 4, accuracy: 31, evasion: 31, baseAttackSpeedBps: 10000, baseCastingSpeedBps: 10000, criticalChanceBps: 500, criticalDamageBps: 15000, movementSpeed: 4, carryingCapacity: 500, physicalResistanceBps: 300, magicalResistanceBps: 300, elementalResistanceBps: 0, hpRegen: 2, manaRegen: 2, spRegen: 2 }],
-    ['physical', { actorPhysicalPower: 7, actorMagicalPower: 3, physicalDefense: 5, magicalDefense: 3, accuracy: 39, evasion: 35, baseAttackSpeedBps: 10400, baseCastingSpeedBps: 9600, criticalChanceBps: 350, criticalDamageBps: 15250, movementSpeed: 4, carryingCapacity: 630, physicalResistanceBps: 350, magicalResistanceBps: 210, elementalResistanceBps: 0, hpRegen: 2, manaRegen: 1, spRegen: 2 }],
-    ['magical', { actorPhysicalPower: 3, actorMagicalPower: 7, physicalDefense: 2, magicalDefense: 5, accuracy: 31, evasion: 25, baseAttackSpeedBps: 9700, baseCastingSpeedBps: 10850, criticalChanceBps: 300, criticalDamageBps: 15300, movementSpeed: 3, carryingCapacity: 390, physicalResistanceBps: 300, magicalResistanceBps: 420, elementalResistanceBps: 70, hpRegen: 1, manaRegen: 2, spRegen: 2 }],
+    ['balanced', { actorPhysicalPower: 5, actorMagicalPower: 5, physicalDefense: 4, magicalDefense: 4, accuracy: 31, evasion: 31, stealth: 25, detection: 25, baseAttackSpeedBps: 10000, baseCastingSpeedBps: 10000, criticalChanceBps: 500, criticalDamageBps: 15000, movementSpeed: 4, carryingCapacity: 500, physicalResistanceBps: 300, magicalResistanceBps: 300, elementalResistanceBps: 0, hpRegen: 2, manaRegen: 2, spRegen: 2 }],
+    ['physical', { actorPhysicalPower: 7, actorMagicalPower: 3, physicalDefense: 5, magicalDefense: 3, accuracy: 39, evasion: 35, stealth: 26, detection: 18, baseAttackSpeedBps: 10400, baseCastingSpeedBps: 9600, criticalChanceBps: 350, criticalDamageBps: 15250, movementSpeed: 4, carryingCapacity: 630, physicalResistanceBps: 350, magicalResistanceBps: 210, elementalResistanceBps: 0, hpRegen: 2, manaRegen: 1, spRegen: 2 }],
+    ['magical', { actorPhysicalPower: 3, actorMagicalPower: 7, physicalDefense: 2, magicalDefense: 5, accuracy: 31, evasion: 25, stealth: 20, detection: 28, baseAttackSpeedBps: 9700, baseCastingSpeedBps: 10850, criticalChanceBps: 300, criticalDamageBps: 15300, movementSpeed: 3, carryingCapacity: 390, physicalResistanceBps: 300, magicalResistanceBps: 420, elementalResistanceBps: 70, hpRegen: 1, manaRegen: 2, spRegen: 2 }],
   ] as const)('calculates the %s snapshot', (preset, expected) => {
     expect(calculateSecondaryAttributes({
       attributes: getInitialAttributePreset(preset), weaponFamilyRank: 1, magicSchoolRank: 1,
@@ -231,11 +238,15 @@ describe('core-v1 secondary attributes', () => {
       attributes, weaponFamilyRank: 10, magicSchoolRank: 10, accuracyRank: 10, evasionRank: 10,
       encumbrancePenalty: 0,
       modifiers: {
-        accuracy: [modifier(500)], evasion: [modifier(-500)], attackSpeedBps: [modifier(10000)],
+        accuracy: [modifier(500)], evasion: [modifier(-500)], stealth: [modifier(4)],
+        detection: [modifier(-3)], attackSpeedBps: [modifier(10000)],
         physicalResistanceBps: [modifier(-10000)], elementalResistanceBps: [modifier(10000)],
       },
     });
-    expect(result).toMatchObject({ accuracy: 100, evasion: 0, baseAttackSpeedBps: 15000, physicalResistanceBps: -5000, elementalResistanceBps: 7500 });
+    expect(result).toMatchObject({
+      accuracy: 100, evasion: 0, stealth: 29, detection: 22,
+      baseAttackSpeedBps: 15000, physicalResistanceBps: -5000, elementalResistanceBps: 7500,
+    });
     expect(attributes).toEqual(before);
   });
 
@@ -248,6 +259,63 @@ describe('core-v1 secondary attributes', () => {
     expect(strongerSecondary.actorPhysicalPower).toBeGreaterThanOrEqual(baseSecondary.actorPhysicalPower);
     expect(strongerSecondary.carryingCapacity).toBeGreaterThan(baseSecondary.carryingCapacity);
     expect(calculateResourceMaximums(stronger, 1).maxHp).toBeGreaterThanOrEqual(calculateResourceMaximums(base, 1).maxHp);
+  });
+
+  it('keeps RC1.3 stealth and detection as scalable raw scores through high levels', () => {
+    const base = getInitialAttributePreset('balanced');
+    const common = {
+      weaponFamilyRank: 0, magicSchoolRank: 0, accuracyRank: 0, evasionRank: 0,
+      encumbrancePenalty: 0, maximumPrimaryAttribute: CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM,
+    } as const;
+    const scoreAtLevel = (level: number, attribute: 'agility' | 'perception') => {
+      const attributes = { ...base, [attribute]: base[attribute] + coreV12EarnedAttributePoints(level) };
+      return calculateSecondaryAttributes({ attributes, ...common });
+    };
+
+    const stealthByLevel = [1, 20, 50, 100].map((level) => scoreAtLevel(level, 'agility').stealth);
+    const detectionByLevel = [1, 20, 50, 100].map((level) => scoreAtLevel(level, 'perception').detection);
+    expect(stealthByLevel).toEqual([...stealthByLevel].sort((left, right) => left - right));
+    expect(detectionByLevel).toEqual([...detectionByLevel].sort((left, right) => left - right));
+    expect(stealthByLevel[3]).toBeGreaterThan(100);
+    expect(detectionByLevel[3]).toBeGreaterThan(100);
+
+    const level50StealthFocused = scoreAtLevel(50, 'agility').stealth;
+    const level50NonStealth = scoreAtLevel(50, 'perception').stealth;
+    expect(level50StealthFocused).toBeGreaterThan(level50NonStealth);
+
+    const nearTechnical = { ...base, agility: base.agility + coreV12EarnedAttributePoints(20_722) };
+    const nearTechnicalScore = calculateStealth(
+      nearTechnical,
+      [modifier(4)],
+      CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM,
+    );
+    expect(nearTechnicalScore).toBeGreaterThan(100);
+    expect(nearTechnicalScore).toBeLessThanOrEqual(CORE_V1_3_SECONDARY_SCORE_STORAGE_MAXIMUM);
+    expect(calculateDetection(
+      { ...base, perception: base.perception + coreV12EarnedAttributePoints(20_722) },
+      [modifier(-3)],
+      CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM,
+    )).toBeGreaterThan(100);
+    expect(() => calculateStealth(
+      nearTechnical,
+      [modifier(CORE_V1_3_SECONDARY_SCORE_STORAGE_MAXIMUM)],
+      CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM,
+    )).toThrow('stealth must be between');
+  });
+
+  it('keeps Veil, equipment and detection debuffs measurable instead of clipping them', () => {
+    const base = getInitialAttributePreset('balanced');
+    const highLevel = {
+      ...base,
+      agility: base.agility + coreV12EarnedAttributePoints(100),
+      perception: base.perception + coreV12EarnedAttributePoints(100),
+    };
+    const maximum = CORE_V1_2_TECHNICAL_ATTRIBUTE_MAXIMUM;
+    const stealth = calculateStealth(highLevel, undefined, maximum);
+    expect(calculateStealth(highLevel, [modifier(4)], maximum)).toBe(stealth + 4);
+    expect(calculateStealth(highLevel, [modifier(1)], maximum)).toBe(stealth + 1);
+    const detection = calculateDetection(highLevel, undefined, maximum);
+    expect(calculateDetection(highLevel, [modifier(-3)], maximum)).toBe(detection - 3);
   });
 });
 

@@ -157,6 +157,190 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/StartGameInput"
+              },
+              "examples": {
+                "quick_physical": {
+                  "summary": "Criação Rápida física com arma equipada e alternativa utilitária",
+                  "value": {
+                    "idempotencyKey": "start-quick-physical-001",
+                    "playerMode": "create", "playerRef": "kael", "playerDisplayName": "Kael",
+                    "worldMode": "create", "worldRef": "fronteira-cinzenta", "worldName": "Fronteira Cinzenta",
+                    "worldConfiguration": {
+                      "schemaVersion": 1, "genres": ["fantasy"], "setting": "Fronteira em ruínas", "era": "medieval",
+                      "technologyLevel": { "grade": "preindustrial" }, "magicLevel": { "grade": "rare" }, "worldTone": ["adventure"]
+                    },
+                    "campaignRef": "vigilia", "campaignName": "A Vigília",
+                    "campaignConfiguration": {
+                      "schemaVersion": 1, "difficulty": { "preset": "standard" }, "progressionPace": "standard",
+                      "narrativeTone": ["heroic"], "focus": ["exploration"], "playerFreedom": "open", "consequenceLevel": "moderate",
+                      "classModel": { "mode": "identity", "startingClass": "optional", "progressionBasis": ["content"], "description": "Classes são identidades." }
+                    },
+                    "protagonist": {
+                      "code": "kael", "name": "Kael", "actorType": "character", "className": "Batedor",
+                      "primaryAttributes": { "strength": 10, "vitality": 10, "agility": 10, "dexterity": 10, "intelligence": 10, "wisdom": 10, "perception": 10, "willpower": 10, "luck": 10 }
+                    },
+                    "initialContentPackages": [
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "simple_melee_weapon",
+                          "contentType": "weapon", "code": "kael-blade", "name": "Lâmina de Kael",
+                          "description": "Lâmina leve inicial.", "presentation": {}, "tags": ["starter"], "status": "active"
+                        }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "basic_mobility_skill",
+                          "contentType": "skill", "code": "agile-step", "name": "Passo Ágil",
+                          "description": "Movimento rápido.", "presentation": {}, "tags": ["starter"], "status": "active"
+                        },
+                        "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
+                      }
+                    ],
+                    "initialInventory": [
+                      { "scope": "world", "contentType": "weapon", "code": "kael-blade", "quantity": 1, "entryRefs": ["kael-blade-1"], "equip": { "targetSlotRef": "main_hand" } }
+                    ],
+                    "initialPremise": "Kael encontra sinais de uma ameaça na fronteira."
+                  }
+                },
+                "quick_magical": {
+                  "summary": "Criação Rápida mágica com ataque e cura; inventário vazio coerente",
+                  "value": {
+                    "idempotencyKey": "start-quick-magical-001",
+                    "playerMode": "create", "playerRef": "lyra", "playerDisplayName": "Lyra",
+                    "worldMode": "create", "worldRef": "ilhas-arcanas", "worldName": "Ilhas Arcanas",
+                    "worldConfiguration": {
+                      "schemaVersion": 1, "genres": ["fantasy"], "setting": "Arquipélago arcano", "era": "medieval",
+                      "technologyLevel": { "grade": "preindustrial" }, "magicLevel": { "grade": "high" }, "worldTone": ["mysterious"]
+                    },
+                    "campaignRef": "eco-azul", "campaignName": "O Eco Azul",
+                    "campaignConfiguration": {
+                      "schemaVersion": 1, "difficulty": { "preset": "standard" }, "progressionPace": "standard",
+                      "narrativeTone": ["mysterious"], "focus": ["investigation"], "playerFreedom": "open", "consequenceLevel": "moderate",
+                      "classModel": { "mode": "identity", "startingClass": "optional", "progressionBasis": ["content"], "description": "Classes são identidades." }
+                    },
+                    "protagonist": {
+                      "code": "lyra", "name": "Lyra", "actorType": "character", "className": "Arcanista",
+                      "primaryAttributes": { "strength": 10, "vitality": 10, "agility": 10, "dexterity": 10, "intelligence": 10, "wisdom": 10, "perception": 10, "willpower": 10, "luck": 10 }
+                    },
+                    "initialContentPackages": [
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "basic_offensive_spell",
+                          "blueprintOptions": { "damageElement": "ice" },
+                          "contentType": "spell", "code": "ice-shard", "name": "Estilhaço Gélido",
+                          "description": "Projétil mágico de gelo.", "presentation": {}, "tags": ["starter"], "status": "active"
+                        },
+                        "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "basic_healing_spell",
+                          "contentType": "spell", "code": "minor-mend", "name": "Cura Menor",
+                          "description": "Restauração pessoal.", "presentation": {}, "tags": ["starter"], "status": "active"
+                        },
+                        "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
+                      }
+                    ],
+                    "initialInventory": [],
+                    "initialPremise": "Um farol arcano volta a emitir sinais."
+                  }
+                },
+                "quick_hybrid": {
+                  "summary": "Criação Rápida híbrida furtiva com Bota Élfica, Véu das Trevas e detecção",
+                  "value": {
+                    "idempotencyKey": "start-quick-hybrid-001",
+                    "playerMode": "create", "playerRef": "nara", "playerDisplayName": "Nara",
+                    "worldMode": "create", "worldRef": "reinos-do-veu", "worldName": "Reinos do Véu",
+                    "worldConfiguration": {
+                      "schemaVersion": 1, "genres": ["fantasy"], "setting": "Reinos entrelaçados", "era": "medieval",
+                      "technologyLevel": { "grade": "preindustrial" }, "magicLevel": { "grade": "common" }, "worldTone": ["adventure"]
+                    },
+                    "campaignRef": "portal-partido", "campaignName": "O Portal Partido",
+                    "campaignConfiguration": {
+                      "schemaVersion": 1, "difficulty": { "preset": "standard" }, "progressionPace": "standard",
+                      "narrativeTone": ["heroic"], "focus": ["exploration"], "playerFreedom": "open", "consequenceLevel": "moderate",
+                      "classModel": { "mode": "identity", "startingClass": "optional", "progressionBasis": ["content"], "description": "Classes são identidades." }
+                    },
+                    "protagonist": {
+                      "code": "nara", "name": "Nara", "actorType": "character", "className": "Guardião Arcano",
+                      "primaryAttributes": { "strength": 10, "vitality": 10, "agility": 10, "dexterity": 10, "intelligence": 10, "wisdom": 10, "perception": 10, "willpower": 10, "luck": 10 }
+                    },
+                    "initialContentPackages": [
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "simple_melee_weapon",
+                          "contentType": "weapon", "code": "nara-blade", "name": "Espada Rúnica",
+                          "description": "Espada leve inicial.", "presentation": {}, "tags": ["starter"], "status": "active"
+                        }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "basic_offensive_spell",
+                          "contentType": "spell", "code": "arcane-bolt", "name": "Raio Arcano",
+                          "description": "Ataque mágico inicial.", "presentation": {}, "tags": ["starter"], "status": "active"
+                        },
+                        "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "basic_healing_consumable",
+                          "contentType": "consumable", "code": "healing-potion", "name": "Poção de Cura",
+                          "description": "Consumível de cura inicial.", "presentation": {}, "tags": ["starter"], "status": "active"
+                        }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "secondary_modifier_equipment",
+                          "blueprintOptions": {
+                            "equipmentSlot": "feet", "unitWeight": 1,
+                            "secondaryModifiers": { "evasion": 2, "movementSpeed": 1, "physicalDefense": 2, "magicalDefense": 5 }
+                          },
+                          "contentType": "armor", "code": "elven-boots", "name": "Bota Élfica",
+                          "description": "Botas leves com quatro modificadores enquanto equipadas.", "presentation": {}, "tags": ["starter", "stealth"], "status": "active"
+                        }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "shadow_wrapped_status",
+                          "contentType": "status_effect", "code": "shadow-wrapped", "name": "Envolto em Sombras",
+                          "description": "Status de sombras que melhora furtividade sem invisibilidade.", "presentation": {}, "tags": ["shadow_wrapped", "stealth"], "status": "active"
+                        }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "veil_of_darkness_spell",
+                          "blueprintOptions": { "linkedStatusCode": "shadow-wrapped" },
+                          "contentType": "spell", "code": "veil-of-darkness", "name": "Véu das Trevas",
+                          "description": "Aplica Envolto em Sombras ao próprio conjurador.", "presentation": {}, "tags": ["shadow", "stealth"], "status": "active"
+                        },
+                        "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "starterBlueprint": "detect_hidden_skill",
+                          "contentType": "skill", "code": "detect-hidden", "name": "Percepção de Ocultos",
+                          "description": "Capacidade informativa de detecção; não concede movimento.", "presentation": {}, "tags": ["detect_hidden", "informational"], "status": "active"
+                        },
+                        "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
+                      },
+                      {
+                        "definition": {
+                          "mode": "create", "scope": "world", "contentType": "other", "code": "travel-journal", "name": "Diário de Viagem",
+                          "description": "Item narrativo sem bônus.", "profile": null,
+                          "inventorySpec": { "schemaVersion": 1, "rulesetCode": "core-v1", "inventoryRulesCode": "core-v1-inventory-v1", "unitWeight": 1, "stacking": { "mode": "unique" } },
+                          "presentation": {}, "tags": ["narrative"], "status": "active"
+                        }
+                      }
+                    ],
+                    "initialInventory": [
+                      { "scope": "world", "contentType": "weapon", "code": "nara-blade", "quantity": 1, "entryRefs": ["nara-blade-1"], "equip": { "targetSlotRef": "main_hand" } },
+                      { "scope": "world", "contentType": "armor", "code": "elven-boots", "quantity": 1, "entryRefs": ["elven-boots-1"], "equip": { "targetSlotRef": "feet" } },
+                      { "scope": "world", "contentType": "consumable", "code": "healing-potion", "quantity": 2, "entryRefs": ["healing-potions"] },
+                      { "scope": "world", "contentType": "other", "code": "travel-journal", "quantity": 1, "entryRefs": ["travel-journal-1"] }
+                    ],
+                    "initialPremise": "Nara encontra um portal instável sob antigas ruínas."
+                  }
+                }
               }
             }
           }
@@ -1187,10 +1371,13 @@
               "schema": { "$ref": "#/components/schemas/ManageEncounterInput" },
               "examples": {
                 "create": { "value": { "operation": "create", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-create-001", "partySideRef": "party", "participants": [{ "actorRef": "ralph", "sideRef": "party", "zone": "near" }, { "actorRef": "goblin-scout", "sideRef": "hostiles", "zone": "medium" }] } },
-                "create_assisted": { "summary": "Criação assistida com relações e zonas derivadas", "value": { "operation": "create", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-assisted-001", "setupMode": "assisted", "encounterKind": "combat", "partyActorRefs": ["ralph", "lyra"], "hostileActorRefs": ["goblin-scout"], "neutralActorRefs": ["merchant"], "objective": "Proteger o mercador e derrotar os batedores.", "engagementPreference": "immediate", "protectedActorRefs": ["lyra"], "environmentalContext": { "summary": "Ponte estreita sob chuva.", "tags": ["bridge", "rain"] } } },
+                "create_assisted": { "summary": "Criação assistida com relações, zonas e contexto autoritativo de furtividade", "value": { "operation": "create", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-assisted-001", "setupMode": "assisted", "encounterKind": "combat", "partyActorRefs": ["ralph", "lyra"], "hostileActorRefs": ["goblin-scout"], "neutralActorRefs": ["merchant"], "objective": "Proteger o mercador e derrotar os batedores.", "engagementPreference": "immediate", "protectedActorRefs": ["lyra"], "environmentalContext": { "summary": "Ponte estreita sob chuva.", "tags": ["bridge", "rain"], "lighting": "dim", "cover": "partial", "ambientNoise": "loud" } } },
                 "load": { "value": { "operation": "load", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush" } },
                 "resolve_beat_attack": { "summary": "Ataque", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-attack-001", "expectedStateVersion": 1, "intent": { "actorRef": "ralph", "objective": "attack_scout", "narrative": "Ralph ataca o batedor.", "resolutionPolicy": "atomic", "components": [{ "type": "attack", "inventoryEntryRef": "starter-dagger-1", "targetRefs": ["goblin-scout"] }] }, "npcDirectives": [] } },
                 "resolve_beat_cast": { "summary": "Magia", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-cast-001", "expectedStateVersion": 2, "intent": { "actorRef": "ralph", "objective": "cast_spark", "narrative": "Ralph conjura Centelha Ígnea.", "resolutionPolicy": "atomic", "components": [{ "type": "cast", "contentRef": { "scope": "campaign", "contentType": "spell", "code": "centelha-ignea", "versionNumber": 1 }, "targetRefs": ["goblin-scout"] }] }, "npcDirectives": [] } },
+                "resolve_beat_hide": { "summary": "Ocultação oposta à detecção de cada observador", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-hide-001", "expectedStateVersion": 3, "intent": { "actorRef": "ralph", "objective": "hide_from_scouts", "narrative": "Ralph usa as sombras da ponte para se ocultar.", "resolutionPolicy": "atomic", "components": [{ "type": "hide" }] }, "npcDirectives": [] } },
+                "resolve_beat_sneak_move": { "summary": "Aproximação furtiva entre faixas sem teletransporte", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-sneak-001", "expectedStateVersion": 4, "intent": { "actorRef": "ralph", "objective": "approach_hidden", "narrative": "Ralph avança cuidadosamente sem se expor.", "resolutionPolicy": "atomic", "components": [{ "type": "sneak_move", "destination": "near", "pace": "careful" }] }, "npcDirectives": [] } },
+                "resolve_beat_surprise_attack": { "summary": "Ataque que só recebe vantagem se o alvo continuar unaware", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-surprise-001", "expectedStateVersion": 5, "intent": { "actorRef": "ralph", "objective": "surprise_scout", "narrative": "Ralph ataca a partir da ocultação confirmada.", "resolutionPolicy": "atomic", "components": [{ "type": "attack", "inventoryEntryRef": "starter-dagger-1", "targetRefs": ["goblin-scout"] }] }, "npcDirectives": [] } },
                 "resolve_beat_use_item": { "summary": "Item condicionado por HP com fallback fechado", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-item-001", "expectedStateVersion": 3, "intent": { "actorRef": "ralph", "objective": "recover", "narrative": "Ralph usa a poção apenas se estiver ferido; caso contrário, defende.", "resolutionPolicy": "atomic", "components": [{ "type": "use_item", "inventoryEntryRef": "healing-potion-1", "targetRefs": ["ralph"], "when": { "resource": "hp", "operator": "at_or_below_percent", "percent": 25 }, "fallback": "defend" }] }, "npcDirectives": [] } },
                 "resolve_automatic_safe": { "summary": "Automático até decisão/terminal, preservando recursos", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "automatic-safe-001", "expectedStateVersion": 4, "policy": { "actorRef": "ralph", "mode": "until_decision", "strategy": "protect_target", "objective": "Proteger Lyra e vencer sem poções.", "targetPriority": "lowest_hp_hostile", "protectedActorRefs": ["lyra"], "maximumBeats": 12, "resourcePolicy": { "allowCommonConsumables": false, "allowRareConsumables": false, "allowLimitedAbilities": false, "preserveManaPercent": 50, "preserveSpPercent": 50, "stopBelowHpPercent": 30, "stopIfProtectedActorBelowHpPercent": 35, "allowFlee": false, "allowTargetSwitch": true, "allowEnvironmentalInteraction": false } } } },
                 "continue_after_technical_budget": { "summary": "Nova chamada automática após parada técnica", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "automatic-safe-002", "expectedStateVersion": 19, "policy": { "actorRef": "ralph", "mode": "until_decision", "strategy": "balanced", "objective": "Continuar até decisão real.", "targetPriority": "nearest_hostile", "maximumBeats": 12 } } },
@@ -1485,6 +1672,8 @@
           { "type": "object", "additionalProperties": false, "required": ["type", "targetRef"], "properties": { "type": { "const": "assist" }, "essential": { "type": "boolean" }, "when": { "$ref": "#/components/schemas/EncounterBeatCondition" }, "fallback": { "type": "string", "enum": ["skip", "defend"] }, "targetRef": { "$ref": "#/components/schemas/Code" } } },
           { "type": "object", "additionalProperties": false, "required": ["type"], "properties": { "type": { "const": "flee" }, "essential": { "type": "boolean" }, "when": { "$ref": "#/components/schemas/EncounterBeatCondition" }, "fallback": { "type": "string", "enum": ["skip", "defend"] }, "destination": { "type": "string", "enum": ["far", "out_of_range"] } } },
           { "type": "object", "additionalProperties": false, "required": ["type"], "properties": { "type": { "const": "observe" }, "essential": { "type": "boolean" }, "when": { "$ref": "#/components/schemas/EncounterBeatCondition" }, "fallback": { "type": "string", "enum": ["skip", "defend"] }, "targetRef": { "$ref": "#/components/schemas/Code" } } },
+          { "type": "object", "additionalProperties": false, "required": ["type"], "properties": { "type": { "const": "hide" }, "essential": { "type": "boolean" }, "when": { "$ref": "#/components/schemas/EncounterBeatCondition" }, "fallback": { "type": "string", "enum": ["skip", "defend"] } } },
+          { "type": "object", "additionalProperties": false, "required": ["type", "destination"], "properties": { "type": { "const": "sneak_move" }, "essential": { "type": "boolean" }, "when": { "$ref": "#/components/schemas/EncounterBeatCondition" }, "fallback": { "type": "string", "enum": ["skip", "defend"] }, "destination": { "type": "string", "enum": ["engaged", "near", "medium", "far", "out_of_range"] }, "pace": { "type": "string", "enum": ["careful", "normal", "fast"] } } },
           { "type": "object", "additionalProperties": false, "required": ["type", "targetRef"], "properties": { "type": { "const": "interact" }, "essential": { "type": "boolean" }, "when": { "$ref": "#/components/schemas/EncounterBeatCondition" }, "fallback": { "type": "string", "enum": ["skip", "defend"] }, "targetRef": { "$ref": "#/components/schemas/Code" }, "description": { "type": "string", "minLength": 1, "maxLength": 500 } } },
           { "type": "object", "additionalProperties": false, "required": ["type", "description"], "properties": { "type": { "const": "improvise" }, "essential": { "type": "boolean" }, "when": { "$ref": "#/components/schemas/EncounterBeatCondition" }, "fallback": { "type": "string", "enum": ["skip", "defend"] }, "description": { "type": "string", "minLength": 1, "maxLength": 500 }, "targetRef": { "$ref": "#/components/schemas/Code" } } },
           { "type": "object", "additionalProperties": false, "required": ["type", "inventoryEntryRef"], "properties": { "type": { "const": "use_item" }, "essential": { "type": "boolean" }, "when": { "$ref": "#/components/schemas/EncounterBeatCondition" }, "fallback": { "type": "string", "enum": ["skip", "defend"] }, "inventoryEntryRef": { "$ref": "#/components/schemas/Code" }, "targetRefs": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } } } },
@@ -1517,7 +1706,10 @@
         "type": "object", "additionalProperties": false, "required": ["summary"],
         "properties": {
           "summary": { "type": "string", "minLength": 1, "maxLength": 500 },
-          "tags": { "type": "array", "maxItems": 12, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } }
+          "tags": { "type": "array", "maxItems": 12, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
+          "lighting": { "type": "string", "enum": ["bright", "normal", "dim", "dark", "magical_darkness"], "description": "Default normal." },
+          "cover": { "type": "string", "enum": ["none", "partial", "substantial", "full"], "description": "Default none." },
+          "ambientNoise": { "type": "string", "enum": ["silent", "low", "normal", "loud"], "description": "Default normal." }
         }
       },
       "EncounterAutomaticResourcePolicy": {
@@ -1742,6 +1934,7 @@
           "equippedEntryRefs": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/components/schemas/EncounterRuntimeRef" } },
           "knownContentRefs": { "type": "array", "maxItems": 128, "items": { "type": "object", "additionalProperties": false, "required": ["contentType", "code"], "properties": { "contentType": { "$ref": "#/components/schemas/Code" }, "code": { "$ref": "#/components/schemas/Code" } } } },
           "activeEffects": { "type": "array", "maxItems": 128, "items": { "type": "object", "additionalProperties": false, "required": ["effectRef", "kind", "stacks", "durationType"], "properties": { "effectRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" }, "kind": { "$ref": "#/components/schemas/Code" }, "stacks": { "type": "integer", "minimum": 1 }, "durationType": { "$ref": "#/components/schemas/Code" } } } },
+          "stealth": { "$ref": "#/components/schemas/EncounterPublicStealthState" },
           "preparedActionRefs": { "type": "array", "maxItems": 5, "uniqueItems": true, "items": { "$ref": "#/components/schemas/EncounterRuntimeRef" } },
           "validThreatRefs": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/components/schemas/EncounterRuntimeRef" } },
           "usableActions": {
@@ -1768,11 +1961,11 @@
           "stateVersion": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
           "lifecycleStatus": { "type": "string", "enum": ["awaiting_intent", "awaiting_reaction", "processing_paused", "completion_pending", "completed", "failed", "cancelled"] },
           "objective": { "type": ["string", "null"], "maxLength": 240 },
-          "genericActions": { "type": "array", "minItems": 13, "maxItems": 13, "uniqueItems": true, "items": { "type": "string", "enum": ["move", "defend", "protect", "prepare", "intercept", "assist", "flee", "observe", "interact", "improvise", "use_item", "attack", "cast"] } },
+          "genericActions": { "type": "array", "minItems": 15, "maxItems": 15, "uniqueItems": true, "items": { "type": "string", "enum": ["move", "defend", "protect", "prepare", "intercept", "assist", "flee", "observe", "hide", "sneak_move", "interact", "improvise", "use_item", "attack", "cast"] } },
           "processingLimits": { "type": "object", "additionalProperties": false, "required": ["maximumBeatsPerCall", "maximumComponentsPerBeat", "maximumNpcActionsPerBeat", "maximumEventsPerCheckpoint", "maximumProjectedActions", "maximumSceneBytes", "maximumTransactionDurationMs"], "properties": { "maximumBeatsPerCall": { "type": "integer", "const": 12 }, "maximumComponentsPerBeat": { "type": "integer", "const": 3 }, "maximumNpcActionsPerBeat": { "type": "integer", "const": 4 }, "maximumEventsPerCheckpoint": { "type": "integer", "const": 32 }, "maximumProjectedActions": { "type": "integer", "const": 256 }, "maximumSceneBytes": { "type": "integer", "const": 262144 }, "maximumTransactionDurationMs": { "type": "integer", "const": 30000 } } },
           "mandatoryStopConditions": { "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "maxLength": 100 } },
           "catalogProjection": { "type": "object", "additionalProperties": false, "required": ["status", "sourceActionCount", "detailedActionCount", "omittedBlockedActionCount", "summarizedActorRefs", "summarizedCategories"], "properties": { "status": { "type": "string", "enum": ["complete", "partial"] }, "sourceActionCount": { "type": "integer", "minimum": 0 }, "detailedActionCount": { "type": "integer", "minimum": 0 }, "omittedBlockedActionCount": { "type": "integer", "minimum": 0 }, "summarizedActorRefs": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/components/schemas/EncounterRuntimeRef" } }, "summarizedCategories": { "type": "array", "maxItems": 3, "uniqueItems": true, "items": { "type": "string", "enum": ["attacks", "abilities", "items"] } } } },
-          "environment": { "type": "object", "additionalProperties": false, "required": ["zoneModel", "summary", "tags", "notes"], "properties": { "zoneModel": { "type": "string", "const": "abstract_bands" }, "summary": { "type": ["string", "null"], "maxLength": 500 }, "tags": { "type": "array", "maxItems": 12, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } }, "notes": { "type": "array", "maxItems": 16, "items": { "type": "string", "maxLength": 500 } } } },
+          "environment": { "type": "object", "additionalProperties": false, "required": ["zoneModel", "summary", "tags", "stealthContext", "notes"], "properties": { "zoneModel": { "type": "string", "const": "abstract_bands" }, "summary": { "type": ["string", "null"], "maxLength": 500 }, "tags": { "type": "array", "maxItems": 12, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } }, "stealthContext": { "$ref": "#/components/schemas/EncounterStealthContext" }, "notes": { "type": "array", "maxItems": 16, "items": { "type": "string", "maxLength": 500 } } } },
           "participants": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/components/schemas/EncounterSceneParticipant" } }
         },
         "description": "Cápsula autoritativa fechada, sanitizada e reutilizável somente enquanto stateVersion não mudar. Inclui ações utilizáveis agora, custo, alcance, alvos e blockers sem IDs internos, hashes, seeds ou rolls futuros."
@@ -1782,14 +1975,50 @@
         "required": ["index", "type", "status"],
         "properties": {
           "index": { "type": "integer", "minimum": 0, "maximum": 2 },
-          "type": { "type": "string", "enum": ["move", "defend", "protect", "prepare", "intercept", "assist", "flee", "observe", "interact", "improvise", "use_item", "attack", "cast"] },
+          "type": { "type": "string", "enum": ["move", "defend", "protect", "prepare", "intercept", "assist", "flee", "observe", "hide", "sneak_move", "interact", "improvise", "use_item", "attack", "cast"] },
           "status": { "type": "string", "enum": ["accepted", "modified", "rejected", "conditional"] },
           "code": { "type": "string", "maxLength": 100 },
           "reason": { "type": "string", "maxLength": 300 },
           "field": { "type": "string", "maxLength": 200 },
           "alternative": { "type": "string", "maxLength": 300 },
           "requested": { "type": "string", "maxLength": 2000 },
-          "applied": { "type": "string", "maxLength": 2000 }
+          "applied": { "type": "string", "maxLength": 2000 },
+          "stealth": { "$ref": "#/components/schemas/EncounterPublicStealthResult" }
+        }
+      },
+      "EncounterStealthContext": {
+        "type": "object", "additionalProperties": false,
+        "required": ["lighting", "cover", "ambientNoise"],
+        "properties": {
+          "lighting": { "type": "string", "enum": ["bright", "normal", "dim", "dark", "magical_darkness"] },
+          "cover": { "type": "string", "enum": ["none", "partial", "substantial", "full"] },
+          "ambientNoise": { "type": "string", "enum": ["silent", "low", "normal", "loud"] }
+        }
+      },
+      "EncounterPublicObserverAwareness": {
+        "type": "object", "additionalProperties": false,
+        "required": ["observerActorRef", "awareness", "marginTier"],
+        "properties": {
+          "observerActorRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" },
+          "awareness": { "type": "string", "enum": ["unaware", "suspicious", "detected", "tracking"] },
+          "marginTier": { "type": "string", "enum": ["high_success", "success", "failure", "critical_failure"] }
+        },
+        "description": "Resumo público por observador; nunca expõe rolls ou margem numérica."
+      },
+      "EncounterPublicStealthState": {
+        "type": "object", "additionalProperties": false,
+        "required": ["visibility", "observers"],
+        "properties": {
+          "visibility": { "type": "string", "enum": ["exposed", "obscured", "hidden"] },
+          "observers": { "type": "array", "maxItems": 64, "items": { "$ref": "#/components/schemas/EncounterPublicObserverAwareness" } }
+        }
+      },
+      "EncounterPublicStealthResult": {
+        "type": "object", "additionalProperties": false,
+        "required": ["visibility", "observerResults"],
+        "properties": {
+          "visibility": { "type": "string", "enum": ["exposed", "obscured", "hidden"] },
+          "observerResults": { "type": "array", "maxItems": 64, "items": { "$ref": "#/components/schemas/EncounterPublicObserverAwareness" } }
         }
       },
       "EncounterNpcActionSummary": {
@@ -1798,7 +2027,7 @@
         "properties": {
           "actorRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" },
           "strategy": { "type": "string", "maxLength": 100 },
-          "actionType": { "type": "string", "enum": ["move", "defend", "protect", "prepare", "intercept", "assist", "flee", "observe", "interact", "improvise", "use_item", "attack", "cast"] },
+          "actionType": { "type": "string", "enum": ["move", "defend", "protect", "prepare", "intercept", "assist", "flee", "observe", "hide", "sneak_move", "interact", "improvise", "use_item", "attack", "cast"] },
           "targetRef": { "$ref": "#/components/schemas/EncounterRuntimeRef" }
         }
       },
@@ -2124,7 +2353,7 @@
           "resource": { "type": "string", "enum": ["hp", "mana", "sp"] },
           "amount": { "type": "integer" },
           "attributeCode": { "type": "string", "enum": ["strength", "vitality", "agility", "dexterity", "intelligence", "wisdom", "perception", "willpower", "luck"] },
-          "secondaryCode": { "type": "string", "enum": ["actorPhysicalPower", "actorMagicalPower", "physicalDefense", "magicalDefense", "accuracy", "evasion", "attackSpeedBps", "castingSpeedBps", "criticalChanceBps", "criticalDamageBps", "movementSpeed", "carryingCapacity", "physicalResistanceBps", "magicalResistanceBps", "maxHp", "maxMana", "maxSp"] },
+          "secondaryCode": { "type": "string", "enum": ["actorPhysicalPower", "actorMagicalPower", "physicalDefense", "magicalDefense", "accuracy", "evasion", "stealth", "detection", "attackSpeedBps", "castingSpeedBps", "criticalChanceBps", "criticalDamageBps", "movementSpeed", "carryingCapacity", "physicalResistanceBps", "magicalResistanceBps", "maxHp", "maxMana", "maxSp"] },
           "duration": { "$ref": "#/components/schemas/ContentDuration" },
           "statusRef": { "$ref": "#/components/schemas/Code" },
           "stacking": { "$ref": "#/components/schemas/ContentStacking" },
@@ -2190,7 +2419,7 @@
           "duration": { "$ref": "#/components/schemas/ContentDuration" },
           "stacking": { "$ref": "#/components/schemas/ContentStacking" },
           "grants": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/components/schemas/ContentReference" } },
-          "passiveModifiers": { "type": "array", "minItems": 1, "maxItems": 12, "items": { "type": "object", "additionalProperties": false, "required": ["target", "amount", "sourceRule"], "properties": { "target": { "type": "string", "enum": ["strength", "vitality", "agility", "dexterity", "intelligence", "wisdom", "perception", "willpower", "luck", "actorPhysicalPower", "actorMagicalPower", "physicalDefense", "magicalDefense", "accuracy", "evasion", "attackSpeedBps", "castingSpeedBps", "criticalChanceBps", "criticalDamageBps", "movementSpeed", "carryingCapacity", "physicalResistanceBps", "magicalResistanceBps", "maxHp", "maxMana", "maxSp", "elementalResistanceBps", "hpRegen", "manaRegen", "spRegen", "manaCostBps", "spCostBps", "hpCostBps"] }, "amount": { "type": "integer" }, "sourceRule": { "type": "string", "enum": ["content_intrinsic", "equipped_content", "granted_content", "status_effect", "ruleset"] } } } },
+          "passiveModifiers": { "type": "array", "minItems": 1, "maxItems": 12, "items": { "type": "object", "additionalProperties": false, "required": ["target", "amount", "sourceRule"], "properties": { "target": { "type": "string", "enum": ["strength", "vitality", "agility", "dexterity", "intelligence", "wisdom", "perception", "willpower", "luck", "actorPhysicalPower", "actorMagicalPower", "physicalDefense", "magicalDefense", "accuracy", "evasion", "stealth", "detection", "attackSpeedBps", "castingSpeedBps", "criticalChanceBps", "criticalDamageBps", "movementSpeed", "carryingCapacity", "physicalResistanceBps", "magicalResistanceBps", "maxHp", "maxMana", "maxSp", "elementalResistanceBps", "hpRegen", "manaRegen", "spRegen", "manaCostBps", "spCostBps", "hpCostBps"] }, "amount": { "type": "integer" }, "sourceRule": { "type": "string", "enum": ["content_intrinsic", "equipped_content", "granted_content", "status_effect", "ruleset"] } } } },
           "defense": { "type": "object", "additionalProperties": false, "properties": { "physicalFlatDefense": { "type": "integer", "minimum": 0, "maximum": 300 }, "magicalFlatDefense": { "type": "integer", "minimum": 0, "maximum": 300 }, "physicalResistanceBps": { "type": "integer", "minimum": 0, "maximum": 4000 }, "magicalResistanceBps": { "type": "integer", "minimum": 0, "maximum": 4000 }, "elementalResistanceBps": { "$ref": "#/components/schemas/ElementalResistanceProfile" }, "blockValue": { "type": "integer", "minimum": 0, "maximum": 300 }, "immunities": { "$ref": "#/components/schemas/ContentImmunities" } } },
           "template": { "type": "object", "additionalProperties": false, "required": ["role", "primaryAttributeBudget", "contentRefs", "tags", "limits"], "properties": { "role": { "type": "string", "enum": ["minion", "standard", "elite", "boss"] }, "primaryAttributeBudget": { "type": "integer", "minimum": 1 }, "contentRefs": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/components/schemas/ContentReference" } }, "tags": { "type": "array", "minItems": 1, "maxItems": 24, "items": { "$ref": "#/components/schemas/Code" } }, "limits": { "type": "object", "additionalProperties": false, "required": ["maxContentRefs", "maxActiveAbilities"], "properties": { "maxContentRefs": { "type": "integer", "minimum": 0, "maximum": 32 }, "maxActiveAbilities": { "type": "integer", "minimum": 0, "maximum": 32 } } } } }
         },
@@ -2230,6 +2459,46 @@
           "scope": { "type": "string", "enum": ["world", "campaign"] },
           "code": { "$ref": "#/components/schemas/Code" },
           "contentType": { "$ref": "#/components/schemas/ContentType" },
+          "starterBlueprint": {
+            "type": "string",
+            "enum": [
+              "simple_melee_weapon", "simple_ranged_weapon", "simple_magic_focus",
+              "basic_offensive_spell", "basic_mobility_skill", "basic_healing_spell",
+              "basic_healing_consumable", "starter_body_armor"
+              ,"secondary_modifier_equipment", "shadow_wrapped_status",
+              "veil_of_darkness_spell", "detect_hidden_skill"
+            ],
+            "description": "Preset mecânico seguro para Criação Rápida. O backend deriva profile e inventorySpec."
+          },
+          "blueprintOptions": {
+            "type": "object", "additionalProperties": false,
+            "properties": {
+              "damageElement": {
+                "type": "string",
+                "enum": ["fire", "ice", "lightning", "earth", "wind", "water", "light", "shadow", "poison", "arcane"]
+              },
+              "equipmentSlot": { "type": "string", "enum": ["head", "chest", "hands", "legs", "feet", "body", "accessory"] },
+              "unitWeight": { "type": "integer", "minimum": 0, "maximum": 20 },
+              "secondaryModifiers": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                  "physicalDefense": { "type": "integer", "minimum": -5, "maximum": 5 },
+                  "magicalDefense": { "type": "integer", "minimum": -5, "maximum": 5 },
+                  "accuracy": { "type": "integer", "minimum": -5, "maximum": 5 },
+                  "evasion": { "type": "integer", "minimum": -5, "maximum": 5 },
+                  "stealth": { "type": "integer", "minimum": -5, "maximum": 5 },
+                  "detection": { "type": "integer", "minimum": -5, "maximum": 5 },
+                  "movementSpeed": { "type": "integer", "minimum": -1, "maximum": 1 },
+                  "carryingCapacity": { "type": "integer", "minimum": -50, "maximum": 50 },
+                  "physicalResistanceBps": { "type": "integer", "minimum": -1000, "maximum": 1000 },
+                  "magicalResistanceBps": { "type": "integer", "minimum": -1000, "maximum": 1000 },
+                  "criticalChanceBps": { "type": "integer", "minimum": -1000, "maximum": 1000 }
+                }
+              },
+              "linkedStatusCode": { "$ref": "#/components/schemas/Code" }
+            },
+            "description": "Opções fechadas por blueprint. O backend rejeita opções incompatíveis e deriva profile/inventorySpec."
+          },
           "name": { "type": "string", "minLength": 1, "maxLength": 200 },
           "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
           "profile": { "$ref": "#/components/schemas/CoreV1ContentProfile" },
@@ -2240,7 +2509,7 @@
           "metadata": { "$ref": "#/components/schemas/JsonObject", "description": "Até 4096 bytes UTF-8, profundidade 5 e 30 chaves recursivas." },
           "overridesWorldDefinition": { "type": "boolean" }
         },
-        "description": "create exige a ficha completa. reuse aceita somente mode, scope=world, code e contentType."
+        "description": "create exige identidade completa e, para conteúdo customizado, profile/inventorySpec. Com starterBlueprint, omita profile/inventorySpec: o backend os deriva. reuse aceita somente mode, scope=world, code e contentType."
       },
       "InitialActorContentLink": {
         "type": "object",
@@ -2372,7 +2641,7 @@
       "SecondaryAttributes": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["actorPhysicalPower", "actorMagicalPower", "physicalDefense", "magicalDefense", "accuracy", "evasion", "baseAttackSpeedBps", "baseCastingSpeedBps", "criticalChanceBps", "criticalDamageBps", "movementSpeed", "carryingCapacity", "physicalResistanceBps", "magicalResistanceBps", "elementalResistanceBps", "hpRegen", "manaRegen", "spRegen"],
+        "required": ["actorPhysicalPower", "actorMagicalPower", "physicalDefense", "magicalDefense", "accuracy", "evasion", "stealth", "detection", "baseAttackSpeedBps", "baseCastingSpeedBps", "criticalChanceBps", "criticalDamageBps", "movementSpeed", "carryingCapacity", "physicalResistanceBps", "magicalResistanceBps", "elementalResistanceBps", "hpRegen", "manaRegen", "spRegen"],
         "properties": {
           "actorPhysicalPower": { "type": "integer", "minimum": 0 },
           "actorMagicalPower": { "type": "integer", "minimum": 0 },
@@ -2380,6 +2649,8 @@
           "magicalDefense": { "type": "integer", "minimum": 0 },
           "accuracy": { "type": "integer", "minimum": 0 },
           "evasion": { "type": "integer", "minimum": 0 },
+          "stealth": { "type": "integer", "minimum": 0, "maximum": 2147483647, "description": "Score mecânico bruto RC1.3; não é uma chance percentual." },
+          "detection": { "type": "integer", "minimum": 0, "maximum": 2147483647, "description": "Score mecânico bruto RC1.3; não é uma chance percentual." },
           "baseAttackSpeedBps": { "type": "integer", "minimum": 1 },
           "baseCastingSpeedBps": { "type": "integer", "minimum": 1 },
           "criticalChanceBps": { "type": "integer", "minimum": 0 },
@@ -2657,14 +2928,33 @@
       "ActorReadiness": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["status", "canStartEncounter", "usableActions", "blockingReasons", "narrativeContentCount", "incompleteContentRefs"],
+        "required": [
+          "status", "canBeginMechanically", "canStartEncounter", "hasUsableOffensiveAction",
+          "hasDefensiveAlternative", "hasUtilityCapability", "hasStealthCapability",
+          "hasDetectionCapability", "hasInformationalContent", "inventoryValid", "equipmentValid",
+          "usableActions", "blockingReasons", "narrativeContentCount", "narrativeInventoryItemRefs",
+          "incompleteContentRefs", "stealthContentRefs", "detectionContentRefs", "informationalContentRefs"
+        ],
         "properties": {
           "status": { "type": "string", "enum": ["ready", "narrative_only", "incomplete", "blocked"] },
-          "canStartEncounter": { "type": "boolean" },
+          "canBeginMechanically": { "type": "boolean", "description": "True somente com ação ofensiva utilizável e inventário/equipamento válidos, sem correção essencial." },
+          "canStartEncounter": { "type": "boolean", "description": "Compatibilidade operacional do motor de encontros com ao menos uma ação utilizável." },
+          "hasUsableOffensiveAction": { "type": "boolean", "description": "Existe ataque, magia ou consumível ofensivo utilizável no estado atual." },
+          "hasDefensiveAlternative": { "type": "boolean" },
+          "hasUtilityCapability": { "type": "boolean" },
+          "hasStealthCapability": { "type": "boolean" },
+          "hasDetectionCapability": { "type": "boolean" },
+          "hasInformationalContent": { "type": "boolean", "description": "Conteúdo detect_hidden/inspect/etc. semanticamente classificado; não conta como ofensivo." },
+          "inventoryValid": { "type": "boolean", "description": "Todas as entradas possuem versão e inventorySpec coerentes." },
+          "equipmentValid": { "type": "boolean", "description": "O loadout equipado possui perfis, slots e requisitos coerentes." },
           "usableActions": { "type": "array", "maxItems": 128, "items": { "type": "object", "additionalProperties": false, "required": ["source", "ref", "action"], "properties": { "source": { "type": "string", "enum": ["known_content", "equipped_weapon", "consumable"] }, "ref": { "$ref": "#/components/schemas/Code" }, "action": { "type": "string", "enum": ["cast", "attack", "use_item"] } } } },
           "blockingReasons": { "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "type": "string", "enum": ["actor_not_active", "hp_depleted", "no_usable_starter_action", "starter_action_resource_insufficient", "starter_action_cost_unsupported", "starter_action_requirements_unmet", "starter_action_targeting_unsupported", "mechanical_content_incomplete"] } },
           "narrativeContentCount": { "type": "integer", "minimum": 0 },
-          "incompleteContentRefs": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } }
+          "narrativeInventoryItemRefs": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
+          "incompleteContentRefs": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
+          "stealthContentRefs": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
+          "detectionContentRefs": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } },
+          "informationalContentRefs": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Code" } }
         },
         "description": "Diagnóstico autoritativo do protagonista. Conteúdo narrativo/cosmético não é erro, mas também não conta como ação mecânica inicial."
       },

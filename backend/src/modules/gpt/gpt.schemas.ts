@@ -5,6 +5,11 @@ import {
   validateContentPublicationShape,
 } from '../content/content.schemas.js';
 import {
+  materializeStarterContentBlueprint,
+  STARTER_CONTENT_BLUEPRINT_CODES,
+} from '../content/starter-content-blueprints.js';
+import { CORE_V1_ELEMENTS } from '../rules/core-v1/core-v1.content-mechanics.config.js';
+import {
   CORE_V1_2_TECHNICAL_LEVEL_MAXIMUM,
   CORE_V1_2_XP_STORAGE_MAXIMUM,
   validateInitialPrimaryAttributes,
@@ -222,6 +227,26 @@ const initialDefinitionSchema = z.strictObject({
   scope: z.enum(['world', 'campaign']),
   code: codeSchema,
   contentType: contentTypeSchema,
+  starterBlueprint: z.enum(STARTER_CONTENT_BLUEPRINT_CODES).optional(),
+  blueprintOptions: z.strictObject({
+    damageElement: z.enum(CORE_V1_ELEMENTS).optional(),
+    equipmentSlot: z.enum(['head', 'chest', 'hands', 'legs', 'feet', 'body', 'accessory']).optional(),
+    unitWeight: z.number().int().min(0).max(20).optional(),
+    secondaryModifiers: z.strictObject({
+      physicalDefense: z.number().int().min(-5).max(5).optional(),
+      magicalDefense: z.number().int().min(-5).max(5).optional(),
+      accuracy: z.number().int().min(-5).max(5).optional(),
+      evasion: z.number().int().min(-5).max(5).optional(),
+      stealth: z.number().int().min(-5).max(5).optional(),
+      detection: z.number().int().min(-5).max(5).optional(),
+      movementSpeed: z.number().int().min(-1).max(1).optional(),
+      carryingCapacity: z.number().int().min(-50).max(50).optional(),
+      physicalResistanceBps: z.number().int().min(-1000).max(1000).optional(),
+      magicalResistanceBps: z.number().int().min(-1000).max(1000).optional(),
+      criticalChanceBps: z.number().int().min(-1000).max(1000).optional(),
+    }).optional(),
+    linkedStatusCode: codeSchema.optional(),
+  }).optional(),
   name: z.string().trim().min(1).max(200).optional(),
   description: z.string().trim().min(1).max(2_000).optional(),
   profile: coreV1ContentProfileSchema.nullable().optional(), presentation: contentPresentationSchema.optional(),
@@ -241,7 +266,73 @@ const initialDefinitionSchema = z.strictObject({
     if (value.status !== undefined && value.status !== 'active') {
       context.addIssue({ code: 'custom', path: ['status'], message: 'Initial content publications must be active' });
     }
-    if (value.name !== undefined && value.description !== undefined && value.presentation !== undefined && value.tags !== undefined) {
+    if (value.starterBlueprint !== undefined) {
+      if (value.profile !== undefined) {
+        context.addIssue({ code: 'custom', path: ['profile'], message: 'Built-in starter blueprints derive the mechanical profile' });
+      }
+      if (value.inventorySpec !== undefined) {
+        context.addIssue({ code: 'custom', path: ['inventorySpec'], message: 'Built-in starter blueprints derive the inventory spec' });
+      }
+      if (value.blueprintOptions?.damageElement !== undefined
+        && !['simple_magic_focus', 'basic_offensive_spell'].includes(value.starterBlueprint)) {
+        context.addIssue({
+          code: 'custom', path: ['blueprintOptions', 'damageElement'],
+          message: 'damageElement is supported only by magical attack blueprints',
+        });
+      }
+      const equipmentOptions = value.blueprintOptions?.equipmentSlot !== undefined
+        || value.blueprintOptions?.unitWeight !== undefined
+        || value.blueprintOptions?.secondaryModifiers !== undefined;
+      if (equipmentOptions && value.starterBlueprint !== 'secondary_modifier_equipment') {
+        context.addIssue({
+          code: 'custom', path: ['blueprintOptions'],
+          message: 'Equipment options are supported only by secondary_modifier_equipment',
+        });
+      }
+      if (value.blueprintOptions?.linkedStatusCode !== undefined
+        && value.starterBlueprint !== 'veil_of_darkness_spell') {
+        context.addIssue({
+          code: 'custom', path: ['blueprintOptions', 'linkedStatusCode'],
+          message: 'linkedStatusCode is supported only by veil_of_darkness_spell',
+        });
+      }
+      if (value.name !== undefined && value.description !== undefined
+        && value.presentation !== undefined && value.tags !== undefined) {
+        const blueprint = materializeStarterContentBlueprint({
+          starterBlueprint: value.starterBlueprint,
+          code: value.code,
+          name: value.name,
+          ...(value.blueprintOptions?.damageElement === undefined
+            ? {}
+            : { damageElement: value.blueprintOptions.damageElement }),
+          ...(value.blueprintOptions?.equipmentSlot === undefined
+            ? {}
+            : { equipmentSlot: value.blueprintOptions.equipmentSlot }),
+          ...(value.blueprintOptions?.unitWeight === undefined
+            ? {}
+            : { unitWeight: value.blueprintOptions.unitWeight }),
+          ...(value.blueprintOptions?.secondaryModifiers === undefined
+            ? {}
+            : { secondaryModifiers: value.blueprintOptions.secondaryModifiers }),
+          ...(value.blueprintOptions?.linkedStatusCode === undefined
+            ? {}
+            : { linkedStatusCode: value.blueprintOptions.linkedStatusCode }),
+        });
+        if (blueprint.contentType !== value.contentType) {
+          context.addIssue({
+            code: 'custom', path: ['contentType'],
+            message: `Must be ${blueprint.contentType} for starterBlueprint ${value.starterBlueprint}`,
+          });
+        } else {
+          validateContentPublicationShape({
+            contentType: value.contentType, code: value.code, name: value.name, description: value.description,
+            profile: blueprint.profile, presentation: value.presentation, tags: value.tags,
+          }, context);
+        }
+      }
+    } else if (value.blueprintOptions !== undefined) {
+      context.addIssue({ code: 'custom', path: ['blueprintOptions'], message: 'Requires starterBlueprint' });
+    } else if (value.name !== undefined && value.description !== undefined && value.presentation !== undefined && value.tags !== undefined) {
       validateContentPublicationShape({
         contentType: value.contentType, code: value.code, name: value.name, description: value.description,
         profile: value.profile, presentation: value.presentation, tags: value.tags,
@@ -249,7 +340,7 @@ const initialDefinitionSchema = z.strictObject({
     }
   } else {
     if (value.scope !== 'world') context.addIssue({ code: 'custom', path: ['scope'], message: 'Reused content must have world scope' });
-    [...createFields, 'profile', 'inventorySpec', 'metadata', 'overridesWorldDefinition'].forEach((field) => {
+    [...createFields, 'starterBlueprint', 'blueprintOptions', 'profile', 'inventorySpec', 'metadata', 'overridesWorldDefinition'].forEach((field) => {
       if (value[field as keyof typeof value] !== undefined) context.addIssue({ code: 'custom', path: [field], message: 'Not allowed when mode is reuse' });
     });
   }
@@ -361,10 +452,19 @@ export const startGameSchema = z.strictObject({
   });
 
   const inventoryRefs = new Set<string>();
+  const inventoryContent = new Set<string>();
   value.initialInventory?.forEach((item, index) => {
     const exists = value.initialContentPackages.some((candidate) => candidate.definition.scope === item.scope
       && candidate.definition.contentType === item.contentType && candidate.definition.code === item.code);
     if (!exists) context.addIssue({ code: 'custom', path: ['initialInventory', index, 'code'], message: 'Initial inventory content must be resolved by initialContentPackages' });
+    const contentKey = `${item.scope}:${item.contentType}:${item.code}`;
+    if (inventoryContent.has(contentKey)) {
+      context.addIssue({
+        code: 'custom', path: ['initialInventory', index, 'code'],
+        message: 'Initial inventory must aggregate each content reference into one grant',
+      });
+    }
+    inventoryContent.add(contentKey);
     item.entryRefs.forEach((entryRef, refIndex) => {
       if (inventoryRefs.has(entryRef)) context.addIssue({ code: 'custom', path: ['initialInventory', index, 'entryRefs', refIndex], message: 'Initial inventory entry refs must be globally unique' });
       inventoryRefs.add(entryRef);

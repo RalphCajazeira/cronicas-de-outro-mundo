@@ -648,7 +648,22 @@ function validateRequirements(context: ValidationContext, value: unknown, path: 
   return recognized;
 }
 
-function validatePassiveModifiers(context: ValidationContext, value: unknown, path: string): number {
+function modifierEnvelope(target: unknown, tier: number): number {
+  if (typeof target !== 'string') return 0;
+  if (target.endsWith('Bps')) return 1_000 * tier;
+  if (target === 'carryingCapacity') return 50 * tier;
+  if (target === 'maxHp' || target === 'maxMana' || target === 'maxSp') return 10 * tier;
+  if (target === 'movementSpeed') return tier;
+  if (CORE_V1_PRIMARY_ATTRIBUTES.includes(target as never)) return 2 * tier;
+  return 10 * tier;
+}
+
+function validatePassiveModifiers(
+  context: ValidationContext,
+  value: unknown,
+  path: string,
+  tier: number | null,
+): number {
   const modifiers = denseArray(context, value, path, 1, CORE_V1_MAX_PASSIVE_MODIFIERS);
   if (modifiers === null) return 0;
   modifiers.forEach((modifier, index) => {
@@ -658,6 +673,19 @@ function validatePassiveModifiers(context: ValidationContext, value: unknown, pa
     for (const field of ['target', 'amount', 'sourceRule']) requireField(context, input, modifierPath, field);
     enumValue(context, input.target, `${modifierPath}.target`, CORE_V1_PASSIVE_MODIFIER_TARGETS);
     nonZeroInteger(context, input.amount, `${modifierPath}.amount`);
+    if (tier !== null && typeof input.amount === 'number' && Number.isSafeInteger(input.amount)) {
+      const maximum = modifierEnvelope(input.target, tier);
+      if (Math.abs(input.amount) > maximum) {
+        addIssue(
+          context,
+          `${modifierPath}.amount`,
+          'MODIFIER_TIER_ENVELOPE',
+          'Modifier exceeds the closed content-tier envelope',
+          { minimum: -maximum, maximum },
+          input.amount,
+        );
+      }
+    }
     enumValue(context, input.sourceRule, `${modifierPath}.sourceRule`, CORE_V1_MODIFIER_SOURCE_RULES);
   });
   return modifiers.length;
@@ -668,6 +696,7 @@ function validateEffect(
   value: unknown,
   path: string,
   budget: DamageBudget,
+  tier: number | null,
 ): CoreV1Effect | null {
   const input = record(context, value, path, [
     'type', 'damageComponents', 'targeting', 'resource', 'amount', 'attributeCode', 'duration',
@@ -706,6 +735,19 @@ function validateEffect(
     for (const field of ['secondaryCode', 'amount', 'duration']) requireField(context, input, path, field);
     enumValue(context, input.secondaryCode, `${path}.secondaryCode`, CORE_V1_SECONDARY_MODIFIER_CODES);
     nonZeroInteger(context, input.amount, `${path}.amount`);
+    if (tier !== null && typeof input.amount === 'number' && Number.isSafeInteger(input.amount)) {
+      const maximum = modifierEnvelope(input.secondaryCode, tier);
+      if (Math.abs(input.amount) > maximum) {
+        addIssue(
+          context,
+          `${path}.amount`,
+          'MODIFIER_TIER_ENVELOPE',
+          'Temporary modifier exceeds the closed content-tier envelope',
+          { minimum: -maximum, maximum },
+          input.amount,
+        );
+      }
+    }
     const duration = validateDuration(context, input.duration, `${path}.duration`);
     if (duration?.type === 'permanent') addIssue(context, `${path}.duration.type`, 'PERMANENT_BASE_CHANGE', 'Secondary effects cannot permanently change the base value');
   } else if (input.type === 'apply_status') {
@@ -747,10 +789,16 @@ function validateEffect(
   return input as unknown as CoreV1Effect;
 }
 
-function validateEffects(context: ValidationContext, value: unknown, path: string, budget: DamageBudget): number {
+function validateEffects(
+  context: ValidationContext,
+  value: unknown,
+  path: string,
+  budget: DamageBudget,
+  tier: number | null,
+): number {
   const effects = denseArray(context, value, path, 1, CORE_V1_MAX_CONTENT_EFFECTS);
   if (effects === null) return 0;
-  effects.forEach((effect, index) => validateEffect(context, effect, `${path}.${index}`, budget));
+  effects.forEach((effect, index) => validateEffect(context, effect, `${path}.${index}`, budget, tier));
   return effects.length;
 }
 
@@ -1065,8 +1113,8 @@ function validateMechanicalProfile(
   const defense = input.defense === undefined
     ? { definition: null, propertyCount: 0, recognized: false }
     : validateDefense(context, input.defense, 'defense');
-  const effectCount = input.effects === undefined ? 0 : validateEffects(context, input.effects, 'effects', budget);
-  const modifierCount = input.passiveModifiers === undefined ? 0 : validatePassiveModifiers(context, input.passiveModifiers, 'passiveModifiers');
+  const effectCount = input.effects === undefined ? 0 : validateEffects(context, input.effects, 'effects', budget, tier);
+  const modifierCount = input.passiveModifiers === undefined ? 0 : validatePassiveModifiers(context, input.passiveModifiers, 'passiveModifiers', tier);
   const requirementsRecognized = input.requirements === undefined ? false : validateRequirements(context, input.requirements, 'requirements');
   const grants = input.grants === undefined ? null : validateContentReferences(context, input.grants, 'grants', 1);
   const grantCount = grants?.length ?? 0;
