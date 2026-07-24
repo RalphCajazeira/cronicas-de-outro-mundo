@@ -144,6 +144,40 @@ describe('GPT API schemas', () => {
     const mechanical = { ...base.campaignConfiguration, classModel: { mode: 'mechanical', startingClass: 'required', progressionBasis: ['class', 'content'], description: 'Classes mecânicas.' } };
     const coherent = { ...base, campaignConfiguration: mechanical, protagonist: { ...base.protagonist, className: 'Arqueiro Arcano' }, initialContentPackages: [classPackage] };
     expect(startGameSchema.safeParse(coherent).success).toBe(true);
+    const nestedBlueprint = startGameSchema.safeParse({
+      ...coherent,
+      initialContentPackages: [{
+        ...classPackage,
+        definition: {
+          ...classPackage.definition,
+          profile: { ...classPackage.definition.profile, starterBlueprint: 'basic_mobility_skill' },
+        },
+      }],
+    });
+    expect(nestedBlueprint.success).toBe(false);
+    if (!nestedBlueprint.success) {
+      expect(nestedBlueprint.error.issues.map((issue) => issue.path.join('.')))
+        .toContain('initialContentPackages.0.definition.profile.starterBlueprint');
+    }
+    const obsoleteGrants = startGameSchema.safeParse({
+      ...coherent,
+      initialContentPackages: [{
+        ...classPackage,
+        definition: {
+          ...classPackage.definition,
+          profile: {
+            ...classPackage.definition.profile,
+            grants: undefined,
+            contentGrants: [{ contentKind: 'skill', code: 'quiet-step' }],
+          },
+        },
+      }],
+    });
+    expect(obsoleteGrants.success).toBe(false);
+    if (!obsoleteGrants.success) {
+      expect(obsoleteGrants.error.issues.map((issue) => issue.path.join('.')))
+        .toContain('initialContentPackages.0.definition.profile.contentGrants');
+    }
     expect(startGameSchema.safeParse({ ...coherent, protagonist: { ...coherent.protagonist, className: 'Mago' } }).success).toBe(false);
     expect(startGameSchema.safeParse({ ...base, campaignConfiguration: mechanical, initialContentPackages: [] }).success).toBe(false);
 

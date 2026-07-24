@@ -49,6 +49,7 @@ const contract = getOfficialContract() as unknown as Contract;
 const gptInstructions = readFileSync(new URL('../../../../gpt/instructions.md', import.meta.url), 'utf8');
 const readinessKnowledge = readFileSync(new URL('../../../../gpt/knowledge/09-fichas-e-coerencia-mecanica.md', import.meta.url), 'utf8');
 const continuityKnowledge = readFileSync(new URL('../../../../gpt/knowledge/01-narrativa-e-continuidade.md', import.meta.url), 'utf8');
+const powerKnowledge = readFileSync(new URL('../../../../gpt/knowledge/04-fontes-de-poder-classes-magias-e-talentos.md', import.meta.url), 'utf8');
 const methods = new Set(['get', 'post', 'put', 'patch', 'delete']);
 const EXPECTED_CONSEQUENTIAL_BY_OPERATION_ID = {
   checkHealth: false,
@@ -475,7 +476,11 @@ describe('official OpenAPI contract', () => {
     expect(gptInstructions).toContain('Criação Rápida faz até 8 perguntas essenciais');
     expect(gptInstructions).toContain('uma aprovação final');
     expect(gptInstructions).toContain('ação ofensiva utilizável');
-    expect(gptInstructions).toContain('`starterBlueprint` sem profile/inventorySpec');
+    expect(gptInstructions).toContain('blueprint fica em `definition`');
+    expect(gptInstructions).toContain('classe mecânica usa o profile do exemplo com `grants`');
+    expect(gptInstructions).toContain('Nunca use `contentGrants`');
+    expect(powerKnowledge).toContain('Não existe `starterBlueprint` de classe');
+    expect(powerKnowledge).toContain('`starterBlueprint`/`blueprintOptions` nunca entram em `profile`');
     expect(gptInstructions).toContain('`readiness.canBeginMechanically=true`');
     expect(continuityKnowledge).toContain('nunca mais de 8');
     const blueprints = [...readinessKnowledge.matchAll(/```json\s*([\s\S]*?)```/g)]
@@ -536,9 +541,12 @@ describe('official OpenAPI contract', () => {
     ]);
     const operation = operations().find((item) => item.operation.operationId === 'startGame')?.operation;
     const examples = operation?.requestBody?.content?.['application/json']?.examples ?? {};
-    expect(Object.keys(examples).sort()).toEqual(['quick_hybrid', 'quick_magical', 'quick_physical']);
+    expect(Object.keys(examples).sort()).toEqual([
+      'quick_hybrid', 'quick_magical', 'quick_physical', 'quick_shadow_mage',
+    ]);
     for (const example of Object.values(examples)) {
-      expect(startGameSchema.safeParse(example.value).success).toBe(true);
+      const parsed = startGameSchema.safeParse(example.value);
+      expect(parsed.success, parsed.success ? '' : JSON.stringify(parsed.error.issues)).toBe(true);
     }
     expect(contract.components.schemas.InitialContentDefinition?.properties?.blueprintOptions)
       .toMatchObject({ type: 'object', additionalProperties: false });
@@ -547,6 +555,27 @@ describe('official OpenAPI contract', () => {
     expect(JSON.stringify(examples.quick_hybrid?.value)).toContain('"starterBlueprint":"secondary_modifier_equipment"');
     expect(JSON.stringify(examples.quick_hybrid?.value)).toContain('"starterBlueprint":"veil_of_darkness_spell"');
     expect(JSON.stringify(examples.quick_hybrid?.value)).toContain('"starterBlueprint":"detect_hidden_skill"');
+    const shadowMage = JSON.stringify(examples.quick_shadow_mage?.value);
+    expect(shadowMage).toContain('"contentType":"class"');
+    expect(shadowMage).toContain('"rarity":"epic"');
+    expect(shadowMage).toContain('"grants":[{"contentKind":"spell","code":"shadow-bolt"}');
+    expect(shadowMage).not.toContain('"contentGrants"');
+    const shadowMageValue = examples.quick_shadow_mage?.value as {
+      initialContentPackages?: Array<{ definition?: {
+        contentType?: string; starterBlueprint?: string; blueprintOptions?: unknown;
+        profile?: { starterBlueprint?: string; blueprintOptions?: unknown; grants?: unknown[] };
+      } }>;
+    };
+    const classDefinition = shadowMageValue.initialContentPackages?.find(({ definition }) => definition?.contentType === 'class')?.definition;
+    expect(classDefinition).toMatchObject({ contentType: 'class' });
+    expect(classDefinition).not.toHaveProperty('starterBlueprint');
+    expect(classDefinition?.profile?.grants).toHaveLength(4);
+    for (const item of shadowMageValue.initialContentPackages ?? []) {
+      if (item.definition?.profile !== null && item.definition?.profile !== undefined) {
+        expect(item.definition.profile).not.toHaveProperty('starterBlueprint');
+        expect(item.definition.profile).not.toHaveProperty('blueprintOptions');
+      }
+    }
   });
 
   it('publishes one closed manageEncounter Action with resolve_beat and Zod-valid examples', () => {
