@@ -552,6 +552,10 @@ describe('official OpenAPI contract', () => {
       .toMatchObject({ type: 'object', additionalProperties: false });
     expect(contract.components.schemas.InitialContentDefinition?.properties?.blueprintOptions
       ?.properties?.secondaryModifiers).toMatchObject({ type: 'object', additionalProperties: false });
+    expect(contract.components.schemas.InitialContentDefinition?.properties?.blueprintOptions
+      ?.properties?.unitWeight?.description).toContain('somente por secondary_modifier_equipment');
+    expect(contract.components.schemas.InitialContentDefinition?.properties?.blueprintOptions
+      ?.properties?.secondaryModifiers?.description).toContain('sempre materializa contentType=armor');
     expect(JSON.stringify(examples.quick_hybrid?.value)).toContain('"starterBlueprint":"secondary_modifier_equipment"');
     expect(JSON.stringify(examples.quick_hybrid?.value)).toContain('"starterBlueprint":"veil_of_darkness_spell"');
     expect(JSON.stringify(examples.quick_hybrid?.value)).toContain('"starterBlueprint":"detect_hidden_skill"');
