@@ -481,6 +481,32 @@ describe('core-v1 encounter state and initiative', () => {
     expectInvalid(validateCoreV1EncounterState(withDrift), 'OBSERVER_AWARENESS');
   });
 
+  it('accepts exposed aggregate visibility when one observer tracks and another remains unaware', () => {
+    const state = expectOk(createCoreV1EncounterState(encounterInput([
+      participant('hero', 'party'), participant('enemy-a', 'hostile'), participant('enemy-b', 'hostile'),
+    ])));
+    const mixed = {
+      ...state,
+      participants: state.participants.map((entry) => entry.actorRef === 'hero' ? {
+        ...entry,
+        stealthState: {
+          visibility: 'exposed' as const,
+          observerAwareness: [
+            {
+              observerActorRef: 'enemy-a', awareness: 'tracking' as const,
+              margin: -20, marginTier: 'critical_failure' as const,
+            },
+            {
+              observerActorRef: 'enemy-b', awareness: 'unaware' as const,
+              margin: 5, marginTier: 'success' as const,
+            },
+          ],
+        },
+      } : entry),
+    };
+    expect(validateCoreV1EncounterState(mixed).ok).toBe(true);
+  });
+
   it('calculates balanced, fast, slow and surprise initiative and orders same-tick ties deterministically', () => {
     const fast = { ...balanced, agility: 15, perception: 15 };
     const slow = { ...balanced, agility: 6, perception: 6 };

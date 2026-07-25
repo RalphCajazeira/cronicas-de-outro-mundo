@@ -127,11 +127,10 @@ export function coreV13VisibilityFromObservers(
   observerAwareness: readonly CoreV13ObserverAwareness[],
 ): CoreV13EncounterStealthState['visibility'] {
   if (observerAwareness.length === 0) return 'hidden';
-  const unaware = observerAwareness.filter((entry) => entry.awareness === 'unaware').length;
-  if (unaware === observerAwareness.length) return 'hidden';
-  return unaware > 0 || observerAwareness.some((entry) => entry.awareness === 'suspicious')
-    ? 'obscured'
-    : 'exposed';
+  if (observerAwareness.some((entry) => (
+    entry.awareness === 'detected' || entry.awareness === 'tracking'
+  ))) return 'exposed';
+  return observerAwareness.some((entry) => entry.awareness === 'suspicious') ? 'obscured' : 'hidden';
 }
 
 /**
@@ -198,23 +197,47 @@ export function applyCoreV13ObserverAwareness(
   };
 }
 
-export function revealCoreV13Actor(
+export function revealCoreV13ActorToObservers(
   state: CoreV1EncounterState,
   actorRef: string,
+  observerActorRefs: readonly string[],
 ): CoreV1EncounterState {
   const actor = state.participants.find((candidate) => candidate.actorRef === actorRef);
-  if (actor?.stealthState === undefined) return state;
-  const observerAwareness = actor.stealthState.observerAwareness.map((entry) => ({
-    ...entry,
-    awareness: 'tracking' as const,
-    margin: Math.min(entry.margin, -20),
-    marginTier: 'critical_failure' as const,
-  }));
+  if (actor?.stealthState === undefined || observerActorRefs.length === 0) return state;
+  const participantRefs = new Set(state.participants.map((candidate) => candidate.actorRef));
+  const revealedObserverRefs = new Set(observerActorRefs.filter((observerActorRef) => (
+    observerActorRef !== actorRef && participantRefs.has(observerActorRef)
+  )));
+  if (revealedObserverRefs.size === 0) return state;
+  const awarenessByObserver = new Map(
+    actor.stealthState.observerAwareness.map((entry) => [entry.observerActorRef, entry]),
+  );
+  let changed = false;
+  for (const observerActorRef of revealedObserverRefs) {
+    const current = awarenessByObserver.get(observerActorRef);
+    if (current?.awareness === 'tracking') continue;
+    awarenessByObserver.set(observerActorRef, {
+      ...(current ?? { observerActorRef, margin: -20, marginTier: 'critical_failure' as const }),
+      awareness: 'tracking',
+      margin: current === undefined ? -20 : Math.min(current.margin, -20),
+      marginTier: 'critical_failure',
+    });
+    changed = true;
+  }
+  if (!changed) return state;
+  const observerAwareness = [...awarenessByObserver.values()]
+    .sort((left, right) => left.observerActorRef.localeCompare(right.observerActorRef));
   return {
     ...state,
     stateVersion: state.stateVersion + 1,
     participants: state.participants.map((candidate) => candidate.actorRef === actorRef
-      ? { ...candidate, stealthState: { visibility: 'exposed', observerAwareness } }
+      ? {
+        ...candidate,
+        stealthState: {
+          visibility: coreV13VisibilityFromObservers(observerAwareness),
+          observerAwareness,
+        },
+      }
       : candidate),
   };
 }
