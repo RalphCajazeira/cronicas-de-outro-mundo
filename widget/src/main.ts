@@ -1,8 +1,10 @@
 import { App } from '@modelcontextprotocol/ext-apps';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createInitialState, reduceAppState, type AppState } from './app-state.js';
 import { renderApp } from './render.js';
-import { parseGameContextToolResult } from './tool-result.js';
+import {
+  GameContextToolResultError,
+  parseGameContextToolResult,
+} from './tool-result.js';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (root === null) throw new Error('Widget root not found');
@@ -22,8 +24,8 @@ function paint(): void {
   if (state !== null) root!.innerHTML = renderApp(state);
 }
 
-function applyToolResult(result: CallToolResult): void {
-  const context = parseGameContextToolResult(result);
+function applyToolResult(input: unknown): void {
+  const context = parseGameContextToolResult(input);
   state = state === null
     ? createInitialState(context)
     : reduceAppState(state, { type: 'APPLY_CONTEXT', context });
@@ -39,15 +41,24 @@ function fail(message: string): void {
   paint();
 }
 
-app.addEventListener('toolresult', (result) => {
+function reportSafeContractDiagnostic(error: unknown): void {
+  if (!(error instanceof GameContextToolResultError) || error.diagnostics === undefined) return;
+  console.error('[cronicas-widget] toolresult contract diagnostic', {
+    code: error.code,
+    diagnostics: error.diagnostics,
+  });
+}
+
+const handleToolResult = (input: unknown): void => {
   try {
-    applyToolResult(result);
+    applyToolResult(input);
   } catch (error) {
+    reportSafeContractDiagnostic(error);
     fail(error instanceof Error ? error.message : 'Não foi possível interpretar o contexto público.');
   }
-});
+};
 
-root.addEventListener('click', (event) => {
+const handleClick = (event: Event): void => {
   const target = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('button[data-action]') : null;
   if (target === null || state === null) return;
 
@@ -79,7 +90,16 @@ root.addEventListener('click', (event) => {
       fail('A conexão de demonstração não está disponível neste ambiente.');
     });
   }
-});
+};
+
+app.addEventListener('toolresult', handleToolResult);
+root.addEventListener('click', handleClick);
+
+window.addEventListener('pagehide', () => {
+  app.removeEventListener('toolresult', handleToolResult);
+  root.removeEventListener('click', handleClick);
+  void app.close();
+}, { once: true });
 
 root.innerHTML = '<div class="loading-state" role="status">Abrindo o portal…</div>';
 void app.connect().catch(() => {

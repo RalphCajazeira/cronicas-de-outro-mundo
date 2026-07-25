@@ -21,7 +21,7 @@ async function startPreview(): Promise<void> {
   });
   await client.connect(new StreamableHTTPClientTransport(new URL('/mcp', window.location.origin)));
 
-  const resource = await client.readResource({ uri: 'ui://game/home/v2.html' });
+  const resource = await client.readResource({ uri: 'ui://game/home/v3.html' });
   const htmlContent = resource.contents.find((content) => 'text' in content);
   if (htmlContent === undefined || !('text' in htmlContent)) throw new Error('Widget resource did not return HTML');
 

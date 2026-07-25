@@ -19,8 +19,9 @@ import {
 } from '../dto/game-context.dto.js';
 import type { WidgetAssets } from '../resources/widget-assets.js';
 
-// v2 intentionally invalidates hosts that cache an earlier inline widget bundle by URI.
-export const HOME_RESOURCE_URI = 'ui://game/home/v2.html';
+// v3 intentionally invalidates hosts that cache an earlier inline widget bundle by URI.
+export const HOME_RESOURCE_URI = 'ui://game/home/v3.html';
+export const PREVIOUS_HOME_RESOURCE_URI = 'ui://game/home/v2.html';
 export const LEGACY_HOME_RESOURCE_URI = 'ui://game/home/v1.html';
 export const LOAD_GAME_CONTEXT_TOOL = 'loadGameContext';
 export const CONNECT_FIXTURE_ACCOUNT_TOOL = 'connectFixtureAccount';
@@ -117,6 +118,7 @@ export function createChatGptAppServer(dependencies: ChatGptAppServerDependencie
         },
         _meta: {
           ui: {
+            resourceUri: HOME_RESOURCE_URI,
             visibility: ['app'],
           },
         },
@@ -166,6 +168,7 @@ export function createChatGptAppServer(dependencies: ChatGptAppServerDependencie
   };
 
   registerHomeResource('Crônicas de Outro Mundo — Início', HOME_RESOURCE_URI);
+  registerHomeResource('Crônicas de Outro Mundo — Início (compatibilidade v2)', PREVIOUS_HOME_RESOURCE_URI);
   registerHomeResource('Crônicas de Outro Mundo — Início (compatibilidade v1)', LEGACY_HOME_RESOURCE_URI);
 
   return server;
