@@ -183,4 +183,20 @@ describe('starter content blueprints', () => {
     });
     expect(JSON.stringify([veil.profile, detection.profile])).not.toContain('"type":"movement"');
   });
+
+  it('keeps canonical mechanical tags owned by only the three tagged blueprints', () => {
+    const tagsByBlueprint = new Map([
+      ['shadow_wrapped_status', ['shadow_wrapped', 'stealth']],
+      ['veil_of_darkness_spell', ['shadow', 'stealth']],
+      ['detect_hidden_skill', ['detect_hidden', 'informational']],
+    ]);
+    for (const starterBlueprint of STARTER_CONTENT_BLUEPRINT_CODES) {
+      const materialized = materializeStarterContentBlueprint({
+        starterBlueprint,
+        code: `tags-${starterBlueprint.replaceAll('_', '-')}`,
+        name: `Tags ${starterBlueprint}`,
+      });
+      expect(materialized.profile.tags).toEqual(tagsByBlueprint.get(starterBlueprint));
+    }
+  });
 });

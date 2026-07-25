@@ -463,7 +463,7 @@ export const prismaGptRepository: GptRepository = {
               profile: starterBlueprint?.profile ?? definitionInput.profile,
               inventorySpec: starterBlueprint?.inventorySpec ?? definitionInput.inventorySpec,
               presentation: definitionInput.presentation ?? {},
-              tags: definitionInput.tags ?? [], status: ContentStatus.ACTIVE,
+              tags: starterBlueprint?.profile.tags ?? definitionInput.tags ?? [], status: ContentStatus.ACTIVE,
               metadata: definitionInput.metadata ?? {},
             }, publicationRegistry));
             resolvedByIndex[index] = { definition, link: item.protagonistLink, scope: definitionInput.scope };

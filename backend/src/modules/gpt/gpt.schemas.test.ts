@@ -8,6 +8,7 @@ import { jsonByteSize, jsonDepth, jsonKeyCount } from './gpt.start-game.js';
 import { getInitialAttributePreset } from '../rules/core-v1/index.js';
 import { skillPublicationInput } from '../../../tests/support/content-fixture.js';
 import {
+  canonicalTagOmissionConversationPayload,
   capturedRichQuickCreationPayload,
   correctedRichQuickCreationPayload,
 } from '../../../tests/support/rich-quick-creation-fixture.js';
@@ -291,6 +292,119 @@ describe('GPT API schemas', () => {
     if (!result.success) return;
     expect(result.data.initialContentPackages).toHaveLength(11);
     expect(result.data.initialInventory).toHaveLength(6);
+  });
+
+  it('derives tagged blueprint tags when omitted and rejects client attempts to replace them', () => {
+    const omitted = canonicalTagOmissionConversationPayload('schema-canonical-tags');
+    const result = startGameSchema.safeParse(omitted);
+    expect(result.success, result.success ? '' : JSON.stringify(result.error.issues)).toBe(true);
+    if (!result.success) return;
+    expect(result.data.initialContentPackages).toHaveLength(10);
+    expect(result.data.initialInventory).toHaveLength(5);
+
+    const expected = new Map([
+      ['shadow_wrapped_status', ['shadow_wrapped', 'stealth']],
+      ['veil_of_darkness_spell', ['shadow', 'stealth']],
+      ['detect_hidden_skill', ['detect_hidden', 'informational']],
+    ]);
+    for (const contentPackage of omitted.initialContentPackages) {
+      const starterBlueprint = 'starterBlueprint' in contentPackage.definition
+        ? contentPackage.definition.starterBlueprint
+        : undefined;
+      const canonicalTags = starterBlueprint === undefined ? undefined : expected.get(starterBlueprint);
+      if (canonicalTags === undefined) continue;
+      const definition = { ...contentPackage.definition, tags: canonicalTags };
+      expect(startGameSchema.safeParse({
+        ...omitted,
+        initialContentPackages: [{ ...contentPackage, definition }],
+        initialInventory: [],
+      }).success).toBe(true);
+
+      for (const tags of [
+        [...canonicalTags].reverse(),
+        [...canonicalTags, 'extra'],
+        ['invented'],
+      ]) {
+        const rejected = startGameSchema.safeParse({
+          ...omitted,
+          initialContentPackages: [{ ...contentPackage, definition: { ...definition, tags } }],
+          initialInventory: [],
+        });
+        expect(rejected.success).toBe(false);
+        if (!rejected.success) {
+          expect(rejected.error.issues).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              path: ['initialContentPackages', 0, 'definition', 'tags'],
+              message: 'Omit definition.tags when starterBlueprint is used; canonical tags are derived',
+            }),
+          ]));
+        }
+      }
+    }
+  });
+
+  it('keeps definition tags required without a blueprint and allows narrative tags on untagged blueprints', () => {
+    const base = validStartGame();
+    const custom = createSkill();
+    const withoutTags = {
+      ...custom,
+      definition: { ...custom.definition, tags: undefined },
+    };
+    expect(startGameSchema.safeParse({
+      ...base,
+      initialContentPackages: [withoutTags],
+    }).success).toBe(false);
+
+    const untaggedBlueprint = createStarterBlueprint('basic_offensive_spell', 'untagged-blueprint');
+    const omitted = {
+      ...untaggedBlueprint,
+      definition: { ...untaggedBlueprint.definition, tags: undefined },
+    };
+    expect(startGameSchema.safeParse({
+      ...base,
+      initialContentPackages: [omitted],
+    }).success).toBe(true);
+    expect(startGameSchema.safeParse({
+      ...base,
+      initialContentPackages: [{
+        ...omitted,
+        definition: { ...omitted.definition, tags: ['narrative-index'] },
+      }],
+    }).success).toBe(true);
+    expect(startGameSchema.safeParse({
+      ...base,
+      initialContentPackages: [{
+        ...omitted,
+        definition: { ...omitted.definition, tags: ['duplicate', 'duplicate'] },
+      }],
+    }).success).toBe(false);
+  });
+
+  it('accepts omitted tags for untagged weapon, offensive spell and equipment blueprints', () => {
+    const base = validStartGame();
+    const equipment = correctedRichQuickCreationPayload('schema-untagged-equipment')
+      .initialContentPackages.find(({ definition }) => (
+        'starterBlueprint' in definition
+        && definition.starterBlueprint === 'secondary_modifier_equipment'
+      ));
+    if (equipment === undefined) throw new Error('Secondary modifier equipment fixture is required');
+    const packages = [
+      createStarterBlueprint('simple_melee_weapon', 'untagged-weapon'),
+      createStarterBlueprint('basic_offensive_spell', 'untagged-spell'),
+      equipment,
+    ].map((contentPackage) => {
+      const copy = structuredClone(contentPackage);
+      Reflect.deleteProperty(copy.definition, 'tags');
+      return copy;
+    });
+    for (const contentPackage of packages) {
+      const parsed = startGameSchema.safeParse({
+        ...base,
+        initialContentPackages: [contentPackage],
+        initialInventory: [],
+      });
+      expect(parsed.success, parsed.success ? '' : JSON.stringify(parsed.error.issues)).toBe(true);
+    }
   });
 
   it('keeps rich creation stable at the adjacent package/inventory counts, ordering and equipment variants', () => {

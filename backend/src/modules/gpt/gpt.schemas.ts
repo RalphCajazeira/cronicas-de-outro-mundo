@@ -255,11 +255,14 @@ const initialDefinitionSchema = z.strictObject({
   tags: contentTagsSchema.optional(),
   status: contentStatusSchema.optional(), metadata: limitedJsonObject().optional(), overridesWorldDefinition: z.boolean().optional(),
 }).superRefine((value, context) => {
-  const createFields = ['name', 'description', 'presentation', 'tags', 'status'] as const;
+  const createFields = ['name', 'description', 'presentation', 'status'] as const;
   if (value.mode === 'create') {
     createFields.forEach((field) => {
       if (value[field] === undefined) context.addIssue({ code: 'custom', path: [field], message: 'Required when mode is create' });
     });
+    if (value.starterBlueprint === undefined && value.tags === undefined) {
+      context.addIssue({ code: 'custom', path: ['tags'], message: 'Required when mode is create without starterBlueprint' });
+    }
     if (value.status !== undefined && value.status !== 'active') context.addIssue({ code: 'custom', path: ['status'], message: 'Initial content must be active' });
     if (value.overridesWorldDefinition === true && value.scope !== 'campaign') {
       context.addIssue({ code: 'custom', path: ['overridesWorldDefinition'], message: 'Only campaign definitions can override World content' });
@@ -298,7 +301,7 @@ const initialDefinitionSchema = z.strictObject({
         });
       }
       if (value.name !== undefined && value.description !== undefined
-        && value.presentation !== undefined && value.tags !== undefined) {
+        && value.presentation !== undefined) {
         let blueprint;
         try {
           blueprint = materializeStarterContentBlueprint({
@@ -340,9 +343,18 @@ const initialDefinitionSchema = z.strictObject({
             message: `Must be ${blueprint.contentType} for starterBlueprint ${value.starterBlueprint}`,
           });
         } else {
+          const canonicalTags = blueprint.profile.tags;
+          if (canonicalTags !== undefined && value.tags !== undefined
+            && JSON.stringify(canonicalTags) !== JSON.stringify(value.tags)) {
+            context.addIssue({
+              code: 'custom',
+              path: ['tags'],
+              message: 'Omit definition.tags when starterBlueprint is used; canonical tags are derived',
+            });
+          }
           validateContentPublicationShape({
             contentType: value.contentType, code: value.code, name: value.name, description: value.description,
-            profile: blueprint.profile, presentation: value.presentation, tags: value.tags,
+            profile: blueprint.profile, presentation: value.presentation, tags: [...(canonicalTags ?? value.tags ?? [])],
           }, context);
         }
       }
@@ -356,7 +368,7 @@ const initialDefinitionSchema = z.strictObject({
     }
   } else {
     if (value.scope !== 'world') context.addIssue({ code: 'custom', path: ['scope'], message: 'Reused content must have world scope' });
-    [...createFields, 'starterBlueprint', 'blueprintOptions', 'profile', 'inventorySpec', 'metadata', 'overridesWorldDefinition'].forEach((field) => {
+    [...createFields, 'tags', 'starterBlueprint', 'blueprintOptions', 'profile', 'inventorySpec', 'metadata', 'overridesWorldDefinition'].forEach((field) => {
       if (value[field as keyof typeof value] !== undefined) context.addIssue({ code: 'custom', path: [field], message: 'Not allowed when mode is reuse' });
     });
   }

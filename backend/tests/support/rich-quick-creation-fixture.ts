@@ -213,3 +213,34 @@ export function capturedRichQuickCreationPayload(prefix = 'captured-rich') {
 export function correctedRichQuickCreationPayload(prefix = 'corrected-rich') {
   return buildRichQuickCreationPayload(prefix, true);
 }
+
+/**
+ * Sanitized structural reproduction of the second conversational smoke:
+ * ten packages, five inventory grants, and omitted client tags on the three
+ * blueprints whose profiles define canonical mechanical tags.
+ */
+export function canonicalTagOmissionConversationPayload(prefix = 'canonical-tags') {
+  const payload = buildRichQuickCreationPayload(prefix, true);
+  const omittedTagBlueprints = new Set([
+    'shadow_wrapped_status',
+    'veil_of_darkness_spell',
+    'detect_hidden_skill',
+  ]);
+  const initialContentPackages = payload.initialContentPackages
+    .filter(({ definition }) => definition.code !== `${prefix}-mantle`)
+    .map((contentPackage) => {
+      const copy = structuredClone(contentPackage);
+      if ('starterBlueprint' in copy.definition
+        && omittedTagBlueprints.has(copy.definition.starterBlueprint ?? '')) {
+        Reflect.deleteProperty(copy.definition, 'tags');
+      }
+      return copy;
+    });
+  const initialInventory = payload.initialInventory.filter(({ code }) => code !== `${prefix}-mantle`);
+  return {
+    ...payload,
+    idempotencyKey: `${prefix}-start-tags-001`,
+    initialContentPackages,
+    initialInventory,
+  };
+}
