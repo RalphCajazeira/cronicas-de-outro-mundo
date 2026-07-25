@@ -43,7 +43,7 @@ const allowedStringFields = [
   'sourceActorRef', 'state', 'status', 'targetActorRef', 'weaponEntryRef', 'worldMode', 'worldRef',
 ] as const;
 const allowedNumberFields = [
-  'entryCount', 'equippedCount', 'expectedInventoryStateVersion', 'expectedMechanicsStateVersion', 'inventoryStateVersion',
+  'entryCount', 'equippedCount', 'expectedInventoryStateVersion', 'expectedMechanicsStateVersion', 'expectedStateVersion', 'inventoryStateVersion',
   'mastery', 'mechanicsStateVersion', 'progress', 'rank', 'removed',
 ] as const;
 const sensitiveKeyPattern = /authorization|cookie|key|password|secret|token/i;
@@ -95,6 +95,63 @@ function addMechanicalSummary(source: Record<string, unknown>, target: Record<st
 function fingerprint(value: unknown): { fingerprint: string; length: number } | undefined {
   if (typeof value !== 'string') return undefined;
   return { fingerprint: createHash('sha256').update(value).digest('hex').slice(0, 12), length: value.length };
+}
+
+function summarizeEncounterContentRef(value: unknown): Record<string, AuditValue> | undefined {
+  if (!isRecord(value)) return undefined;
+  const summary: Record<string, AuditValue> = {};
+  for (const field of ['scope', 'contentType', 'code'] as const) {
+    const item = safeString(value[field]);
+    if (item !== undefined) summary[field] = item;
+  }
+  if (typeof value.versionNumber === 'number' && Number.isSafeInteger(value.versionNumber)) {
+    summary.versionNumber = value.versionNumber;
+  }
+  return Object.keys(summary).length === 0 ? undefined : summary;
+}
+
+function summarizeEncounterRequestShape(body: Record<string, unknown>): Record<string, AuditValue> {
+  const summary: Record<string, AuditValue> = {};
+  if (isRecord(body.intent)) {
+    const intent: Record<string, AuditValue> = { keys: safeKeys(body.intent) };
+    for (const field of ['actorRef', 'slotRef', 'actionSource', 'targetSelector', 'resolutionPolicy'] as const) {
+      const item = safeString(body.intent[field]);
+      if (item !== undefined) intent[field] = item;
+    }
+    const contentRef = summarizeEncounterContentRef(body.intent.contentRef);
+    if (contentRef !== undefined) intent.contentRef = contentRef;
+    if (Array.isArray(body.intent.targetRefs)) intent.targetRefCount = body.intent.targetRefs.length;
+    if ('inventoryEntryRef' in body.intent) intent.inventoryEntryRefPresent = body.intent.inventoryEntryRef !== undefined;
+    if (typeof body.intent.objective === 'string') intent.objectivePresent = true;
+    if (typeof body.intent.narrative === 'string') intent.narrativePresent = true;
+    if (Array.isArray(body.intent.components)) {
+      intent.componentCount = body.intent.components.length;
+      intent.componentTypes = body.intent.components.flatMap((component) => {
+        if (!isRecord(component)) return [];
+        const type = safeString(component.type);
+        return type === undefined ? [] : [type];
+      }).slice(0, 3);
+    }
+    summary.intent = intent;
+  }
+  if (isRecord(body.policy)) {
+    const policy: Record<string, AuditValue> = { keys: safeKeys(body.policy) };
+    for (const field of ['actorRef', 'mode', 'strategy', 'targetPriority'] as const) {
+      const item = safeString(body.policy[field]);
+      if (item !== undefined) policy[field] = item;
+    }
+    if (typeof body.policy.objective === 'string') policy.objectivePresent = true;
+    if (typeof body.policy.maximumBeats === 'number' && Number.isSafeInteger(body.policy.maximumBeats)) {
+      policy.maximumBeats = body.policy.maximumBeats;
+    }
+    if (Array.isArray(body.policy.targetRefs)) policy.targetRefCount = body.policy.targetRefs.length;
+    if (Array.isArray(body.policy.protectedActorRefs)) {
+      policy.protectedActorRefCount = body.policy.protectedActorRefs.length;
+    }
+    summary.policy = policy;
+  }
+  if (Array.isArray(body.npcDirectives)) summary.npcDirectiveCount = body.npcDirectives.length;
+  return summary;
 }
 
 function summarizeRequest(request: Request): Record<string, AuditValue> {
@@ -191,6 +248,9 @@ function summarizeRequest(request: Request): Record<string, AuditValue> {
   }
   if (isRecord(request.body.metadata)) body.metadataKeys = safeKeys(request.body.metadata);
   if (isRecord(request.body.payload)) body.payloadKeys = safeKeys(request.body.payload);
+  if ((request.originalUrl.split('?', 1)[0] ?? request.path) === '/api/v1/encounters/manage') {
+    Object.assign(body, summarizeEncounterRequestShape(request.body));
+  }
   summary.body = body;
   return summary;
 }

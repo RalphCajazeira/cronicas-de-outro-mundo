@@ -101,6 +101,19 @@ describe('manageEncounter HTTP route', () => {
     expect(response.status).toBe(200);
     expect(records[0]).toMatchObject({
       operationId: 'manageEncounter', statusCode: 200,
+      request: {
+        body: {
+          expectedStateVersion: 1,
+          intent: {
+            actorRef: 'hero',
+            slotRef: 'primary',
+            actionSource: 'basic_weapon_attack',
+            targetSelector: 'explicit',
+            targetRefCount: 1,
+            inventoryEntryRefPresent: true,
+          },
+        },
+      },
       encounter: { operation: 'submit_intent', encounterRef: 'encounter', result: 'processing_paused', lifecycleStatus: 'processing_paused', stateVersion: 2, expectedStateVersion: 1, processedEventCount: 1, sourceActorRef: 'hero' },
     });
     const serialized = JSON.stringify(records);
@@ -178,6 +191,18 @@ describe('manageEncounter HTTP route', () => {
     expect(response.status).toBe(200);
     expect(records[0]).toMatchObject({
       operationId: 'manageEncounter',
+      request: {
+        body: {
+          expectedStateVersion: 3,
+          policy: {
+            actorRef: 'hero',
+            mode: 'until_decision',
+            strategy: 'balanced',
+            objectivePresent: true,
+            maximumBeats: 6,
+          },
+        },
+      },
       encounter: {
         operation: 'resolve_beat',
         mode: 'automatic',
@@ -190,6 +215,63 @@ describe('manageEncounter HTTP route', () => {
       performance: { operation: 'manageEncounter', outcome: 'commit', queryCount: 0 },
     });
     expect(JSON.stringify(records)).not.toMatch(/private-objective-sentinel|private-narrative-sentinel|automatic-audit-key/);
+  });
+
+  it('audits a rejected hybrid encounter intent as shape only', async () => {
+    const records: HttpAuditRecord[] = [];
+    const manage = vi.fn<EncounterHttpService['manage']>();
+    const service: EncounterHttpService = { manage };
+    const response = await request(app(service, (auditRecord) => records.push(auditRecord)))
+      .post('/api/v1/encounters/manage')
+      .set('x-rpg-key', config.RPG_API_KEY)
+      .send({
+        operation: 'resolve_beat',
+        ...scope,
+        idempotencyKey: 'hybrid-observability-secret',
+        expectedStateVersion: 4,
+        intent: {
+          actorRef: 'hero',
+          slotRef: 'primary',
+          actionSource: 'content',
+          targetSelector: 'self',
+          contentRef: {
+            scope: 'world',
+            contentType: 'spell',
+            code: 'veu-das-trevas',
+            versionNumber: 1,
+          },
+        },
+      });
+    expect(response.status).toBe(400);
+    expect(manage).not.toHaveBeenCalled();
+    expect(records[0]).toMatchObject({
+      statusCode: 400,
+      request: {
+        body: {
+          operation: 'resolve_beat',
+          expectedStateVersion: 4,
+          intent: {
+            keys: ['actionSource', 'actorRef', 'contentRef', 'slotRef', 'targetSelector'],
+            actorRef: 'hero',
+            slotRef: 'primary',
+            actionSource: 'content',
+            targetSelector: 'self',
+            contentRef: {
+              scope: 'world',
+              contentType: 'spell',
+              code: 'veu-das-trevas',
+              versionNumber: 1,
+            },
+          },
+        },
+      },
+      error: {
+        type: 'validation',
+        code: 'INVALID_INPUT',
+        issues: [{ code: 'invalid_union', path: '$' }],
+      },
+    });
+    expect(JSON.stringify(records)).not.toContain('hybrid-observability-secret');
   });
 
   it.each([

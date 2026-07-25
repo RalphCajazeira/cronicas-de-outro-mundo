@@ -432,16 +432,19 @@ describe('official OpenAPI contract', () => {
     expect(gptInstructions).toContain('crie outro encontro enquanto `activeEncounter` existir');
     expect(continuityKnowledge).toContain('o estado completo só se torna autoritativo depois de `manageEncounter load`');
     expect(continuityKnowledge).toContain('cancelamento só pode atingir o encontro exato já carregado');
-    expect(gptInstructions).toContain('uma única operação `resolve_beat`');
-    expect(gptInstructions).toContain('Não encadeie manualmente `submit_intent`, `resolve_reaction`, `continue` ou `confirm_completion`');
-    expect(continuityKnowledge).toContain('uma única intenção `resolve_beat`');
+    expect(gptInstructions).toContain('`nextRequiredAction` manda');
+    expect(gptInstructions).toContain('`submit_intent→submit_intent`');
+    expect(gptInstructions).toContain('Nunca misture:');
+    expect(continuityKnowledge).toContain('`nextRequiredAction` é autoritativo');
+    expect(continuityKnowledge).toContain('Os dois campos chamados `intent` têm contratos distintos');
   });
 
   it('keeps high autonomy explicit without weakening backend authority', () => {
     expect(gptInstructions).toContain('Com intenção clara, execute sem nova confirmação');
     expect(gptInstructions).toContain('O backend autentica, valida, calcula e persiste');
     expect(gptInstructions).toContain('Não invente dano, custo, acerto, equipamento, recompensa, persistência ou `stateVersion`');
-    expect(gptInstructions).toContain('Prefira `startGame` completo, `loadGame` uma vez e `resolve_beat` por decisão');
+    expect(gptInstructions).toContain('Prefira `startGame` e um `loadGame`');
+    expect(gptInstructions).toContain('Use `resolve_beat` só sem passo granular');
     expect(gptInstructions).toContain('Execute `recoveryAction` explícita');
     expect(gptInstructions.length).toBeLessThanOrEqual(7_450);
   });
@@ -640,9 +643,21 @@ describe('official OpenAPI contract', () => {
       'resolve_beat_idempotent_replay',
       'resolve_beat_impossible', 'resolve_beat_move_protect_prepare', 'resolve_beat_npc_limit',
       'resolve_beat_sneak_move', 'resolve_beat_surprise_attack', 'resolve_beat_use_item',
-      'resolve_beat_version_conflict', 'resolve_reaction', 'submit_intent',
+      'resolve_beat_version_conflict', 'resolve_reaction', 'submit_intent', 'submit_intent_self_cast',
     ]);
     for (const example of Object.values(examples)) expect(manageEncounterSchema.safeParse(example.value).success).toBe(true);
+    expect(operation?.description).toContain('nextRequiredAction escolhe a operação seguinte');
+    expect(operation?.description).toContain('nunca podem ser misturados');
+    expect(examples.submit_intent_self_cast?.value).toMatchObject({
+      operation: 'submit_intent',
+      intent: {
+        actorRef: 'ralph',
+        slotRef: 'primary',
+        actionSource: 'content',
+        targetSelector: 'self',
+        contentRef: { scope: 'world', contentType: 'spell', code: 'veu-das-trevas', versionNumber: 1 },
+      },
+    });
     const intent = contract.components.schemas.EncounterIntentInput;
     expect(intent?.required).toContain('targetSelector');
     expect(intent?.properties).toHaveProperty('targetSelector');

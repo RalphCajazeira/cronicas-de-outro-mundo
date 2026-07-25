@@ -155,6 +155,57 @@ describe('manageEncounter public schemas', () => {
     expect(manageEncounterSchema.safeParse({ ...base, intent: { ...base.intent, slotRef: 'a'.repeat(101) } }).success).toBe(false);
   });
 
+  it('rejects the captured hybrid beat envelope and accepts the same self cast as submit_intent', () => {
+    const selfCast = {
+      ...valid.submit_intent,
+      intent: {
+        actorRef: 'hero',
+        slotRef: 'primary',
+        actionSource: 'content',
+        targetSelector: 'self',
+        contentRef: {
+          scope: 'world',
+          contentType: 'spell',
+          code: 'veu-das-trevas',
+          versionNumber: 1,
+        },
+      },
+    } as const;
+    expect(manageEncounterSchema.safeParse(selfCast).success).toBe(true);
+
+    const capturedHybrid = manageEncounterSchema.safeParse({
+      ...selfCast,
+      operation: 'resolve_beat',
+    });
+    expect(capturedHybrid.success).toBe(false);
+    if (capturedHybrid.success) throw new Error('fixture');
+    expect(capturedHybrid.error.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'invalid_union', path: [] }),
+    ]));
+
+    const beatCast = {
+      ...valid.resolve_beat,
+      intent: {
+        actorRef: 'hero',
+        objective: 'cast_veil',
+        narrative: 'Hero conjura Véu das Trevas sobre si.',
+        resolutionPolicy: 'atomic',
+        components: [{
+          type: 'cast',
+          contentRef: {
+            scope: 'world',
+            contentType: 'spell',
+            code: 'veu-das-trevas',
+            versionNumber: 1,
+          },
+          targetRefs: ['hero'],
+        }],
+      },
+    } as const;
+    expect(manageEncounterSchema.safeParse(beatCast).success).toBe(true);
+    expect(manageEncounterSchema.safeParse({ ...beatCast, operation: 'submit_intent' }).success).toBe(false);
+  });
+
   it('rejects invalid and duplicate relation overrides and sparse arrays', () => {
     const participants = [
       { actorRef: 'hero', sideRef: 'party', zone: 'near' },

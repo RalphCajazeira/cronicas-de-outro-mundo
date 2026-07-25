@@ -1527,8 +1527,8 @@
         "operationId": "manageEncounter",
         "x-openai-isConsequential": false,
         "tags": ["Encounters"],
-        "summary": "Criar, carregar ou resolver planos/políticas autoritativas de encontro",
-        "description": "create assisted deriva setup seguro; load devolve a cápsula; resolve_beat aceita intent ou policy. O backend resolve mecânica e conclusão. Parada technical continua com nova versão/chave; requiresPlayerDecision devolve a escolha. Nunca envie outcomes ou IDs internos.",
+        "summary": "Criar, carregar e seguir a próxima operação autoritativa de encontro",
+        "description": "nextRequiredAction escolhe a operação seguinte: submit_intent, resolve_reaction, continue ou confirm_completion; none encerra. Use resolve_beat só sem requisito granular e se lifecycle aceitar. Intents das operações nunca podem ser misturados. Backend resolve mecânica; não envie outcomes.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1553,7 +1553,8 @@
                 "resolve_beat_npc_limit": { "summary": "Mais NPCs elegíveis — beat rejeitado antes da persistência", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "large-ambush", "idempotencyKey": "beat-npc-limit-001", "expectedStateVersion": 1, "intent": { "actorRef": "ralph", "objective": "defend", "narrative": "Ralph assume postura defensiva.", "resolutionPolicy": "atomic", "components": [{ "type": "defend" }] }, "npcDirectives": [{ "actorRef": "npc-1", "strategy": "aggressive" }, { "actorRef": "npc-2", "strategy": "aggressive" }, { "actorRef": "npc-3", "strategy": "aggressive" }, { "actorRef": "npc-4", "strategy": "aggressive" }, { "actorRef": "npc-5", "strategy": "aggressive" }] } },
                 "resolve_beat_version_conflict": { "summary": "Conflito de versão — recarregar antes de nova chave", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-stale-001", "expectedStateVersion": 1, "intent": { "actorRef": "ralph", "objective": "defend", "narrative": "Ralph se defende com uma versão possivelmente antiga.", "resolutionPolicy": "atomic", "components": [{ "type": "defend" }] }, "npcDirectives": [] } },
                 "resolve_beat_idempotent_replay": { "summary": "Replay idempotente: payload e chave idênticos ao ataque", "value": { "operation": "resolve_beat", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "beat-attack-001", "expectedStateVersion": 1, "intent": { "actorRef": "ralph", "objective": "attack_scout", "narrative": "Ralph ataca o batedor.", "resolutionPolicy": "atomic", "components": [{ "type": "attack", "inventoryEntryRef": "starter-dagger-1", "targetRefs": ["goblin-scout"] }] }, "npcDirectives": [] } },
-                "submit_intent": { "value": { "operation": "submit_intent", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-intent-001", "expectedStateVersion": 1, "intent": { "actorRef": "ralph", "slotRef": "primary", "actionSource": "basic_weapon_attack", "targetSelector": "explicit", "targetRefs": ["goblin-scout"], "inventoryEntryRef": "iron-sword", "versatileMode": "one_handed" } } },
+                "submit_intent": { "summary": "Ataque granular quando nextRequiredAction=submit_intent", "value": { "operation": "submit_intent", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-intent-001", "expectedStateVersion": 1, "intent": { "actorRef": "ralph", "slotRef": "primary", "actionSource": "basic_weapon_attack", "targetSelector": "explicit", "targetRefs": ["goblin-scout"], "inventoryEntryRef": "iron-sword", "versatileMode": "one_handed" } } },
+                "submit_intent_self_cast": { "summary": "Magia self granular quando nextRequiredAction=submit_intent", "value": { "operation": "submit_intent", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-self-cast-001", "expectedStateVersion": 1, "intent": { "actorRef": "ralph", "slotRef": "primary", "actionSource": "content", "targetSelector": "self", "contentRef": { "scope": "world", "contentType": "spell", "code": "veu-das-trevas", "versionNumber": 1 } } } },
                 "resolve_reaction": { "value": { "operation": "resolve_reaction", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-reaction-001", "expectedStateVersion": 2, "reactorRef": "ralph", "reactionKind": "block" } },
                 "continue": { "value": { "operation": "continue", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-continue-001", "expectedStateVersion": 3 } },
                 "confirm_completion": { "value": { "operation": "confirm_completion", "playerRef": "ralph", "worldRef": "elarion", "campaignRef": "main-campaign", "encounterRef": "bridge-ambush", "idempotencyKey": "encounter-complete-001", "expectedStateVersion": 4 } },
@@ -1813,7 +1814,7 @@
           { "if": { "properties": { "actionSource": { "const": "consumable" } }, "required": ["actionSource"] }, "then": { "required": ["inventoryEntryRef"], "allOf": [{ "not": { "required": ["contentRef"] } }, { "not": { "required": ["versatileMode"] } }] } },
           { "if": { "properties": { "actionSource": { "const": "basic_weapon_attack" } }, "required": ["actionSource"] }, "then": { "required": ["inventoryEntryRef"], "not": { "required": ["contentRef"] } } }
         ],
-        "description": "Somente intenção. intentRef é derivada; rolls, hit, crítico, dano, custos e outcomes são proibidos."
+        "description": "Formato exclusivo de operation=submit_intent quando nextRequiredAction.type=submit_intent. Não use objective, narrative, resolutionPolicy ou components. intentRef é derivada; rolls, hit, crítico, dano, custos e outcomes são proibidos."
       },
       "EncounterBeatCondition": {
         "type": "object",
@@ -1856,7 +1857,8 @@
           "narrative": { "type": "string", "minLength": 1, "maxLength": 1000 },
           "resolutionPolicy": { "type": "string", "enum": ["atomic", "allow_partial"], "description": "atomic reverte tudo se qualquer componente falhar; allow_partial só persiste componentes não essenciais resolvidos." },
           "components": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "$ref": "#/components/schemas/EncounterBeatComponent" } }
-        }
+        },
+        "description": "Formato exclusivo de operation=resolve_beat. Não use slotRef, actionSource ou targetSelector e não o envie quando nextRequiredAction exigir uma operação granular."
       },
       "EncounterNpcDirective": {
         "type": "object", "additionalProperties": false,
@@ -1954,7 +1956,7 @@
           { "if": { "properties": { "operation": { "enum": ["continue", "confirm_completion", "cancel"] } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }, { "not": { "required": ["confirmAuthorityDrift"] } }] } },
           { "if": { "properties": { "operation": { "const": "abandon" } }, "required": ["operation"] }, "then": { "required": ["idempotencyKey", "expectedStateVersion", "confirmAuthorityDrift"], "allOf": [{ "not": { "required": ["partySideRef"] } }, { "not": { "required": ["participants"] } }, { "not": { "required": ["relationOverrides"] } }, { "not": { "required": ["intent"] } }, { "not": { "required": ["reactorRef"] } }, { "not": { "required": ["reactionKind"] } }] } }
         ],
-        "description": "Objeto multiplexado fechado. create preserva o modo explícito e oferece setupMode=assisted para derivar lados, relações e zonas. resolve_beat aceita exatamente um plano curto (intent) ou uma política automática fechada. Nunca aceita rolls, hit, dano, custos aplicados ou outcomes."
+        "description": "Objeto multiplexado fechado. nextRequiredAction é autoritativo para submit_intent, resolve_reaction, continue e confirm_completion; none encerra. resolve_beat só é aplicável sem requisito granular pendente e aceita exatamente um plano curto (intent) ou uma política automática fechada. Os dois formatos de intent nunca podem ser misturados. Nunca aceita rolls, hit, dano, custos aplicados ou outcomes."
       },
       "EncounterResourcePool": {
         "type": "object", "additionalProperties": false, "required": ["current", "maximum"],
