@@ -13,6 +13,7 @@ import {
   HOME_RESOURCE_URI,
   LEGACY_HOME_RESOURCE_URI,
   LOAD_GAME_CONTEXT_TOOL,
+  PREVIOUS_HOME_RESOURCE_URI,
   createChatGptAppServer,
 } from './mcp/chatgpt-app.server.js';
 import { gameContextSchema } from './dto/game-context.dto.js';
@@ -155,12 +156,18 @@ describe('ChatGPT App MCP proof', () => {
   });
 
   it('registers the Streamable HTTP route and keeps it independent from x-rpg-key', async () => {
-    const host = await startMcpHost('test');
+    const host = await startMcpHost('test', true);
     try {
       const tools = await host.client.listTools();
       expect(tools.tools.map((tool) => tool.name)).toContain(LOAD_GAME_CONTEXT_TOOL);
       expect(tools.tools.find((tool) => tool.name === LOAD_GAME_CONTEXT_TOOL)?._meta).toMatchObject({
         ui: { resourceUri: HOME_RESOURCE_URI },
+      });
+      expect(tools.tools.find((tool) => tool.name === CONNECT_FIXTURE_ACCOUNT_TOOL)?._meta).toMatchObject({
+        ui: {
+          resourceUri: HOME_RESOURCE_URI,
+          visibility: ['app'],
+        },
       });
     } finally {
       await host.close();
@@ -187,12 +194,14 @@ describe('ChatGPT App MCP proof', () => {
   it('keeps the prior resource URI available while hosts refresh their tool metadata', async () => {
     const host = await startMcpHost('test');
     try {
-      const resource = await host.client.readResource({ uri: LEGACY_HOME_RESOURCE_URI });
-      expect(resource.contents).toHaveLength(1);
-      expect(resource.contents[0]).toMatchObject({
-        uri: LEGACY_HOME_RESOURCE_URI,
-        mimeType: 'text/html;profile=mcp-app',
-      });
+      for (const uri of [PREVIOUS_HOME_RESOURCE_URI, LEGACY_HOME_RESOURCE_URI]) {
+        const resource = await host.client.readResource({ uri });
+        expect(resource.contents).toHaveLength(1);
+        expect(resource.contents[0]).toMatchObject({
+          uri,
+          mimeType: 'text/html;profile=mcp-app',
+        });
+      }
     } finally {
       await host.close();
     }

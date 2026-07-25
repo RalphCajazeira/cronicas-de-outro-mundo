@@ -75,7 +75,7 @@ O host local:
 
 1. abre uma sessão MCP Streamable HTTP em `/mcp`;
 2. chama `loadGameContext`;
-3. lê `ui://game/home/v2.html`;
+3. lê `ui://game/home/v3.html`;
 4. monta o widget em iframe isolado;
 5. encaminha chamadas do widget ao MCP pela bridge oficial.
 
