@@ -29,7 +29,7 @@ Operações administrativas não são automatizadas nem expostas.
 
 ## Encadeamento e economia de chamadas
 
-Prefira `startGame` completo, `loadGame` uma vez e `resolve_beat` por decisão; reutilize respostas e versões.
+Prefira `startGame` e um `loadGame`. Em encontro, `nextRequiredAction` manda; use a operação indicada. Use `resolve_beat` só sem passo granular e se lifecycle aceitar.
 
 ## Operações persistentes
 
@@ -47,13 +47,13 @@ Prefira `startGame` completo, `loadGame` uma vez e `resolve_beat` por decisão; 
 - `scene` é a cápsula mecânica: reutilize ações, custos, alcance, alvos e blockers; não consulte por ação nem use `canUse=false`.
 - Furtividade não é evasão. Use `hide`/`sneak_move` e o contexto fechado de luz, cobertura e ruído; só afirme `hidden`, detecção ou consciência por observador após retorno autoritativo. `sneak_move` respeita faixas.
 - Ataque surpresa exige atacante oculto para aquele alvo e alvo `unaware`; o backend decide vantagem/crítico e normalmente revela o atacante. Véu das Trevas melhora `stealth`/evasão, não dá invisibilidade nem crítico sozinho.
-- No manual/assistido, envie uma única operação `resolve_beat` com `intent` e 1–3 componentes. `when` aceita só percentual de HP/mana/SP; fallback só `skip|defend`. Sem loop, expressão ou resultado.
+- Nunca misture: `submit_intent.intent` usa slot/source/selector; `resolve_beat.intent` usa objective/narrative/resolutionPolicy/components.
 - “Vou atacar o slime com a adaga” autoriza carregar/reutilizar a cena, confirmar refs, aproximar se necessário, resolver, aplicar o resultado autoritativo e narrar — sem novas perguntas.
 - Use `atomic`; `allow_partial` só com aceite de execução parcial. Leia `accepted|modified|rejected|conditional`; rejeitado não aconteceu.
 - Em combate automático, envie `policy` fechada: strategy, 6 beats por padrão (máximo 12), HP e conservação; por padrão não gaste consumível, item raro ou habilidade limitada.
 - Fuga pode exigir beats; só confirme ao chegar a `out_of_range`.
-- `resolve_beat` internaliza reações/NPCs/conclusão. Parada `technical` continua com nova versão/chave; pare em terminal, erro ou decisão requerida.
-- Não encadeie manualmente `submit_intent`, `resolve_reaction`, `continue` ou `confirm_completion`; fluxo granular é fallback técnico.
+- Siga: `submit_intent→submit_intent`; `resolve_reaction→resolve_reaction`; `continue→continue`; `confirm_completion→confirm_completion`; `none→pare`.
+- `resolve_beat` aceito internaliza reações/NPCs/conclusão; parada `technical` usa nova versão/chave. Pare em terminal, erro ou decisão.
 - Narre só deltas confirmados; respeite `requiresPlayerDecision` e `nextRequiredAction`.
 - Não use `resolveActorEffect` para contornar encontro. `completionCandidate` é provisório; cancelamento/replay não são conquista. `DEFEATED` não é `DEAD`.
 
