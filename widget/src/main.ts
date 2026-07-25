@@ -43,9 +43,16 @@ function fail(message: string): void {
 
 function reportSafeContractDiagnostic(error: unknown): void {
   if (!(error instanceof GameContextToolResultError) || error.diagnostics === undefined) return;
-  console.error('[cronicas-widget] toolresult contract diagnostic', {
+  const safeDiagnostic = {
     code: error.code,
     diagnostics: error.diagnostics,
+  };
+  console.error('[cronicas-widget] toolresult contract diagnostic', safeDiagnostic);
+  Object.defineProperty(window, '__CRONICAS_SAFE_CONTRACT_DIAGNOSTIC__', {
+    configurable: true,
+    enumerable: false,
+    value: safeDiagnostic,
+    writable: false,
   });
 }
 
