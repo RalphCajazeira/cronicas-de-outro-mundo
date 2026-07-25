@@ -133,6 +133,70 @@ export function coreV13VisibilityFromObservers(
   return observerAwareness.some((entry) => entry.awareness === 'suspicious') ? 'obscured' : 'hidden';
 }
 
+function coreV13ParticipantsAreHostile(
+  state: CoreV1EncounterState,
+  leftActorRef: string,
+  rightActorRef: string,
+): boolean {
+  return state.relations.some((relation) => (
+    relation.relation === 'hostile'
+    && ((relation.leftActorRef === leftActorRef && relation.rightActorRef === rightActorRef)
+      || (relation.rightActorRef === leftActorRef && relation.leftActorRef === rightActorRef))
+  ));
+}
+
+export function coreV13EligibleObserverActorRefs(
+  state: CoreV1EncounterState,
+  targetActorRef: string,
+): readonly string[] {
+  return state.participants.filter((participant) => (
+    participant.actorRef !== targetActorRef
+    && coreV13ParticipantsAreHostile(state, targetActorRef, participant.actorRef)
+    && participant.combatState !== 'removed'
+    && participant.resources.hp.current > 0
+    && participant.zone !== 'out_of_range'
+  )).map((participant) => participant.actorRef)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+export function normalizeCoreV13StealthObserverEligibility(
+  state: CoreV1EncounterState,
+  options: { readonly previousState?: CoreV1EncounterState } = {},
+): CoreV1EncounterState {
+  let changed = false;
+  const participants = state.participants.map((participant) => {
+    if (participant.stealthState === undefined) return participant;
+    const eligible = new Set(coreV13EligibleObserverActorRefs(state, participant.actorRef));
+    const previousParticipant = options.previousState?.participants
+      .find((candidate) => candidate.actorRef === participant.actorRef);
+    const previouslyEligible = options.previousState === undefined
+      ? undefined
+      : new Set(coreV13EligibleObserverActorRefs(options.previousState, participant.actorRef));
+    const residualObserverRefs = new Set(
+      (previousParticipant?.stealthState?.observerAwareness ?? [])
+        .filter((entry) => previouslyEligible?.has(entry.observerActorRef) === false)
+        .map((entry) => entry.observerActorRef),
+    );
+    const observerAwareness = participant.stealthState.observerAwareness
+      .filter((entry) => (
+        eligible.has(entry.observerActorRef) && !residualObserverRefs.has(entry.observerActorRef)
+      ))
+      .sort((left, right) => left.observerActorRef.localeCompare(right.observerActorRef));
+    const visibility = coreV13VisibilityFromObservers(observerAwareness);
+    const entriesUnchanged = observerAwareness.length === participant.stealthState.observerAwareness.length
+      && observerAwareness.every((entry, index) => (
+        entry === participant.stealthState?.observerAwareness[index]
+      ));
+    if (entriesUnchanged && visibility === participant.stealthState.visibility) return participant;
+    changed = true;
+    return {
+      ...participant,
+      stealthState: { visibility, observerAwareness },
+    };
+  });
+  return changed ? { ...state, stateVersion: state.stateVersion + 1, participants } : state;
+}
+
 /**
  * RC1.3 snapshots always carry an explicit observer projection. Before any
  * stealth contest, hostile observers are deliberately recorded as detecting
