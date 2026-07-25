@@ -3577,6 +3577,361 @@ describe('Phase 1L-B transactional encounter adapter', () => {
     }
   });
 
+  it('prunes defeated and out-of-range stealth observers without resurrecting awareness on return', async () => {
+    const stealthService = createEncounterService(
+      prisma,
+      (executionRef) => new RecordingEncounterRollProvider({ nextBps: () => 1 }, executionRef),
+    );
+    const quickStart = richBlueprintStart('stealth-eligibility', 'physical');
+    const started = await post('/api/v1/game/start', quickStart);
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    const scope = {
+      playerRef: quickStart.playerRef,
+      worldRef: quickStart.worldRef,
+      campaignRef: quickStart.campaignRef,
+    };
+    const heroRef = quickStart.protagonist.code;
+    const observerARef = 'stealth-eligibility-observer-a';
+    const observerBRef = 'stealth-eligibility-observer-b';
+    const observerCRef = 'stealth-eligibility-observer-c';
+    const campaign = await prisma.campaign.findFirstOrThrow({
+      where: { code: scope.campaignRef, world: { code: scope.worldRef } },
+      select: { id: true, rulesetVersion: { select: { code: true } } },
+    });
+    expect(campaign.rulesetVersion.code).toBe('core-v1.3');
+    const observerA = await createMechanicalActor({
+      campaignId: campaign.id,
+      code: observerARef,
+      name: 'Observador Frágil',
+      actorType: ActorType.NPC,
+      level: 100,
+    });
+    await createMechanicalActor({
+      campaignId: campaign.id,
+      code: observerBRef,
+      name: 'Observador Móvel',
+      actorType: ActorType.NPC,
+      level: 100,
+    });
+    const observerC = await createMechanicalActor({
+      campaignId: campaign.id,
+      code: observerCRef,
+      name: 'Observador para Ataque de NPC',
+      actorType: ActorType.NPC,
+      level: 100,
+    });
+    await prisma.actorResource.updateMany({
+      where: { actorId: { in: [observerA.id, observerC.id] }, type: ActorResourceType.HP },
+      data: { current: 1 },
+    });
+
+    const encounterRef = 'phase-stealth-eligibility';
+    let cleanupNeeded = true;
+    try {
+      const created = await stealthService.create({
+        ...scope,
+        idempotencyKey: 'phase-stealth-eligibility-create-0001',
+        encounterRef,
+        partySideRef: 'party',
+        participants: [
+          { bindingKind: 'persisted_actor', actorRef: heroRef, sideRef: 'party', zone: 'engaged' },
+          { bindingKind: 'persisted_actor', actorRef: observerARef, sideRef: 'hostile', zone: 'engaged' },
+          { bindingKind: 'persisted_actor', actorRef: observerBRef, sideRef: 'hostile', zone: 'engaged' },
+          { bindingKind: 'persisted_actor', actorRef: observerCRef, sideRef: 'hostile', zone: 'engaged' },
+        ],
+        relations: [
+          { leftActorRef: observerARef, rightActorRef: observerARef, relation: 'self' },
+          { leftActorRef: observerARef, rightActorRef: observerBRef, relation: 'ally' },
+          { leftActorRef: observerARef, rightActorRef: observerCRef, relation: 'ally' },
+          { leftActorRef: observerARef, rightActorRef: heroRef, relation: 'hostile' },
+          { leftActorRef: observerBRef, rightActorRef: observerBRef, relation: 'self' },
+          { leftActorRef: observerBRef, rightActorRef: observerCRef, relation: 'ally' },
+          { leftActorRef: observerBRef, rightActorRef: heroRef, relation: 'hostile' },
+          { leftActorRef: observerCRef, rightActorRef: observerCRef, relation: 'self' },
+          { leftActorRef: observerCRef, rightActorRef: heroRef, relation: 'hostile' },
+          { leftActorRef: heroRef, rightActorRef: heroRef, relation: 'self' },
+        ],
+        context: {
+          schemaVersion: 1,
+          setupMode: 'explicit',
+          encounterKind: 'combat',
+          objective: 'Validar elegibilidade individual de observadores.',
+          engagementPreference: 'ambush',
+          protectedActorRefs: [],
+          environment: {
+            summary: 'Pátio escuro com rotas de fuga.',
+            tags: ['eligibility-test'],
+            lighting: 'dark',
+            cover: 'full',
+            ambientNoise: 'silent',
+          },
+        },
+      });
+      const hidden = await stealthService.resolveBeat({
+        ...scope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-eligibility-hide-0001',
+        expectedStateVersion: created.stateVersion,
+        intent: {
+          actorRef: heroRef,
+          objective: 'hide_before_eligibility_checks',
+          narrative: 'O protagonista se oculta antes dos testes de elegibilidade.',
+          resolutionPolicy: 'atomic',
+          components: [{ type: 'hide' }],
+        },
+        npcDirectives: [
+          { actorRef: observerARef, strategy: 'defensive' },
+          { actorRef: observerBRef, strategy: 'defensive' },
+          { actorRef: observerCRef, strategy: 'defensive' },
+        ],
+      });
+      expect(hidden.scene?.participants.find((entry) => entry.actorRef === heroRef)?.stealth)
+        .toMatchObject({
+          visibility: 'hidden',
+          observers: [
+            { observerActorRef: observerARef, awareness: 'unaware' },
+            { observerActorRef: observerBRef, awareness: 'unaware' },
+            { observerActorRef: observerCRef, awareness: 'unaware' },
+          ],
+        });
+
+      const lethalInput = {
+        ...scope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-eligibility-lethal-0001',
+        expectedStateVersion: hidden.stateVersion,
+        intent: {
+          actorRef: heroRef,
+          objective: 'defeat_first_observer',
+          narrative: 'O protagonista ataca o observador frágil.',
+          resolutionPolicy: 'atomic' as const,
+          components: [{
+            type: 'attack' as const,
+            inventoryEntryRef: 'stealth-eligibility-blade-1',
+            targetRefs: [observerARef],
+          }],
+        },
+        npcDirectives: [
+          { actorRef: observerARef, strategy: 'defensive' as const },
+          { actorRef: observerBRef, strategy: 'defensive' as const },
+          { actorRef: observerCRef, strategy: 'defensive' as const },
+        ],
+      };
+      const defeated = await stealthService.resolveBeat(lethalInput);
+      expect(defeated.scene?.participants.find((entry) => entry.actorRef === observerARef))
+        .toMatchObject({ combatState: 'incapacitated_candidate', resources: { hp: { current: 0 } } });
+      expect(defeated.scene?.participants.find((entry) => entry.actorRef === heroRef)?.stealth)
+        .toEqual({
+          visibility: 'hidden',
+          observers: [
+            {
+              observerActorRef: observerBRef,
+              awareness: 'unaware',
+              marginTier: 'high_success',
+            },
+            {
+              observerActorRef: observerCRef,
+              awareness: 'unaware',
+              marginTier: 'high_success',
+            },
+          ],
+        });
+      const defeatedLoad = await stealthService.load({ ...scope, encounterRef });
+      expect(defeatedLoad.stateVersion).toBe(defeated.stateVersion);
+      expect(defeatedLoad.scene?.participants.find((entry) => entry.actorRef === heroRef)?.stealth)
+        .toEqual(defeated.scene?.participants.find((entry) => entry.actorRef === heroRef)?.stealth);
+      const operationCountAfterDefeat = await prisma.encounterOperation.count({
+        where: { encounter: { encounterRef } },
+      });
+      const rollCountAfterDefeat = await prisma.encounterRoll.count({
+        where: { encounter: { encounterRef } },
+      });
+      await expect(stealthService.resolveBeat(lethalInput)).resolves.toEqual(defeated);
+      await expect(prisma.encounterOperation.count({
+        where: { encounter: { encounterRef } },
+      })).resolves.toBe(operationCountAfterDefeat);
+      await expect(prisma.encounterRoll.count({
+        where: { encounter: { encounterRef } },
+      })).resolves.toBe(rollCountAfterDefeat);
+
+      const npcLethal = await stealthService.resolveBeat({
+        ...scope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-eligibility-npc-lethal-0001',
+        expectedStateVersion: defeated.stateVersion,
+        intent: {
+          actorRef: observerBRef,
+          objective: 'hold_while_npc_attacks',
+          narrative: 'O observador móvel mantém posição durante o ataque alternativo.',
+          resolutionPolicy: 'atomic',
+          components: [{ type: 'defend' }],
+        },
+        npcDirectives: [
+          { actorRef: observerCRef, strategy: 'defensive' },
+          { actorRef: heroRef, strategy: 'aggressive', targetRef: observerCRef },
+        ],
+      });
+      expect(npcLethal.beatSummary?.npcActions).toContainEqual(expect.objectContaining({
+        actorRef: heroRef,
+        actionType: 'attack',
+        targetRef: observerCRef,
+      }));
+      expect(npcLethal.scene?.participants.find((entry) => entry.actorRef === observerCRef))
+        .toMatchObject({ combatState: 'incapacitated_candidate', resources: { hp: { current: 0 } } });
+      expect(npcLethal.scene?.participants.find((entry) => entry.actorRef === heroRef)?.stealth)
+        .toEqual({
+          visibility: 'hidden',
+          observers: [{
+            observerActorRef: observerBRef,
+            awareness: 'unaware',
+            marginTier: 'high_success',
+          }],
+        });
+
+      const attackedB = await stealthService.resolveBeat({
+        ...scope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-eligibility-attack-b-0001',
+        expectedStateVersion: npcLethal.stateVersion,
+        intent: {
+          actorRef: heroRef,
+          objective: 'reveal_to_mobile_observer',
+          narrative: 'O protagonista ataca o observador móvel.',
+          resolutionPolicy: 'atomic',
+          components: [{
+            type: 'attack',
+            inventoryEntryRef: 'stealth-eligibility-blade-1',
+            targetRefs: [observerBRef],
+          }],
+        },
+        npcDirectives: [{ actorRef: observerBRef, strategy: 'defensive' }],
+      });
+      expect(attackedB.scene?.participants.find((entry) => entry.actorRef === heroRef)?.stealth)
+        .toMatchObject({
+          visibility: 'exposed',
+          observers: [{ observerActorRef: observerBRef, awareness: 'tracking' }],
+        });
+
+      const flee = async (
+        expectedStateVersion: number,
+        idempotencyKey: string,
+      ) => stealthService.resolveBeat({
+        ...scope,
+        encounterRef,
+        idempotencyKey,
+        expectedStateVersion,
+        intent: {
+          actorRef: observerBRef,
+          objective: 'leave_observation_scope',
+          narrative: 'O observador móvel recua por uma faixa legal.',
+          resolutionPolicy: 'atomic',
+          components: [{ type: 'flee', destination: 'out_of_range' }],
+        },
+        npcDirectives: [{ actorRef: heroRef, strategy: 'defensive' }],
+      });
+      const near = await flee(attackedB.stateVersion, 'phase-stealth-eligibility-flee-0001');
+      expect(near.scene?.participants.find((entry) => entry.actorRef === observerBRef)?.zone).toBe('near');
+      const far = await flee(near.stateVersion, 'phase-stealth-eligibility-flee-0002');
+      expect(far.scene?.participants.find((entry) => entry.actorRef === observerBRef)?.zone).toBe('far');
+      const finalFleeInput = {
+        ...scope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-eligibility-flee-0003',
+        expectedStateVersion: far.stateVersion,
+        intent: {
+          actorRef: observerBRef,
+          objective: 'leave_observation_scope',
+          narrative: 'O observador móvel conclui a fuga para fora do alcance.',
+          resolutionPolicy: 'atomic' as const,
+          components: [{ type: 'flee' as const, destination: 'out_of_range' as const }],
+        },
+        npcDirectives: [{ actorRef: heroRef, strategy: 'defensive' as const }],
+      };
+      const outOfRange = await stealthService.resolveBeat(finalFleeInput);
+      expect(outOfRange.scene?.participants.find((entry) => entry.actorRef === observerBRef)?.zone)
+        .toBe('out_of_range');
+      expect(outOfRange.scene?.participants.find((entry) => entry.actorRef === heroRef)?.stealth)
+        .toEqual({ visibility: 'hidden', observers: [] });
+      const operationCountAfterFlee = await prisma.encounterOperation.count({
+        where: { encounter: { encounterRef } },
+      });
+      const rollCountAfterFlee = await prisma.encounterRoll.count({
+        where: { encounter: { encounterRef } },
+      });
+      await expect(stealthService.resolveBeat(finalFleeInput)).resolves.toEqual(outOfRange);
+      await expect(prisma.encounterOperation.count({
+        where: { encounter: { encounterRef } },
+      })).resolves.toBe(operationCountAfterFlee);
+      await expect(prisma.encounterRoll.count({
+        where: { encounter: { encounterRef } },
+      })).resolves.toBe(rollCountAfterFlee);
+
+      const returned = await stealthService.resolveBeat({
+        ...scope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-eligibility-return-0001',
+        expectedStateVersion: outOfRange.stateVersion,
+        intent: {
+          actorRef: observerBRef,
+          objective: 'return_to_observation_scope',
+          narrative: 'O observador móvel retorna apenas uma faixa.',
+          resolutionPolicy: 'atomic',
+          components: [{ type: 'move', destination: 'far' }],
+        },
+        npcDirectives: [{ actorRef: heroRef, strategy: 'defensive' }],
+      });
+      expect(returned.scene?.participants.find((entry) => entry.actorRef === observerBRef)?.zone).toBe('far');
+      expect(returned.scene?.participants.find((entry) => entry.actorRef === heroRef)?.stealth)
+        .toEqual({ visibility: 'hidden', observers: [] });
+
+      const reevaluated = await stealthService.resolveBeat({
+        ...scope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-eligibility-hide-0002',
+        expectedStateVersion: returned.stateVersion,
+        intent: {
+          actorRef: heroRef,
+          objective: 'establish_new_awareness',
+          narrative: 'O protagonista realiza uma nova disputa de ocultação.',
+          resolutionPolicy: 'atomic',
+          components: [{ type: 'hide' }],
+        },
+        npcDirectives: [{ actorRef: observerBRef, strategy: 'defensive' }],
+      });
+      expect(reevaluated.scene?.participants.find((entry) => entry.actorRef === heroRef)?.stealth)
+        .toMatchObject({
+          visibility: 'hidden',
+          observers: [{ observerActorRef: observerBRef, awareness: 'unaware' }],
+        });
+      await stealthService.cancel({
+        ...scope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-eligibility-cancel-0001',
+        expectedStateVersion: reevaluated.stateVersion,
+      });
+      cleanupNeeded = false;
+    } finally {
+      if (cleanupNeeded) {
+        const persisted = await prisma.encounter.findFirst({
+          where: { encounterRef },
+          select: { lifecycleStatus: true, stateVersion: true },
+        });
+        if (persisted !== null && !new Set<EncounterLifecycleStatus>([
+          EncounterLifecycleStatus.COMPLETED,
+          EncounterLifecycleStatus.FAILED,
+          EncounterLifecycleStatus.CANCELLED,
+        ]).has(persisted.lifecycleStatus)) {
+          await stealthService.cancel({
+            ...scope,
+            encounterRef,
+            idempotencyKey: 'phase-stealth-eligibility-cleanup-0001',
+            expectedStateVersion: persisted.stateVersion,
+          });
+        }
+      }
+    }
+  });
+
   it('requires explicit partial policy and rolls back essential failures without hidden mutations', async () => {
     const encounterRef = 'phase-beat-partial-policy';
     const created = await encounterService.create({

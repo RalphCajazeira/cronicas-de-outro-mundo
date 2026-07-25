@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyCoreV13ObserverAwareness,
+  coreV13EligibleObserverActorRefs,
   coreV13StealthContextModifier,
   coreV13SurpriseAttackProfile,
+  normalizeCoreV13StealthObserverEligibility,
   revealCoreV13ActorToObservers,
   resolveCoreV13StealthContest,
 } from './core-v1.stealth.js';
 import type {
+  CoreV13ObserverAwareness,
   CoreV1EncounterParticipant,
   CoreV1EncounterState,
 } from './core-v1.encounter.types.js';
@@ -17,6 +20,49 @@ const normal = {
   noise: 'normal',
   pace: 'stationary',
 } as const;
+
+type ObserverEligibilityOverride = {
+  readonly hp?: number;
+  readonly combatState?: 'ready' | 'incapacitated_candidate' | 'removed';
+  readonly zone?: 'engaged' | 'near' | 'medium' | 'far' | 'out_of_range';
+  readonly relation?: 'hostile' | 'ally' | 'neutral';
+};
+
+function observerEligibilityState(
+  observerAwareness: readonly CoreV13ObserverAwareness[],
+  overrides: Readonly<Record<string, ObserverEligibilityOverride>> = {},
+): CoreV1EncounterState {
+  const observerRefs = [...new Set(observerAwareness.map((entry) => entry.observerActorRef))].sort();
+  const resources = (hp: number) => ({
+    hp: { current: hp, maximum: 40 },
+    mana: { current: 20, maximum: 20 },
+    sp: { current: 20, maximum: 20 },
+    customResources: [],
+  });
+  return {
+    stateVersion: 10,
+    participants: [{
+      actorRef: 'rogue',
+      combatState: 'ready',
+      zone: 'engaged',
+      resources: resources(40),
+      stealthState: {
+        visibility: 'exposed',
+        observerAwareness: [...observerAwareness],
+      },
+    }, ...observerRefs.map((actorRef) => ({
+      actorRef,
+      combatState: overrides[actorRef]?.combatState ?? 'ready',
+      zone: overrides[actorRef]?.zone ?? 'engaged',
+      resources: resources(overrides[actorRef]?.hp ?? 40),
+    }))],
+    relations: observerRefs.map((actorRef) => ({
+      leftActorRef: 'rogue',
+      rightActorRef: actorRef,
+      relation: overrides[actorRef]?.relation ?? 'hostile',
+    })),
+  } as unknown as CoreV1EncounterState;
+}
 
 describe('core RC1.3 stealth, detection and surprise', () => {
   it('uses closed context modifiers for lighting, cover, noise and pace', () => {
@@ -99,6 +145,125 @@ describe('core RC1.3 stealth, detection and surprise', () => {
         observerActorRef: 'active-guard', awareness: 'unaware', margin: 3, marginTier: 'success',
       }],
     });
+  });
+
+  it('prunes a zero-HP tracking observer immediately without mutating other awareness', () => {
+    const state = observerEligibilityState([
+      { observerActorRef: 'guard-a', awareness: 'tracking', margin: -20, marginTier: 'critical_failure' },
+      { observerActorRef: 'guard-b', awareness: 'unaware', margin: 8, marginTier: 'success' },
+    ], { 'guard-a': { hp: 0, combatState: 'incapacitated_candidate' } });
+    const before = structuredClone(state);
+    const normalized = normalizeCoreV13StealthObserverEligibility(state);
+    expect(normalized.stateVersion).toBe(11);
+    expect(normalized.participants[0]?.stealthState).toEqual({
+      visibility: 'hidden',
+      observerAwareness: [
+        { observerActorRef: 'guard-b', awareness: 'unaware', margin: 8, marginTier: 'success' },
+      ],
+    });
+    expect(state).toEqual(before);
+  });
+
+  it.each([
+    ['suspicious', -2, 'failure', 'obscured'],
+    ['detected', -20, 'critical_failure', 'exposed'],
+  ] as const)(
+    'preserves a remaining %s observer and recalculates aggregate visibility',
+    (awareness, margin, marginTier, visibility) => {
+      const normalized = normalizeCoreV13StealthObserverEligibility(observerEligibilityState([
+        { observerActorRef: 'guard-a', awareness: 'tracking', margin: -20, marginTier: 'critical_failure' },
+        { observerActorRef: 'guard-b', awareness, margin, marginTier },
+      ], { 'guard-a': { hp: 0 } }));
+      expect(normalized.participants[0]?.stealthState).toEqual({
+        visibility,
+        observerAwareness: [{ observerActorRef: 'guard-b', awareness, margin, marginTier }],
+      });
+    },
+  );
+
+  it.each([
+    ['removed', { combatState: 'removed' as const }],
+    ['out of range', { zone: 'out_of_range' as const }],
+    ['non-hostile', { relation: 'ally' as const }],
+  ])('prunes an observer that is %s', (_label, observerOverride) => {
+    const normalized = normalizeCoreV13StealthObserverEligibility(observerEligibilityState([
+      { observerActorRef: 'guard-a', awareness: 'tracking', margin: -20, marginTier: 'critical_failure' },
+      { observerActorRef: 'guard-b', awareness: 'unaware', margin: 5, marginTier: 'success' },
+    ], { 'guard-a': observerOverride }));
+    expect(coreV13EligibleObserverActorRefs(normalized, 'rogue')).toEqual(['guard-b']);
+    expect(normalized.participants[0]?.stealthState).toEqual({
+      visibility: 'hidden',
+      observerAwareness: [
+        { observerActorRef: 'guard-b', awareness: 'unaware', margin: 5, marginTier: 'success' },
+      ],
+    });
+  });
+
+  it('does not resurrect pruned awareness when an observer returns to eligibility', () => {
+    const pruned = normalizeCoreV13StealthObserverEligibility(observerEligibilityState([
+      { observerActorRef: 'guard-a', awareness: 'tracking', margin: -20, marginTier: 'critical_failure' },
+      { observerActorRef: 'guard-b', awareness: 'unaware', margin: 5, marginTier: 'success' },
+    ], { 'guard-a': { zone: 'out_of_range' } }));
+    const returned = {
+      ...pruned,
+      participants: pruned.participants.map((participant) => participant.actorRef === 'guard-a'
+        ? { ...participant, zone: 'far' as const }
+        : participant),
+    };
+    expect(coreV13EligibleObserverActorRefs(returned, 'rogue')).toEqual(['guard-a', 'guard-b']);
+    expect(normalizeCoreV13StealthObserverEligibility(returned)).toBe(returned);
+    expect(returned.participants[0]?.stealthState?.observerAwareness.map((entry) => entry.observerActorRef))
+      .toEqual(['guard-b']);
+    const reevaluated = applyCoreV13ObserverAwareness(returned, 'rogue', [{
+      observerActorRef: 'guard-a', awareness: 'suspicious', margin: -1, marginTier: 'failure',
+    }], { eligibleObserverActorRefs: ['guard-a', 'guard-b'] });
+    expect(reevaluated.participants[0]?.stealthState?.observerAwareness).toMatchObject([
+      { observerActorRef: 'guard-a', awareness: 'suspicious' },
+      { observerActorRef: 'guard-b', awareness: 'unaware' },
+    ]);
+  });
+
+  it('returns the original state when every observer is eligible and the projection is canonical', () => {
+    const state = observerEligibilityState([
+      { observerActorRef: 'guard-a', awareness: 'tracking', margin: -20, marginTier: 'critical_failure' },
+      { observerActorRef: 'guard-b', awareness: 'unaware', margin: 5, marginTier: 'success' },
+    ]);
+    expect(normalizeCoreV13StealthObserverEligibility(state)).toBe(state);
+  });
+
+  it('prunes one ineligible observer from multiple stealth actors in one immutable transition', () => {
+    const state = observerEligibilityState([
+      { observerActorRef: 'guard-a', awareness: 'tracking', margin: -20, marginTier: 'critical_failure' },
+      { observerActorRef: 'guard-b', awareness: 'unaware', margin: 5, marginTier: 'success' },
+    ], { 'guard-a': { hp: 0 } });
+    const rogue = state.participants[0] as CoreV1EncounterParticipant;
+    const second = {
+      ...rogue,
+      actorRef: 'ranger',
+      stealthState: {
+        visibility: 'exposed' as const,
+        observerAwareness: [
+          { observerActorRef: 'guard-a', awareness: 'detected' as const, margin: -20, marginTier: 'critical_failure' as const },
+          { observerActorRef: 'guard-b', awareness: 'suspicious' as const, margin: -2, marginTier: 'failure' as const },
+        ],
+      },
+    };
+    const multiple = {
+      ...state,
+      participants: [...state.participants, second],
+      relations: [
+        ...state.relations,
+        { leftActorRef: 'ranger', rightActorRef: 'guard-a', relation: 'hostile' as const },
+        { leftActorRef: 'ranger', rightActorRef: 'guard-b', relation: 'hostile' as const },
+      ],
+    };
+    const normalized = normalizeCoreV13StealthObserverEligibility(multiple);
+    expect(normalized.stateVersion).toBe(11);
+    expect(normalized.participants.find((entry) => entry.actorRef === 'rogue')?.stealthState)
+      .toMatchObject({ visibility: 'hidden', observerAwareness: [{ observerActorRef: 'guard-b' }] });
+    expect(normalized.participants.find((entry) => entry.actorRef === 'ranger')?.stealthState)
+      .toMatchObject({ visibility: 'obscured', observerAwareness: [{ observerActorRef: 'guard-b' }] });
+    expect(normalizeCoreV13StealthObserverEligibility(normalized)).toBe(normalized);
   });
 
   it('grants surprise only against an unaware target and only guarantees critical at high margin or by tag', () => {
