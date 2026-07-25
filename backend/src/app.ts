@@ -14,6 +14,12 @@ import { ACTIVE_API_ROUTES, createOpenApiRouter } from './modules/openapi/openap
 import { createApiKeyAuth } from './shared/http/api-key-auth.js';
 import { errorHandler, notFoundHandler } from './shared/http/error-handler.js';
 import { createRequestAudit, type AuditLogWriter, writeHttpAuditLog } from './shared/http/request-audit.js';
+import { createChatGptAppRouter } from './modules/chatgpt-app/mcp/chatgpt-app.routes.js';
+import { createChatGptAppPreviewRouter } from './modules/chatgpt-app/resources/chatgpt-app-preview.routes.js';
+import {
+  createFileWidgetAssets,
+  type WidgetAssets,
+} from './modules/chatgpt-app/resources/widget-assets.js';
 
 export interface AppDependencies {
   actorRepository: ActorRepository;
@@ -22,6 +28,7 @@ export interface AppDependencies {
   readiness: ReadinessCheck;
   auditLog?: AuditLogWriter;
   encounterHttpService: EncounterHttpService;
+  chatGptAppWidgetAssets?: WidgetAssets;
 }
 
 export function createApp(config: AppConfig, dependencies: AppDependencies) {
@@ -30,8 +37,11 @@ export function createApp(config: AppConfig, dependencies: AppDependencies) {
   app.set('apiRoutes', ACTIVE_API_ROUTES);
   app.use(createRequestAudit(dependencies.auditLog ?? (config.NODE_ENV === 'test' ? undefined : writeHttpAuditLog)));
   app.use(express.json({ limit: '100kb' }));
+  const widgetAssets = dependencies.chatGptAppWidgetAssets ?? createFileWidgetAssets();
   app.use('/health', createHealthRouter(dependencies.readiness));
   app.use('/openapi.json', createOpenApiRouter(config.PUBLIC_BASE_URL ?? `http://localhost:${config.PORT}`));
+  app.use('/mcp', createChatGptAppRouter(config, widgetAssets));
+  app.use('/chatgpt-app-preview', createChatGptAppPreviewRouter(config, widgetAssets));
   app.use('/api/v1', createApiKeyAuth(config.RPG_API_KEY));
   app.use('/api/v1/encounters', createEncounterHttpRouter(dependencies.encounterHttpService));
   app.use('/api/v1', createGptRouter(dependencies.gptRepository));

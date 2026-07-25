@@ -8,6 +8,7 @@ const envSchema = z.object({
   DIRECT_URL: z.string().url().optional(),
   RPG_API_KEY: z.string().min(1),
   PUBLIC_BASE_URL: z.string().url().optional(),
+  CHATGPT_APP_PROOF_MODE: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
 }).superRefine((value, context) => {
   if (value.NODE_ENV === 'production' && value.PUBLIC_BASE_URL === undefined) {
     context.addIssue({ code: 'custom', path: ['PUBLIC_BASE_URL'], message: 'Required in production' });

@@ -28,4 +28,10 @@ describe('application configuration', () => {
     expect(() => parseConfig({ ...validEnvironment, NODE_ENV: 'production' })).toThrow('Invalid application configuration');
     expect(parseConfig({ ...validEnvironment, NODE_ENV: 'production', PUBLIC_BASE_URL: 'https://rpg.example.com' }).PUBLIC_BASE_URL).toBe('https://rpg.example.com');
   });
+
+  it('keeps the ChatGPT fixture proof mode disabled unless explicitly enabled', () => {
+    expect(parseConfig(validEnvironment).CHATGPT_APP_PROOF_MODE).toBe(false);
+    expect(parseConfig({ ...validEnvironment, CHATGPT_APP_PROOF_MODE: 'true' }).CHATGPT_APP_PROOF_MODE).toBe(true);
+    expect(() => parseConfig({ ...validEnvironment, CHATGPT_APP_PROOF_MODE: 'yes' })).toThrow('Invalid application configuration');
+  });
 });
