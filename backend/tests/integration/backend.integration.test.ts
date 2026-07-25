@@ -73,6 +73,7 @@ import {
   runWithOperationTelemetry,
 } from '../../src/shared/observability/operation-observability.js';
 import {
+  canonicalTagOmissionConversationPayload,
   capturedRichQuickCreationPayload,
   correctedRichQuickCreationPayload,
 } from '../support/rich-quick-creation-fixture.js';
@@ -6037,6 +6038,80 @@ describe('GPT v1 persistence with real transactions', () => {
       .resolves.toBe(11);
     await expect(prisma.inventoryEntry.count({ where: { actorId: actor.id } })).resolves.toBe(6);
     await expect(prisma.idempotencyRecord.count({ where: { key: corrected.idempotencyKey } })).resolves.toBe(1);
+  });
+
+  it('creates the ten-package conversational payload with canonical blueprint tags and replays it once', async () => {
+    const input = canonicalTagOmissionConversationPayload('integration-canonical-tags');
+    const invalid = structuredClone(canonicalTagOmissionConversationPayload('integration-canonical-tags-invalid'));
+    const tagged = invalid.initialContentPackages.find(({ definition }) => (
+      'starterBlueprint' in definition && definition.starterBlueprint === 'veil_of_darkness_spell'
+    ));
+    if (tagged === undefined) throw new Error('Tagged blueprint fixture is required');
+    tagged.definition.tags = ['invented-capability'];
+    const rejected = await post('/api/v1/game/start', invalid);
+    expect(rejected.status).toBe(400);
+    expect(rejected.body).toMatchObject({
+      error: {
+        code: 'INVALID_INPUT',
+        retryable: false,
+        recoveryAction: 'correct_request',
+      },
+    });
+    const rejectedIssues = (rejected.body as unknown as {
+      error: { issues: Array<{ path: string; message: string }> };
+    }).error.issues;
+    expect(rejectedIssues.some((issue) => (
+      /initialContentPackages\.\d+\.definition\.tags/.test(issue.path)
+      && issue.message === 'Omit definition.tags when starterBlueprint is used; canonical tags are derived'
+    ))).toBe(true);
+    await expectNoCreatedIntent(invalid);
+
+    const created = await post('/api/v1/game/start', input);
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+    expect(created.body).toMatchObject({
+      protagonist: {
+        readiness: {
+          status: 'ready',
+          canBeginMechanically: true,
+          hasStealthCapability: true,
+          hasDetectionCapability: true,
+          inventoryValid: true,
+          equipmentValid: true,
+        },
+      },
+    });
+    const replay = await post('/api/v1/game/start', input);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(created.body);
+
+    const actor = await prisma.actor.findFirstOrThrow({
+      where: {
+        code: input.playerRef,
+        campaign: { code: input.campaignRef, world: { code: input.worldRef } },
+      },
+    });
+    const taggedVersions = await prisma.contentVersion.findMany({
+      where: {
+        contentDefinition: {
+          world: { code: input.worldRef },
+          code: { in: [
+            `${input.playerRef.replace('-player', '')}-shadow-wrapped`,
+            `${input.playerRef.replace('-player', '')}-veil`,
+            `${input.playerRef.replace('-player', '')}-grave-sight`,
+          ] },
+        },
+      },
+      select: { contentDefinition: { select: { code: true } }, tags: true, profile: true },
+    });
+    expect(taggedVersions).toHaveLength(3);
+    for (const version of taggedVersions) {
+      const profile = version.profile as { tags?: unknown };
+      expect(version.tags).toEqual(profile.tags);
+    }
+    await expect(prisma.contentDefinition.count({ where: { world: { code: input.worldRef } } }))
+      .resolves.toBe(10);
+    await expect(prisma.inventoryEntry.count({ where: { actorId: actor.id } })).resolves.toBe(5);
+    await expect(prisma.idempotencyRecord.count({ where: { key: input.idempotencyKey } })).resolves.toBe(1);
   });
 
   it('rejects fragmented duplicate initial grants and accepts one aggregated grant', async () => {

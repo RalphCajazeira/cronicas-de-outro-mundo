@@ -481,6 +481,8 @@ describe('official OpenAPI contract', () => {
     expect(gptInstructions).toContain('Nunca use `contentGrants`');
     expect(powerKnowledge).toContain('Não existe `starterBlueprint` de classe');
     expect(powerKnowledge).toContain('`starterBlueprint`/`blueprintOptions` nunca entram em `profile`');
+    expect(powerKnowledge).toContain('omita `profile`, `inventorySpec` e `definition.tags`');
+    expect(powerKnowledge).toContain('deriva a mecânica e as tags canônicas');
     expect(gptInstructions).toContain('`readiness.canBeginMechanically=true`');
     expect(continuityKnowledge).toContain('nunca mais de 8');
     const blueprints = [...readinessKnowledge.matchAll(/```json\s*([\s\S]*?)```/g)]
@@ -527,6 +529,9 @@ describe('official OpenAPI contract', () => {
       expect(contract.components.schemas[schemaName]?.properties, schemaName).toBeDefined();
     }
     expect(contract.components.schemas.InitialContentDefinition?.description).toContain('reuse aceita somente');
+    expect(contract.components.schemas.InitialContentDefinition?.description).toContain('omita profile/inventorySpec/tags');
+    expect(contract.components.schemas.InitialContentDefinition?.properties?.tags?.description)
+      .toContain('Omita quando starterBlueprint for usado');
     expect(contract.components.schemas.InitialActorContentLink?.properties).not.toHaveProperty('actorRef');
     expect(start.description).toContain('81920 bytes UTF-8');
     expect(start.properties?.initialContentPackages?.maxItems).toBe(24);
@@ -547,6 +552,34 @@ describe('official OpenAPI contract', () => {
     for (const example of Object.values(examples)) {
       const parsed = startGameSchema.safeParse(example.value);
       expect(parsed.success, parsed.success ? '' : JSON.stringify(parsed.error.issues)).toBe(true);
+    }
+    for (const example of Object.values(examples)) {
+      const value = example.value as {
+        initialContentPackages?: Array<{ definition?: {
+          starterBlueprint?: string; tags?: unknown; profile?: unknown; inventorySpec?: unknown;
+        } }>;
+      };
+      for (const item of value.initialContentPackages ?? []) {
+        if (item.definition?.starterBlueprint !== undefined) {
+          expect(item.definition).not.toHaveProperty('tags');
+          expect(item.definition).not.toHaveProperty('profile');
+          expect(item.definition).not.toHaveProperty('inventorySpec');
+        }
+      }
+    }
+    const compactBlueprintExamples = (
+      contract.components.schemas.InitialContentDefinition as unknown as {
+        examples?: Array<Record<string, unknown>>;
+      } | undefined
+    )?.examples;
+    expect(compactBlueprintExamples).toHaveLength(3);
+    expect(compactBlueprintExamples?.map((example) => example.starterBlueprint)).toEqual([
+      'shadow_wrapped_status', 'veil_of_darkness_spell', 'detect_hidden_skill',
+    ]);
+    for (const example of compactBlueprintExamples ?? []) {
+      expect(example).not.toHaveProperty('tags');
+      expect(example).not.toHaveProperty('profile');
+      expect(example).not.toHaveProperty('inventorySpec');
     }
     expect(contract.components.schemas.InitialContentDefinition?.properties?.blueprintOptions)
       .toMatchObject({ type: 'object', additionalProperties: false });

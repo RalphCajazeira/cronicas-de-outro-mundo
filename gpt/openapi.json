@@ -184,14 +184,14 @@
                         "definition": {
                           "mode": "create", "scope": "world", "starterBlueprint": "simple_melee_weapon",
                           "contentType": "weapon", "code": "kael-blade", "name": "Lâmina de Kael",
-                          "description": "Lâmina leve inicial.", "presentation": {}, "tags": ["starter"], "status": "active"
+                          "description": "Lâmina leve inicial.", "presentation": {}, "status": "active"
                         }
                       },
                       {
                         "definition": {
                           "mode": "create", "scope": "world", "starterBlueprint": "basic_mobility_skill",
                           "contentType": "skill", "code": "agile-step", "name": "Passo Ágil",
-                          "description": "Movimento rápido.", "presentation": {}, "tags": ["starter"], "status": "active"
+                          "description": "Movimento rápido.", "presentation": {}, "status": "active"
                         },
                         "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
                       }
@@ -228,7 +228,7 @@
                           "mode": "create", "scope": "world", "starterBlueprint": "basic_offensive_spell",
                           "blueprintOptions": { "damageElement": "ice" },
                           "contentType": "spell", "code": "ice-shard", "name": "Estilhaço Gélido",
-                          "description": "Projétil mágico de gelo.", "presentation": {}, "tags": ["starter"], "status": "active"
+                          "description": "Projétil mágico de gelo.", "presentation": {}, "status": "active"
                         },
                         "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
                       },
@@ -236,7 +236,7 @@
                         "definition": {
                           "mode": "create", "scope": "world", "starterBlueprint": "basic_healing_spell",
                           "contentType": "spell", "code": "minor-mend", "name": "Cura Menor",
-                          "description": "Restauração pessoal.", "presentation": {}, "tags": ["starter"], "status": "active"
+                          "description": "Restauração pessoal.", "presentation": {}, "status": "active"
                         },
                         "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
                       }
@@ -270,14 +270,14 @@
                         "definition": {
                           "mode": "create", "scope": "world", "starterBlueprint": "simple_melee_weapon",
                           "contentType": "weapon", "code": "nara-blade", "name": "Espada Rúnica",
-                          "description": "Espada leve inicial.", "presentation": {}, "tags": ["starter"], "status": "active"
+                          "description": "Espada leve inicial.", "presentation": {}, "status": "active"
                         }
                       },
                       {
                         "definition": {
                           "mode": "create", "scope": "world", "starterBlueprint": "basic_offensive_spell",
                           "contentType": "spell", "code": "arcane-bolt", "name": "Raio Arcano",
-                          "description": "Ataque mágico inicial.", "presentation": {}, "tags": ["starter"], "status": "active"
+                          "description": "Ataque mágico inicial.", "presentation": {}, "status": "active"
                         },
                         "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
                       },
@@ -285,7 +285,7 @@
                         "definition": {
                           "mode": "create", "scope": "world", "starterBlueprint": "basic_healing_consumable",
                           "contentType": "consumable", "code": "healing-potion", "name": "Poção de Cura",
-                          "description": "Consumível de cura inicial.", "presentation": {}, "tags": ["starter"], "status": "active"
+                          "description": "Consumível de cura inicial.", "presentation": {}, "status": "active"
                         }
                       },
                       {
@@ -296,14 +296,14 @@
                             "secondaryModifiers": { "evasion": 2, "movementSpeed": 1, "physicalDefense": 2, "magicalDefense": 5 }
                           },
                           "contentType": "armor", "code": "elven-boots", "name": "Bota Élfica",
-                          "description": "Botas leves com quatro modificadores enquanto equipadas.", "presentation": {}, "tags": ["starter", "stealth"], "status": "active"
+                          "description": "Botas leves com quatro modificadores enquanto equipadas.", "presentation": {}, "status": "active"
                         }
                       },
                       {
                         "definition": {
                           "mode": "create", "scope": "world", "starterBlueprint": "shadow_wrapped_status",
                           "contentType": "status_effect", "code": "shadow-wrapped", "name": "Envolto em Sombras",
-                          "description": "Status de sombras que melhora furtividade sem invisibilidade.", "presentation": {}, "tags": ["shadow_wrapped", "stealth"], "status": "active"
+                          "description": "Status de sombras que melhora furtividade sem invisibilidade.", "presentation": {}, "status": "active"
                         }
                       },
                       {
@@ -311,7 +311,7 @@
                           "mode": "create", "scope": "world", "starterBlueprint": "veil_of_darkness_spell",
                           "blueprintOptions": { "linkedStatusCode": "shadow-wrapped" },
                           "contentType": "spell", "code": "veil-of-darkness", "name": "Véu das Trevas",
-                          "description": "Aplica Envolto em Sombras ao próprio conjurador.", "presentation": {}, "tags": ["shadow", "stealth"], "status": "active"
+                          "description": "Aplica Envolto em Sombras ao próprio conjurador.", "presentation": {}, "status": "active"
                         },
                         "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
                       },
@@ -319,7 +319,7 @@
                         "definition": {
                           "mode": "create", "scope": "world", "starterBlueprint": "detect_hidden_skill",
                           "contentType": "skill", "code": "detect-hidden", "name": "Percepção de Ocultos",
-                          "description": "Capacidade informativa de detecção; não concede movimento.", "presentation": {}, "tags": ["detect_hidden", "informational"], "status": "active"
+                          "description": "Capacidade informativa de detecção; não concede movimento.", "presentation": {}, "status": "active"
                         },
                         "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
                       },
@@ -400,7 +400,7 @@
                           "mode": "create", "scope": "world", "starterBlueprint": "basic_offensive_spell",
                           "blueprintOptions": { "damageElement": "shadow" },
                           "contentType": "spell", "code": "shadow-bolt", "name": "Seta Umbral",
-                          "description": "Projétil ofensivo de sombras.", "presentation": {}, "tags": ["shadow", "offensive"], "status": "active"
+                          "description": "Projétil ofensivo de sombras.", "presentation": {}, "status": "active"
                         },
                         "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
                       },
@@ -408,7 +408,7 @@
                         "definition": {
                           "mode": "create", "scope": "world", "starterBlueprint": "basic_mobility_skill",
                           "contentType": "skill", "code": "silent-step", "name": "Passo Silencioso",
-                          "description": "Reposicionamento cuidadoso para infiltração.", "presentation": {}, "tags": ["stealth", "movement"], "status": "active"
+                          "description": "Reposicionamento cuidadoso para infiltração.", "presentation": {}, "status": "active"
                         },
                         "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
                       },
@@ -417,7 +417,7 @@
                           "mode": "create", "scope": "world", "starterBlueprint": "shadow_wrapped_status",
                           "contentType": "status_effect", "code": "shadow-wrapped", "name": "Envolto em Sombras",
                           "description": "Status de cena que melhora furtividade sem invisibilidade.", "presentation": {},
-                          "tags": ["shadow_wrapped", "stealth"], "status": "active"
+                          "status": "active"
                         }
                       },
                       {
@@ -426,7 +426,7 @@
                           "blueprintOptions": { "linkedStatusCode": "shadow-wrapped" },
                           "contentType": "spell", "code": "veil-of-darkness", "name": "Véu das Trevas",
                           "description": "Aplica Envolto em Sombras ao próprio conjurador.", "presentation": {},
-                          "tags": ["shadow", "stealth"], "status": "active"
+                          "status": "active"
                         },
                         "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
                       },
@@ -435,7 +435,7 @@
                           "mode": "create", "scope": "world", "starterBlueprint": "detect_hidden_skill",
                           "contentType": "skill", "code": "beyond-veil-sight", "name": "Olhar Além do Véu",
                           "description": "Detecção mecânica de presenças ocultas sem revelar informação livremente.", "presentation": {},
-                          "tags": ["detect_hidden", "informational"], "status": "active"
+                          "status": "active"
                         },
                         "protagonistLink": { "state": "known", "rank": 0, "progress": 0, "mastery": 0 }
                       },
@@ -443,7 +443,7 @@
                         "definition": {
                           "mode": "create", "scope": "world", "starterBlueprint": "simple_melee_weapon",
                           "contentType": "weapon", "code": "dark-blade-dagger", "name": "Adaga de Lâmina Escura",
-                          "description": "Adaga leve para defesa e ataques próximos.", "presentation": {}, "tags": ["light", "shadow"], "status": "active"
+                          "description": "Adaga leve para defesa e ataques próximos.", "presentation": {}, "status": "active"
                         }
                       },
                       {
@@ -451,7 +451,7 @@
                           "mode": "create", "scope": "world", "starterBlueprint": "starter_body_armor",
                           "contentType": "armor", "code": "shadow-scholar-garb", "name": "Traje Leve do Erudito Sombrio",
                           "description": "Traje integral leve reforçado com couro flexível.", "presentation": {},
-                          "tags": ["light", "stealth"], "status": "active"
+                          "status": "active"
                         }
                       },
                       {
@@ -459,14 +459,14 @@
                           "mode": "create", "scope": "world", "starterBlueprint": "simple_magic_focus",
                           "blueprintOptions": { "damageElement": "shadow" },
                           "contentType": "weapon", "code": "obsidian-focus", "name": "Foco de Obsidiana",
-                          "description": "Instrumento mágico leve para canalizar sombras.", "presentation": {}, "tags": ["focus", "shadow"], "status": "active"
+                          "description": "Instrumento mágico leve para canalizar sombras.", "presentation": {}, "status": "active"
                         }
                       },
                       {
                         "definition": {
                           "mode": "create", "scope": "world", "starterBlueprint": "basic_healing_consumable",
                           "contentType": "consumable", "code": "healing-potion", "name": "Poção de Cura",
-                          "description": "Consumível inicial de cura.", "presentation": {}, "tags": ["healing"], "status": "active"
+                          "description": "Consumível inicial de cura.", "presentation": {}, "status": "active"
                         }
                       },
                       {
@@ -2633,7 +2633,7 @@
               ,"secondary_modifier_equipment", "shadow_wrapped_status",
               "veil_of_darkness_spell", "detect_hidden_skill"
             ],
-            "description": "Preset mecânico seguro para Criação Rápida. O backend deriva profile e inventorySpec."
+            "description": "Preset mecânico seguro para Criação Rápida. O backend deriva profile, inventorySpec e tags canônicas."
           },
           "blueprintOptions": {
             "type": "object", "additionalProperties": false,
@@ -2666,19 +2666,61 @@
               },
               "linkedStatusCode": { "$ref": "#/components/schemas/Code" }
             },
-            "description": "Opções fechadas por blueprint. O backend rejeita opções incompatíveis e deriva profile/inventorySpec."
+            "description": "Opções fechadas por blueprint. O backend rejeita opções incompatíveis e deriva profile, inventorySpec e tags canônicas."
           },
           "name": { "type": "string", "minLength": 1, "maxLength": 200 },
           "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
           "profile": { "$ref": "#/components/schemas/CoreV1ContentProfile" },
           "inventorySpec": { "$ref": "#/components/schemas/InventorySpec" },
           "presentation": { "$ref": "#/components/schemas/ContentPresentation" },
-          "tags": { "type": "array", "maxItems": 24, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 100 } },
+          "tags": {
+            "type": "array",
+            "maxItems": 24,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1, "maxLength": 100 },
+            "description": "Omita quando starterBlueprint for usado: o backend deriva as tags canônicas. Obrigatório em create sem starterBlueprint."
+          },
           "status": { "const": "active" },
           "metadata": { "$ref": "#/components/schemas/JsonObject", "description": "Até 4096 bytes UTF-8, profundidade 5 e 30 chaves recursivas." },
           "overridesWorldDefinition": { "type": "boolean" }
         },
-        "description": "create exige identidade completa e, para conteúdo customizado, profile/inventorySpec. Com starterBlueprint diretamente em definition, omita profile/inventorySpec: o backend os deriva. Não há blueprint de classe; classe mecânica customizada usa profile completo com grants, nunca contentGrants. reuse aceita somente mode, scope=world, code e contentType."
+        "description": "create exige identidade completa e, para conteúdo customizado, profile/inventorySpec/tags. Com starterBlueprint diretamente em definition, omita profile/inventorySpec/tags: o backend os deriva. Não há blueprint de classe; classe mecânica customizada usa profile completo com grants, nunca contentGrants. reuse aceita somente mode, scope=world, code e contentType.",
+        "examples": [
+          {
+            "mode": "create",
+            "scope": "world",
+            "starterBlueprint": "shadow_wrapped_status",
+            "code": "shadow-wrapped",
+            "contentType": "status",
+            "name": "Envolto em Sombras",
+            "description": "Status de sombras que melhora furtividade sem invisibilidade.",
+            "presentation": {},
+            "status": "active"
+          },
+          {
+            "mode": "create",
+            "scope": "world",
+            "starterBlueprint": "veil_of_darkness_spell",
+            "blueprintOptions": { "linkedStatusCode": "shadow-wrapped" },
+            "code": "veil-of-darkness",
+            "contentType": "spell",
+            "name": "Véu das Trevas",
+            "description": "Aplica Envolto em Sombras ao próprio conjurador.",
+            "presentation": {},
+            "status": "active"
+          },
+          {
+            "mode": "create",
+            "scope": "world",
+            "starterBlueprint": "detect_hidden_skill",
+            "code": "detect-hidden",
+            "contentType": "skill",
+            "name": "Olhar do Arquivista",
+            "description": "Capacidade informativa de detecção; não concede movimento.",
+            "presentation": {},
+            "status": "active"
+          }
+        ]
       },
       "InitialActorContentLink": {
         "type": "object",
