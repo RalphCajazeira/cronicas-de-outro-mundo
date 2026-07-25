@@ -32,7 +32,7 @@ import {
   processNextCoreV1EncounterEvent,
   resolveCoreV1DeterministicReactionOutcome,
   applyCoreV13ObserverAwareness,
-  revealCoreV13Actor,
+  revealCoreV13ActorToObservers,
   resolveCoreV13StealthContest,
   validateCoreV1EncounterActionIntent,
   type CoreV1EncounterBatchResult,
@@ -520,6 +520,55 @@ function mergeReports(
   };
 }
 
+export function applyResolvedAttackStealthReveals(
+  report: CoreV1EncounterBatchResult,
+): CoreV1EncounterBatchResult {
+  const invalidatedEventRefs = new Set(
+    report.invalidatedEvents.map((entry) => entry.event.eventRef),
+  );
+  const resolvedEffectEvents = report.processedEvents.filter((event) => (
+    (event.type === 'action_effect' || event.type === 'channel_pulse')
+    && !invalidatedEventRefs.has(event.eventRef)
+  ));
+  if (resolvedEffectEvents.length !== report.effectResolutions.length) {
+    throw new EncounterError('ENCOUNTER_INTERNAL');
+  }
+  const revealByAction = new Map<string, {
+    readonly actorRef: string;
+    readonly observerActorRefs: Set<string>;
+  }>();
+  for (const [index, event] of resolvedEffectEvents.entries()) {
+    const resolution = report.effectResolutions[index];
+    if (resolution === undefined || resolution.damageResults.length === 0) continue;
+    const actionRef = event.actionRef;
+    const targetActorRef = event.targetRef;
+    const actorRef = resolution.sourceBefore.actorRef;
+    if (actionRef === undefined || targetActorRef === undefined
+      || resolution.targetBefore.actorRef !== targetActorRef
+      || event.timelineEvent.actorRef !== actorRef) {
+      throw new EncounterError('ENCOUNTER_INTERNAL');
+    }
+    const existing = revealByAction.get(actionRef);
+    if (existing !== undefined) {
+      if (existing.actorRef !== actorRef) throw new EncounterError('ENCOUNTER_INTERNAL');
+      existing.observerActorRefs.add(targetActorRef);
+    } else {
+      revealByAction.set(actionRef, { actorRef, observerActorRefs: new Set([targetActorRef]) });
+    }
+  }
+  let encounterAfter = report.encounterAfter;
+  for (const actionRef of [...revealByAction.keys()].sort()) {
+    const reveal = revealByAction.get(actionRef);
+    if (reveal === undefined) continue;
+    encounterAfter = revealCoreV13ActorToObservers(
+      encounterAfter,
+      reveal.actorRef,
+      [...reveal.observerActorRefs].sort(),
+    );
+  }
+  return encounterAfter === report.encounterAfter ? report : { ...report, encounterAfter };
+}
+
 function processUntilReactionBoundary(
   state: CoreV1EncounterState,
   runtime: CoreV1EncounterRuntime,
@@ -527,14 +576,18 @@ function processUntilReactionBoundary(
   const hasReactionBoundary = state.scheduledEvents.some((event) => (
     event.type === 'reaction_resolved' || event.type === 'counter_attack_started'
   ));
-  if (!hasReactionBoundary) return coreValue(processCoreV1EncounterBatch(state, runtime));
+  if (!hasReactionBoundary) {
+    return applyResolvedAttackStealthReveals(coreValue(processCoreV1EncounterBatch(state, runtime)));
+  }
   const reports: CoreV1EncounterBatchResult[] = [];
   let current = state;
   while (reports.length < CORE_V1_MAX_ENCOUNTER_BATCH_EVENTS) {
     const next = current.scheduledEvents[0];
     if (next === undefined || next.type === 'reaction_resolved' || next.type === 'counter_attack_started') break;
     if (next.timelineEvent.tick - state.currentTick > CORE_V1_MAX_ENCOUNTER_BATCH_ADVANCE) break;
-    const report = coreValue(processNextCoreV1EncounterEvent(current, runtime));
+    const report = applyResolvedAttackStealthReveals(
+      coreValue(processNextCoreV1EncounterEvent(current, runtime)),
+    );
     if (report.encounterAfter.stateVersion === current.stateVersion) break;
     reports.push(report);
     current = report.encounterAfter;
@@ -898,7 +951,7 @@ async function executeBeatPlan(
     }
     if (component.type === 'prepare') prepared.push({ index, component });
   }
-  const report = coreValue(applyCoreV1EncounterActionPlan({
+  const report = applyResolvedAttackStealthReveals(coreValue(applyCoreV1EncounterActionPlan({
     encounter: state,
     plan: {
       planRef: `beat-plan-${prefix}`,
@@ -910,7 +963,7 @@ async function executeBeatPlan(
     definitions,
     targetingContexts,
     runtime: { rolls: recorder, reactionOutcomes: automaticReactionResolver() },
-  }));
+  })));
   const resolved = new Set(report.resolvedActions);
   const expectedByIndex = new Map(expectedActions.map((entry) => [entry.index, entry]));
   const results = components.map((requestedComponent, index) => {
@@ -1055,13 +1108,13 @@ async function executeTriggeredPreparedPlans(
     const authoritative = actionCatalogSource === undefined
       ? await loadAuthoritativeEncounterAction(transaction, { ...loaded, state: current }, intent)
       : await loadCachedAuthoritativeEncounterAction(actionCatalogSource, { ...loaded, state: current }, intent);
-    const report = coreValue(applyCoreV1EncounterActionPlan({
+    const report = applyResolvedAttackStealthReveals(coreValue(applyCoreV1EncounterActionPlan({
       encounter: current,
       plan: { ...stored, expectedStateVersion: current.stateVersion },
       definitions: { [intent.intentRef]: authoritative.definition },
       targetingContexts: { [intent.intentRef]: authoritative.targetingContext },
       runtime: { rolls: recorder, reactionOutcomes: automaticReactionResolver() },
-    }));
+    })));
     reports.push(report);
     current = report.encounterAfter;
   }
@@ -1139,8 +1192,6 @@ async function executeOneResolvedBeat(
         recorder,
         loaded.context,
       );
-    } else if (component.type === 'attack') {
-      current = revealCoreV13Actor(current, intent.actorRef);
     }
   }
   reports.push(main.report);
@@ -1172,9 +1223,6 @@ async function executeOneResolvedBeat(
     current = applyBeatGuardCapabilities(
       npc.state, actorRef, npcResolved ? [selected.component] : [], `${prefix}-npc-${npcIndex}`,
     );
-    if (npcResolved && selected.component.type === 'attack') {
-      current = revealCoreV13Actor(current, actorRef);
-    }
     reports.push(npc.report);
     if (npcResolved) {
       actorsActed.add(actorRef);
@@ -1809,12 +1857,12 @@ export function createEncounterService(
       const normalizedInput = { ...input, intent };
       return mutate('submit_intent', normalizedInput, [EncounterLifecycleStatus.AWAITING_INTENT], async (transaction, loaded, recorder) => {
         const action = await loadAuthoritativeEncounterAction(transaction, loaded, intent);
-        const batch = coreValue(applyCoreV1EncounterIntent({
+        const batch = applyResolvedAttackStealthReveals(coreValue(applyCoreV1EncounterIntent({
           encounter: loaded.state,
           intent,
           ...action,
           runtime: { rolls: recorder },
-        }));
+        })));
         return { state: batch.encounterAfter, batch, stopReason: null };
       });
     },
@@ -1832,10 +1880,10 @@ export function createEncounterService(
           || event.reactionKind !== input.reactionKind) {
           throw new EncounterError('ENCOUNTER_LIFECYCLE_CONFLICT');
         }
-        const batch = coreValue(processNextCoreV1EncounterEvent(loaded.state, {
+        const batch = applyResolvedAttackStealthReveals(coreValue(processNextCoreV1EncounterEvent(loaded.state, {
           rolls: recorder,
           reactionOutcomes: deterministicReactionResolver(input),
-        }));
+        })));
         return { state: batch.encounterAfter, batch, stopReason: batch.stopReason };
       });
     },
@@ -1887,9 +1935,9 @@ export function createEncounterService(
         let current = loaded.state;
         const reports: CoreV1EncounterBatchResult[] = [];
         if (loaded.record.lifecycleStatus !== EncounterLifecycleStatus.AWAITING_INTENT) {
-          const resumed = coreValue(processCoreV1EncounterBatch(current, {
+          const resumed = applyResolvedAttackStealthReveals(coreValue(processCoreV1EncounterBatch(current, {
             rolls: recorder, reactionOutcomes: automaticReactionResolver(),
-          }));
+          })));
           reports.push(resumed);
           current = resumed.encounterAfter;
         }

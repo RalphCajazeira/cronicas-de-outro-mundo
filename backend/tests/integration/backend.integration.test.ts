@@ -259,7 +259,11 @@ async function createMechanicalActor(input: {
 }) {
   return prisma.$transaction(async (transaction) => {
     const actor = await transaction.actor.create({ data: input });
-    await createActorMechanicalState(transaction, { actorId: actor.id, primaryAttributes: balancedPrimaryAttributes });
+    await createActorMechanicalState(transaction, {
+      actorId: actor.id,
+      primaryAttributes: balancedPrimaryAttributes,
+      ...(input.level === undefined ? {} : { level: input.level }),
+    });
     return actor;
   });
 }
@@ -3201,7 +3205,7 @@ describe('Phase 1L-B transactional encounter adapter', () => {
     }
   });
 
-  it('persists hide and sneak awareness per observer, replays safely, and reveals on attack', async () => {
+  it('persists target-scoped surprise across two observers, replays safely, and reveals attacks individually', async () => {
     const stealthService = createEncounterService(
       prisma,
       (executionRef) => new RecordingEncounterRollProvider({ nextBps: () => 1 }, executionRef),
@@ -3215,7 +3219,8 @@ describe('Phase 1L-B transactional encounter adapter', () => {
       campaignRef: quickStart.campaignRef,
     };
     const stealthActorRef = quickStart.protagonist.code;
-    const observerRef = 'stealth-resolution-observer';
+    const observerARef = 'stealth-resolution-observer-a';
+    const observerBRef = 'stealth-resolution-observer-b';
     const stealthCampaign = await prisma.campaign.findFirstOrThrow({
       where: { code: stealthScope.campaignRef, world: { code: stealthScope.worldRef } },
       select: { id: true, rulesetVersion: { select: { code: true } } },
@@ -3223,9 +3228,17 @@ describe('Phase 1L-B transactional encounter adapter', () => {
     expect(stealthCampaign.rulesetVersion.code).toBe('core-v1.3');
     await createMechanicalActor({
       campaignId: stealthCampaign.id,
-      code: observerRef,
-      name: 'Observador da Galeria',
+      code: observerARef,
+      name: 'Observador A da Galeria',
       actorType: ActorType.NPC,
+      level: 100,
+    });
+    await createMechanicalActor({
+      campaignId: stealthCampaign.id,
+      code: observerBRef,
+      name: 'Observador B da Galeria',
+      actorType: ActorType.NPC,
+      level: 100,
     });
     const encounterRef = 'phase-stealth-resolution';
     let cleanupNeeded = true;
@@ -3237,11 +3250,15 @@ describe('Phase 1L-B transactional encounter adapter', () => {
         partySideRef: 'party',
         participants: [
           { bindingKind: 'persisted_actor', actorRef: stealthActorRef, sideRef: 'party', zone: 'near' },
-          { bindingKind: 'persisted_actor', actorRef: observerRef, sideRef: 'hostile', zone: 'engaged' },
+          { bindingKind: 'persisted_actor', actorRef: observerARef, sideRef: 'hostile', zone: 'engaged' },
+          { bindingKind: 'persisted_actor', actorRef: observerBRef, sideRef: 'hostile', zone: 'engaged' },
         ],
         relations: [
-          { leftActorRef: observerRef, rightActorRef: observerRef, relation: 'self' },
-          { leftActorRef: observerRef, rightActorRef: stealthActorRef, relation: 'hostile' },
+          { leftActorRef: observerARef, rightActorRef: observerARef, relation: 'self' },
+          { leftActorRef: observerARef, rightActorRef: observerBRef, relation: 'ally' },
+          { leftActorRef: observerARef, rightActorRef: stealthActorRef, relation: 'hostile' },
+          { leftActorRef: observerBRef, rightActorRef: observerBRef, relation: 'self' },
+          { leftActorRef: observerBRef, rightActorRef: stealthActorRef, relation: 'hostile' },
           { leftActorRef: stealthActorRef, rightActorRef: stealthActorRef, relation: 'self' },
         ],
         context: {
@@ -3272,7 +3289,10 @@ describe('Phase 1L-B transactional encounter adapter', () => {
           resolutionPolicy: 'atomic' as const,
           components: [{ type: 'hide' as const }],
         },
-        npcDirectives: [{ actorRef: observerRef, strategy: 'defensive' as const }],
+        npcDirectives: [
+          { actorRef: observerARef, strategy: 'defensive' as const },
+          { actorRef: observerBRef, strategy: 'defensive' as const },
+        ],
       };
       const hidden = await stealthService.resolveBeat(hideInput);
       expect(hidden.beatSummary?.componentResults[0]).toMatchObject({
@@ -3280,21 +3300,35 @@ describe('Phase 1L-B transactional encounter adapter', () => {
         status: 'accepted',
         stealth: {
           visibility: 'hidden',
-          observerResults: [{
-            observerActorRef: observerRef,
-            awareness: 'unaware',
-            marginTier: 'high_success',
-          }],
+          observerResults: [
+            {
+              observerActorRef: observerARef,
+              awareness: 'unaware',
+              marginTier: 'high_success',
+            },
+            {
+              observerActorRef: observerBRef,
+              awareness: 'unaware',
+              marginTier: 'high_success',
+            },
+          ],
         },
       });
       expect(hidden.scene?.participants.find((entry) => entry.actorRef === stealthActorRef)?.stealth)
         .toEqual({
           visibility: 'hidden',
-          observers: [{
-            observerActorRef: observerRef,
-            awareness: 'unaware',
-            marginTier: 'high_success',
-          }],
+          observers: [
+            {
+              observerActorRef: observerARef,
+              awareness: 'unaware',
+              marginTier: 'high_success',
+            },
+            {
+              observerActorRef: observerBRef,
+              awareness: 'unaware',
+              marginTier: 'high_success',
+            },
+          ],
         });
       const rollsAfterHide = await prisma.encounterRoll.count({
         where: {
@@ -3302,7 +3336,7 @@ describe('Phase 1L-B transactional encounter adapter', () => {
           kind: { in: [EncounterRollKind.STEALTH, EncounterRollKind.DETECTION] },
         },
       });
-      expect(rollsAfterHide).toBe(2);
+      expect(rollsAfterHide).toBe(4);
       await expect(stealthService.resolveBeat(hideInput)).resolves.toEqual(hidden);
       await expect(prisma.encounterRoll.count({
         where: {
@@ -3323,7 +3357,10 @@ describe('Phase 1L-B transactional encounter adapter', () => {
           resolutionPolicy: 'atomic',
           components: [{ type: 'sneak_move', destination: 'engaged', pace: 'careful' }],
         },
-        npcDirectives: [{ actorRef: observerRef, strategy: 'defensive' }],
+        npcDirectives: [
+          { actorRef: observerARef, strategy: 'defensive' },
+          { actorRef: observerBRef, strategy: 'defensive' },
+        ],
       });
       expect(sneaked.beatSummary?.componentResults[0]).toMatchObject({
         type: 'sneak_move',
@@ -3333,7 +3370,7 @@ describe('Phase 1L-B transactional encounter adapter', () => {
       expect(sneaked.scene?.participants.find((entry) => entry.actorRef === stealthActorRef))
         .toMatchObject({ zone: 'engaged', stealth: { visibility: 'hidden' } });
 
-      const attacked = await stealthService.resolveBeat({
+      const attackAInput = {
         ...stealthScope,
         encounterRef,
         idempotencyKey: 'phase-stealth-attack-0001',
@@ -3342,29 +3379,180 @@ describe('Phase 1L-B transactional encounter adapter', () => {
           actorRef: stealthActorRef,
           objective: 'surprise_attack',
           narrative: 'Ralph ataca a partir da ocultação.',
+          resolutionPolicy: 'atomic' as const,
+          components: [{
+            type: 'attack' as const,
+            inventoryEntryRef: 'stealth-resolution-blade-1',
+            targetRefs: [observerARef],
+          }],
+        },
+        npcDirectives: [
+          { actorRef: observerARef, strategy: 'defensive' as const },
+          { actorRef: observerBRef, strategy: 'defensive' as const },
+        ],
+      };
+      const attacked = await stealthService.resolveBeat(attackAInput);
+      expect(attacked.scene?.participants.find((entry) => entry.actorRef === stealthActorRef)?.stealth)
+        .toEqual({
+          visibility: 'exposed',
+          observers: [
+            {
+              observerActorRef: observerARef,
+              awareness: 'tracking',
+              marginTier: 'critical_failure',
+            },
+            {
+              observerActorRef: observerBRef,
+              awareness: 'unaware',
+              marginTier: 'high_success',
+            },
+          ],
+        });
+      const operationCountAfterAttackA = await prisma.encounterOperation.count({
+        where: { encounter: { encounterRef } },
+      });
+      const rollCountAfterAttackA = await prisma.encounterRoll.count({
+        where: { encounter: { encounterRef } },
+      });
+      await expect(stealthService.resolveBeat(attackAInput)).resolves.toEqual(attacked);
+      await expect(prisma.encounterOperation.count({
+        where: { encounter: { encounterRef } },
+      })).resolves.toBe(operationCountAfterAttackA);
+      await expect(prisma.encounterRoll.count({
+        where: { encounter: { encounterRef } },
+      })).resolves.toBe(rollCountAfterAttackA);
+
+      const secondAttackA = await stealthService.resolveBeat({
+        ...stealthScope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-attack-a-0002',
+        expectedStateVersion: attacked.stateVersion,
+        intent: {
+          actorRef: stealthActorRef,
+          objective: 'repeat_attack_without_surprise',
+          narrative: 'Ralph volta a atacar o observador que já o rastreia.',
           resolutionPolicy: 'atomic',
           components: [{
             type: 'attack',
             inventoryEntryRef: 'stealth-resolution-blade-1',
-            targetRefs: [observerRef],
+            targetRefs: [observerARef],
           }],
         },
-        npcDirectives: [{ actorRef: observerRef, strategy: 'defensive' }],
+        npcDirectives: [
+          { actorRef: observerARef, strategy: 'defensive' },
+          { actorRef: observerBRef, strategy: 'defensive' },
+        ],
       });
-      expect(attacked.scene?.participants.find((entry) => entry.actorRef === stealthActorRef)?.stealth)
+      expect(secondAttackA.scene?.participants.find((entry) => entry.actorRef === stealthActorRef)?.stealth)
+        .toEqual(attacked.scene?.participants.find((entry) => entry.actorRef === stealthActorRef)?.stealth);
+
+      const attackedB = await stealthService.resolveBeat({
+        ...stealthScope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-attack-b-0001',
+        expectedStateVersion: secondAttackA.stateVersion,
+        intent: {
+          actorRef: stealthActorRef,
+          objective: 'preserved_surprise_attack',
+          narrative: 'Ralph usa a surpresa ainda preservada contra o segundo observador.',
+          resolutionPolicy: 'atomic',
+          components: [{
+            type: 'attack',
+            inventoryEntryRef: 'stealth-resolution-blade-1',
+            targetRefs: [observerBRef],
+          }],
+        },
+        npcDirectives: [
+          { actorRef: observerARef, strategy: 'defensive' },
+          { actorRef: observerBRef, strategy: 'defensive' },
+        ],
+      });
+      expect(attackedB.scene?.participants.find((entry) => entry.actorRef === stealthActorRef)?.stealth)
         .toEqual({
           visibility: 'exposed',
-          observers: [{
-            observerActorRef: observerRef,
-            awareness: 'tracking',
-            marginTier: 'critical_failure',
-          }],
+          observers: [
+            {
+              observerActorRef: observerARef,
+              awareness: 'tracking',
+              marginTier: 'critical_failure',
+            },
+            {
+              observerActorRef: observerBRef,
+              awareness: 'tracking',
+              marginTier: 'critical_failure',
+            },
+          ],
+        });
+
+      const hiddenAgain = await stealthService.resolveBeat({
+        ...stealthScope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-hide-0002',
+        expectedStateVersion: attackedB.stateVersion,
+        intent: {
+          actorRef: stealthActorRef,
+          objective: 'hide_again',
+          narrative: 'Ralph volta a se ocultar antes de agir como NPC.',
+          resolutionPolicy: 'atomic',
+          components: [{ type: 'hide' }],
+        },
+        npcDirectives: [
+          { actorRef: observerARef, strategy: 'defensive' },
+          { actorRef: observerBRef, strategy: 'defensive' },
+        ],
+      });
+      expect(hiddenAgain.scene?.participants.find((entry) => entry.actorRef === stealthActorRef)?.stealth)
+        .toMatchObject({
+          visibility: 'hidden',
+          observers: [
+            { observerActorRef: observerARef, awareness: 'unaware' },
+            { observerActorRef: observerBRef, awareness: 'unaware' },
+          ],
+        });
+
+      const npcAttackedA = await stealthService.resolveBeat({
+        ...stealthScope,
+        encounterRef,
+        idempotencyKey: 'phase-stealth-npc-attack-a-0001',
+        expectedStateVersion: hiddenAgain.stateVersion,
+        intent: {
+          actorRef: observerARef,
+          objective: 'hold_position',
+          narrative: 'O observador A mantém posição enquanto Ralph ataca como NPC.',
+          resolutionPolicy: 'atomic',
+          components: [{ type: 'defend' }],
+        },
+        npcDirectives: [
+          { actorRef: stealthActorRef, strategy: 'aggressive', targetRef: observerARef },
+          { actorRef: observerBRef, strategy: 'defensive' },
+        ],
+      });
+      expect(npcAttackedA.beatSummary?.npcActions).toContainEqual(expect.objectContaining({
+        actorRef: stealthActorRef,
+        actionType: 'attack',
+        targetRef: observerARef,
+      }));
+      expect(npcAttackedA.scene?.participants.find((entry) => entry.actorRef === stealthActorRef)?.stealth)
+        .toEqual({
+          visibility: 'exposed',
+          observers: [
+            {
+              observerActorRef: observerARef,
+              awareness: 'tracking',
+              marginTier: 'critical_failure',
+            },
+            {
+              observerActorRef: observerBRef,
+              awareness: 'unaware',
+              marginTier: 'high_success',
+            },
+          ],
         });
       await stealthService.cancel({
         ...stealthScope,
         encounterRef,
         idempotencyKey: 'phase-stealth-cancel-0001',
-        expectedStateVersion: attacked.stateVersion,
+        expectedStateVersion: npcAttackedA.stateVersion,
       });
       cleanupNeeded = false;
     } finally {

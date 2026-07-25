@@ -755,9 +755,9 @@ function participantIssues(participant: unknown, path: string): ValidationIssue[
       if (validatedAwareness.length === (stealthState.observerAwareness as unknown[]).length) {
         const expectedVisibility = validatedAwareness.length === 0 || validatedAwareness.every((value) => value === 'unaware')
           ? 'hidden'
-          : validatedAwareness.some((value) => value === 'unaware' || value === 'suspicious')
-            ? 'obscured'
-            : 'exposed';
+          : validatedAwareness.some((value) => value === 'detected' || value === 'tracking')
+            ? 'exposed'
+            : 'obscured';
         if (stealthState.visibility !== expectedVisibility) {
           result.push(issue(`${path}.stealthState.visibility`, 'STEALTH_VISIBILITY', 'Stealth visibility does not match observer awareness'));
         }

@@ -3,7 +3,7 @@ import {
   applyCoreV13ObserverAwareness,
   coreV13StealthContextModifier,
   coreV13SurpriseAttackProfile,
-  revealCoreV13Actor,
+  revealCoreV13ActorToObservers,
   resolveCoreV13StealthContest,
 } from './core-v1.stealth.js';
 import type {
@@ -68,7 +68,7 @@ describe('core RC1.3 stealth, detection and surprise', () => {
     ]);
     expect(next.stateVersion).toBe(4);
     expect(next.participants[0]?.stealthState).toEqual({
-      visibility: 'obscured',
+      visibility: 'exposed',
       observerAwareness: [
         { observerActorRef: 'guard-a', awareness: 'unaware', margin: 8, marginTier: 'success' },
         { observerActorRef: 'guard-b', awareness: 'detected', margin: -21, marginTier: 'critical_failure' },
@@ -156,29 +156,155 @@ describe('core RC1.3 stealth, detection and surprise', () => {
     }
   });
 
-  it('reveals the attacker to every observer without duplicating state on replay-free application', () => {
+  it('reveals the attacker only to attacked observers without mutating the original state', () => {
     const state = {
       stateVersion: 7,
       participants: [{
         actorRef: 'rogue',
         stealthState: {
           visibility: 'hidden',
-          observerAwareness: [{
-            observerActorRef: 'guard',
-            awareness: 'unaware',
-            margin: 25,
-            marginTier: 'high_success',
-          }],
+          observerAwareness: [
+            { observerActorRef: 'guard-b', awareness: 'unaware', margin: 25, marginTier: 'high_success' },
+            { observerActorRef: 'guard-a', awareness: 'unaware', margin: 5, marginTier: 'success' },
+          ],
         },
-      }],
+      }, { actorRef: 'guard-a' }, { actorRef: 'guard-b' }],
     } as unknown as CoreV1EncounterState;
-    const revealed = revealCoreV13Actor(state, 'rogue');
+    const before = structuredClone(state);
+    const revealed = revealCoreV13ActorToObservers(state, 'rogue', ['guard-a']);
     expect(revealed.stateVersion).toBe(8);
     expect(revealed.participants[0]?.stealthState).toMatchObject({
       visibility: 'exposed',
-      observerAwareness: [{ observerActorRef: 'guard', awareness: 'tracking' }],
+      observerAwareness: [
+        { observerActorRef: 'guard-a', awareness: 'tracking' },
+        { observerActorRef: 'guard-b', awareness: 'unaware' },
+      ],
     });
-    expect(coreV13SurpriseAttackProfile(revealed.participants[0] as CoreV1EncounterParticipant, 'guard').applies)
-      .toBe(false);
+    const attacker = revealed.participants[0] as CoreV1EncounterParticipant;
+    expect(coreV13SurpriseAttackProfile(attacker, 'guard-a')).toMatchObject({
+      applies: false,
+      accuracyModifierBps: 0,
+      criticalChanceModifierBps: 0,
+      guaranteedCritical: false,
+    });
+    expect(coreV13SurpriseAttackProfile(attacker, 'guard-b')).toMatchObject({
+      applies: true,
+      accuracyModifierBps: 1_500,
+      criticalChanceModifierBps: 1_000,
+      guaranteedCritical: true,
+    });
+    expect(state).toEqual(before);
+  });
+
+  it('reveals later targets once, preserves mixed non-target awareness, and ignores invalid refs', () => {
+    const state = {
+      stateVersion: 11,
+      participants: [{
+        actorRef: 'rogue',
+        stealthState: {
+          visibility: 'obscured',
+          observerAwareness: [
+            { observerActorRef: 'unaware', awareness: 'unaware', margin: 4, marginTier: 'success' },
+            { observerActorRef: 'suspicious', awareness: 'suspicious', margin: -2, marginTier: 'failure' },
+            { observerActorRef: 'detected', awareness: 'detected', margin: -20, marginTier: 'critical_failure' },
+            { observerActorRef: 'tracking', awareness: 'tracking', margin: -20, marginTier: 'critical_failure' },
+          ],
+        },
+      }, { actorRef: 'unaware' }, { actorRef: 'suspicious' }, { actorRef: 'detected' }, { actorRef: 'tracking' }],
+    } as unknown as CoreV1EncounterState;
+    const revealed = revealCoreV13ActorToObservers(state, 'rogue', ['suspicious', 'detected', 'tracking']);
+    expect(revealed.stateVersion).toBe(12);
+    expect(revealed.participants[0]?.stealthState).toEqual({
+      visibility: 'exposed',
+      observerAwareness: [
+        { observerActorRef: 'detected', awareness: 'tracking', margin: -20, marginTier: 'critical_failure' },
+        { observerActorRef: 'suspicious', awareness: 'tracking', margin: -20, marginTier: 'critical_failure' },
+        { observerActorRef: 'tracking', awareness: 'tracking', margin: -20, marginTier: 'critical_failure' },
+        { observerActorRef: 'unaware', awareness: 'unaware', margin: 4, marginTier: 'success' },
+      ],
+    });
+    const invalid = revealCoreV13ActorToObservers(revealed, 'rogue', ['missing', 'rogue']);
+    expect(invalid).toBe(revealed);
+    const duplicate = revealCoreV13ActorToObservers(revealed, 'rogue', ['tracking', 'tracking']);
+    expect(duplicate).toBe(revealed);
+  });
+
+  it('reveals multiple attacked observers in one version transition and creates no duplicates', () => {
+    const state = {
+      stateVersion: 20,
+      participants: [{
+        actorRef: 'rogue',
+        stealthState: {
+          visibility: 'hidden',
+          observerAwareness: [{
+            observerActorRef: 'guard-c', awareness: 'unaware', margin: 8, marginTier: 'success',
+          }],
+        },
+      }, { actorRef: 'guard-a' }, { actorRef: 'guard-b' }, { actorRef: 'guard-c' }],
+    } as unknown as CoreV1EncounterState;
+    const revealed = revealCoreV13ActorToObservers(state, 'rogue', ['guard-b', 'guard-a', 'guard-b']);
+    expect(revealed.stateVersion).toBe(21);
+    expect(revealed.participants[0]?.stealthState).toEqual({
+      visibility: 'exposed',
+      observerAwareness: [
+        { observerActorRef: 'guard-a', awareness: 'tracking', margin: -20, marginTier: 'critical_failure' },
+        { observerActorRef: 'guard-b', awareness: 'tracking', margin: -20, marginTier: 'critical_failure' },
+        { observerActorRef: 'guard-c', awareness: 'unaware', margin: 8, marginTier: 'success' },
+      ],
+    });
+  });
+
+  it('keeps an actor without stealth state unchanged', () => {
+    const state = {
+      stateVersion: 2,
+      participants: [{ actorRef: 'rogue' }, { actorRef: 'guard' }],
+    } as unknown as CoreV1EncounterState;
+    expect(revealCoreV13ActorToObservers(state, 'rogue', ['guard'])).toBe(state);
+  });
+
+  it('preserves Veil-derived effects and modifiers while removing hidden visibility only for the target', () => {
+    const state = {
+      stateVersion: 9,
+      participants: [{
+        actorRef: 'rogue',
+        secondaryAttributes: { stealth: 29, evasion: 22, movementSpeed: 11 },
+        activeEffects: [{
+          effectRef: 'shadow-wrapped',
+          tags: ['shadow_wrapped', 'stealth'],
+          modifiers: [
+            { target: 'stealth', amount: 4 },
+            { target: 'evasion', amount: 2 },
+            { target: 'movementSpeed', amount: 1 },
+          ],
+        }],
+        stealthState: {
+          visibility: 'hidden',
+          observerAwareness: [
+            { observerActorRef: 'guard-a', awareness: 'unaware', margin: 22, marginTier: 'high_success' },
+            { observerActorRef: 'guard-b', awareness: 'unaware', margin: 18, marginTier: 'success' },
+          ],
+        },
+      }, { actorRef: 'guard-a' }, { actorRef: 'guard-b' }],
+    } as unknown as CoreV1EncounterState;
+    const revealed = revealCoreV13ActorToObservers(state, 'rogue', ['guard-a']);
+    expect(revealed.participants[0]).toMatchObject({
+      secondaryAttributes: { stealth: 29, evasion: 22, movementSpeed: 11 },
+      activeEffects: [{
+        effectRef: 'shadow-wrapped',
+        tags: ['shadow_wrapped', 'stealth'],
+        modifiers: [
+          { target: 'stealth', amount: 4 },
+          { target: 'evasion', amount: 2 },
+          { target: 'movementSpeed', amount: 1 },
+        ],
+      }],
+      stealthState: {
+        visibility: 'exposed',
+        observerAwareness: [
+          { observerActorRef: 'guard-a', awareness: 'tracking' },
+          { observerActorRef: 'guard-b', awareness: 'unaware' },
+        ],
+      },
+    });
   });
 });
