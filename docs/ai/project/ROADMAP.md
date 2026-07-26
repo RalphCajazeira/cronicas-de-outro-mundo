@@ -6,9 +6,26 @@ Este roadmap registra as próximas frentes conhecidas após a integração das c
 
 ## Baseline
 
-- Baseline anterior à Fase 2C-B: `67f84dc93b960b07c0eb657dee5e91a501d103fc`.
+- Baseline anterior à Fase 2D-B: `38694c7ca6df4470f25776f4989ce156b134e3aa`.
 - Fundação integrada: Fases 1A–1L-C, 1M-A e resolução de encontros por beat.
 - Próximo gate: revisar e implantar no staging as correções posteriores à baseline intermediária de auto-resolução e só então atualizar o GPT Builder.
+
+## Gate atual — Fase 2D-B
+
+Objetivo: integrar e publicar a consulta autenticada somente leitura do
+personagem no App OAuth privado.
+
+Ordem:
+
+1. validar contratos, autorização negativa, projeções, widget e fixture local;
+2. integrar a branch em `develop` por PR verde;
+3. aguardar o release normal de staging e confirmar o SHA live;
+4. aprovar e executar o provisioning protegido acionado pelo manifesto;
+5. verificar health, readiness, `/mcp`, `/mcp-auth` e logs sanitizados;
+6. atualizar ou recriar somente o App OAuth privado, se o cache de resource URI
+   exigir;
+7. testar login e as cinco abas no ChatGPT, incluindo remontagem e ausência de
+   qualquer mutação.
 
 ## Rollout da resolução automática
 
@@ -64,7 +81,8 @@ Escopo previsto:
 - tempo, clima, localização e viagem;
 - vendedores, lojas e economia;
 - treinamento e progressão de habilidades;
-- frontend geral ou expansão do ChatGPT App para ficha, inventário, mapa, missões e atores;
+- frontend geral ou expansão posterior do ChatGPT App para mapa, missões e
+  outros atores;
 - autenticação de produção, CORS, rate limit e observabilidade externa;
 - consolidação editorial contínua do Knowledge narrativo.
 

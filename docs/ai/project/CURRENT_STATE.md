@@ -9,7 +9,7 @@ Este arquivo registra o estado técnico confirmado conhecido. Fatos mutáveis de
 - Repositório: `RalphCajazeira/cronicas-de-outro-mundo`.
 - Diretório local principal: `C:\Users\ralph\Desktop\Game_GPT`.
 - Branch de integração: `develop`.
-- Baseline de `develop` antes da Fase 2C-B, inventariada em 2026-07-26: `67f84dc93b960b07c0eb657dee5e91a501d103fc`.
+- Baseline de `develop` antes da Fase 2D-B: `38694c7ca6df4470f25776f4989ce156b134e3aa`.
 - Projeto técnico no ChatGPT: `Game_GPT`.
 - GPT narrativo de staging: `Crônicas de Outro Mundo — Staging`.
 
@@ -47,6 +47,12 @@ Este arquivo registra o estado técnico confirmado conhecido. Fatos mutáveis de
 - fundação de identidade/autorização interna com `User`, `ExternalIdentity`, membership, controle e auditoria;
 - resource server OAuth fail-closed para `/mcp-auth`, com JWT/JWKS assimétrico e bootstrap autenticado;
 - SPA técnica de login/consentimento de staging, policy genérica de audience por client e Custom Access Token Hook versionado.
+- contexto real autenticado com seleção opaca de campanha/personagem e views
+  read-only de resumo, ficha, inventário, equipamento e habilidades;
+- widget autenticado v2 com carga lazy, cache efêmero, paginação, retry e
+  estados responsivos/acessíveis, sem comandos de gameplay;
+- fixture OAuth sintética versionada com ficha mecânica, conteúdo, inventário,
+  equipamento, habilidades e efeito público.
 
 ## Staging conhecido
 
@@ -63,7 +69,11 @@ Este arquivo registra o estado técnico confirmado conhecido. Fatos mutáveis de
 - Ouro, drop e claim de loot permanecem para a Fase 1M-C.
 - Não há morte definitiva automática, recompensa antecipada nem checkpoint narrativo completo.
 - Frontend geral, autenticação de produção, CORS/rate limit públicos, comércio, lojas, missões, relações e viagens continuam futuros.
-- A integração OAuth é exclusiva de staging, usa apenas conta sintética e não concede acesso a campanha, Player ou Actor.
+- A integração OAuth é exclusiva de staging e usa apenas conta sintética. O
+  acesso a Player, campanha e Actor depende de vínculos explícitos e permanece
+  somente leitura nesta fase.
+- A Fase 2D-B ainda exige merge, rollout canônico, provisioning protegido e
+  validação manual no App OAuth antes de ser considerada implantada.
 - A política de autonomia e as correções finais de auto-resolução exigem novo gate de deploy e atualização manual do GPT Builder.
 - Não assumir migration, deploy, Action, Instructions ou Knowledge atualizados apenas porque o código está em `develop`.
 

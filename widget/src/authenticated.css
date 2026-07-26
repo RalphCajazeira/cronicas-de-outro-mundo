@@ -130,6 +130,35 @@ button:focus-visible { outline: 3px solid #f5cf7a; outline-offset: 2px; }
 
 .character-heading span { color: #aaa194; font-size: .8rem; }
 
+.character-heading h2 { font-size: clamp(1.45rem, 7vw, 2.2rem); }
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 18px;
+  padding: 4px;
+  overflow-x: auto;
+  border: 1px solid rgba(222, 193, 134, .14);
+  border-radius: 13px;
+  background: rgba(0, 0, 0, .16);
+  scrollbar-width: thin;
+}
+
+.tabs button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 8px 12px;
+  border-color: transparent;
+  background: transparent;
+  color: #bfb5a4;
+}
+
+.tabs button[aria-selected="true"] {
+  border-color: rgba(215, 169, 86, .48);
+  background: rgba(157, 87, 46, .42);
+  color: #fff3d4;
+}
+
 .resource-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -151,9 +180,129 @@ button:focus-visible { outline: 3px solid #f5cf7a; outline-offset: 2px; }
 .loading-state { padding: 36px; color: #e9d6a7; text-align: center; }
 footer { margin-top: 22px; color: #81796f; font-size: .72rem; text-align: center; }
 
+.view-panel {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid rgba(222, 193, 134, .16);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .025);
+}
+
+.view-panel > h3 { margin: 22px 0 10px; font-size: 1.05rem; }
+
+.identity-line {
+  margin-top: 8px;
+  color: #e0c998;
+  font-size: .86rem;
+}
+
+.section-heading {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.summary-strip {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-top: 12px;
+  color: #bfb5a4;
+}
+
+.summary-strip strong { color: #f0c66d; font-size: 1.5rem; }
+
+.stat-grid, .equipment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.stat-card, .slot-card, .compact-card, .item-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(222, 193, 134, .13);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, .17);
+}
+
+.stat-card {
+  display: grid;
+  gap: 3px;
+}
+
+.stat-card span, .slot-card > span, .stat-card small, .item-button small {
+  color: #aaa194;
+  font-size: .72rem;
+}
+
+.stat-card strong { color: #f3d291; font-size: 1.35rem; }
+
+.secondary-list { margin: 0; }
+.secondary-list div, .compact-card {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 9px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, .07);
+}
+.secondary-list dt { color: #bdb3a5; }
+.secondary-list dd { margin: 0; color: #f0d49c; font-weight: 750; }
+
+.item-list { display: grid; gap: 9px; margin: 14px 0; }
+
+.item-card { padding: 0; overflow: hidden; }
+
+.item-button {
+  display: flex;
+  width: 100%;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #f7f0dc;
+  text-align: left;
+}
+
+.item-button > span { display: grid; gap: 3px; min-width: 0; }
+.item-button > span:last-child { color: #d6ba83; font-size: .75rem; text-align: right; }
+.item-detail { padding: 0 14px 12px; border-top: 1px solid rgba(255, 255, 255, .06); }
+.item-detail p { margin: 10px 0 0; font-size: .82rem; }
+
+.slot-card { display: grid; gap: 7px; }
+.slot-card .item-button { min-height: 34px; padding: 4px 0; color: #f0d49c; }
+.slot-card .item-detail { padding: 4px 0 0; }
+
+.unavailable-note {
+  display: grid;
+  gap: 4px;
+  margin-top: 20px;
+  padding: 12px;
+  border: 1px dashed rgba(216, 181, 112, .25);
+  border-radius: 11px;
+  color: #8f877d;
+  font-size: .74rem;
+}
+
+.inline-error {
+  padding: 18px;
+  border: 1px solid rgba(220, 99, 72, .45);
+  border-radius: 14px;
+  background: rgba(130, 43, 32, .14);
+}
+
+.load-more { width: 100%; background: rgba(157, 87, 46, .25); }
+
 @media (max-width: 520px) {
   .authenticated-shell { padding: 14px; border-radius: 16px; }
   .environment-banner { margin: -14px -14px 16px; }
   .campaign-card { align-items: stretch; flex-direction: column; }
   .resource-grid { grid-template-columns: 1fr; }
+  .view-panel { padding: 14px; }
+  .section-heading { align-items: stretch; flex-direction: column; }
+  .stat-grid, .equipment-grid { grid-template-columns: 1fr; }
 }

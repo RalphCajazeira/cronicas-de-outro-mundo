@@ -35,6 +35,8 @@ import {
 } from './modules/oauth-ui/oauth-ui.assets.js';
 import { createAuthenticatedGameContextService } from './modules/authenticated-game-context/authenticated-game-context.service.js';
 import type { AuthenticatedGameContextRepository } from './modules/authenticated-game-context/authenticated-game-context.types.js';
+import type { AuthenticatedCharacterViewRepository } from './modules/authenticated-character-view/authenticated-character-view.types.js';
+import { createAuthenticatedCharacterViewService } from './modules/authenticated-character-view/authenticated-character-view.service.js';
 
 export interface AppDependencies {
   actorRepository: ActorRepository;
@@ -47,6 +49,7 @@ export interface AppDependencies {
   oauthUiAssets?: OAuthUiAssets;
   identityRepository?: IdentityRepository;
   authenticatedGameContextRepository?: AuthenticatedGameContextRepository;
+  authenticatedCharacterViewRepository?: AuthenticatedCharacterViewRepository;
   releaseInfo?: ReleaseInfo;
 }
 
@@ -76,6 +79,12 @@ export function createApp(config: AppConfig, dependencies: AppDependencies) {
       dependencies.authenticatedGameContextRepository,
       config,
     );
+    const authenticatedCharacterViewService = createAuthenticatedCharacterViewService(
+      dependencies.authenticatedGameContextRepository,
+      dependencies.authenticatedCharacterViewRepository ?? {
+        loadAuthorizedCharacterSnapshot: () => Promise.resolve(null),
+      },
+    );
     app.use(createProtectedResourceMetadataRouter(config.OAUTH_RESOURCE_SERVER));
     app.use(
       config.OAUTH_RESOURCE_SERVER.protectedMcpPath,
@@ -84,6 +93,7 @@ export function createApp(config: AppConfig, dependencies: AppDependencies) {
         config.OAUTH_RESOURCE_SERVER,
         identityService,
         authenticatedGameContextService,
+        authenticatedCharacterViewService,
         widgetAssets,
       ),
     );

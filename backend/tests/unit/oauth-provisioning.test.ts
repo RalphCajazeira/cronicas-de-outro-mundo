@@ -126,6 +126,15 @@ describe('OAuth staging provisioning guards', () => {
         actor: 1,
         campaignMembership: 1,
         actorControl: 1,
+        actorAttribute: 9,
+        actorResource: 3,
+        actorDerivedSnapshot: 1,
+        contentDefinition: 7,
+        contentVersion: 7,
+        inventoryEntry: 3,
+        equipmentSlot: 1,
+        actorContent: 3,
+        activeEffect: 1,
       },
     };
     expect(parseAuthenticatedFixtureManifest(manifest)).toEqual(manifest);

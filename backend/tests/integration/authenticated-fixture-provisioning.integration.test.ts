@@ -5,8 +5,11 @@ import {
   runAuthenticatedFixtureProvisioning,
 } from '../../scripts/provision-authenticated-readonly-fixture.js';
 import type { AuthenticatedFixtureManifest } from '../../scripts/staging-provisioning-manifest.js';
-import { UserStatus } from '../../src/generated/prisma/client.js';
+import { UserStatus, type Prisma, type PrismaClient } from '../../src/generated/prisma/client.js';
 import { prisma } from '../../src/shared/database/prisma.js';
+import { createPrismaAuthenticatedGameContextRepository } from '../../src/modules/authenticated-game-context/authenticated-game-context.repository.js';
+import { createPrismaAuthenticatedCharacterViewRepository } from '../../src/modules/authenticated-character-view/authenticated-character-view.repository.js';
+import { createAuthenticatedCharacterViewService } from '../../src/modules/authenticated-character-view/authenticated-character-view.service.js';
 
 const subject = '7f43ce60-3dca-4ab0-8fe1-33a2ca9e43ba';
 const manifest: AuthenticatedFixtureManifest = {
@@ -21,6 +24,15 @@ const manifest: AuthenticatedFixtureManifest = {
     actor: 1,
     campaignMembership: 1,
     actorControl: 1,
+    actorAttribute: 9,
+    actorResource: 3,
+    actorDerivedSnapshot: 1,
+    contentDefinition: 7,
+    contentVersion: 7,
+    inventoryEntry: 3,
+    equipmentSlot: 1,
+    actorContent: 3,
+    activeEffect: 1,
   },
 };
 
@@ -78,68 +90,12 @@ describe('authenticated staging fixture provisioning', () => {
       issuer: AUTHENTICATED_FIXTURE_ISSUER,
       subject,
     });
-    expect(result.created).toEqual({
-      player: 1,
-      world: 1,
-      campaign: 1,
-      actor: 1,
-      campaignMembership: 1,
-      actorControl: 1,
-    });
+    expect(result.created).toEqual(manifest.expectedRecords);
     expect(await prisma.player.count({
       where: { slug: AUTHENTICATED_FIXTURE.playerSlug },
     })).toBe(0);
     expect(await prisma.campaignMembership.count()).toBe(0);
     expect(await prisma.actorControl.count()).toBe(0);
-  });
-
-  it('creates the isolated graph once and reuses it idempotently', async () => {
-    await createSyntheticIdentity();
-    const applied = await runAuthenticatedFixtureProvisioning(prisma, {
-      mode: 'apply',
-      manifest,
-      issuer: AUTHENTICATED_FIXTURE_ISSUER,
-      subject,
-    });
-    expect(applied.created).toEqual({
-      player: 1,
-      world: 1,
-      campaign: 1,
-      actor: 1,
-      campaignMembership: 1,
-      actorControl: 1,
-    });
-
-    const repeated = await runAuthenticatedFixtureProvisioning(prisma, {
-      mode: 'apply',
-      manifest,
-      issuer: AUTHENTICATED_FIXTURE_ISSUER,
-      subject,
-    });
-    expect(repeated.created).toEqual({
-      player: 0,
-      world: 0,
-      campaign: 0,
-      actor: 0,
-      campaignMembership: 0,
-      actorControl: 0,
-    });
-    expect(repeated.reused).toEqual({
-      player: 1,
-      world: 1,
-      campaign: 1,
-      actor: 1,
-      campaignMembership: 1,
-      actorControl: 1,
-    });
-
-    const postflight = await runAuthenticatedFixtureProvisioning(prisma, {
-      mode: 'postflight',
-      manifest,
-      issuer: AUTHENTICATED_FIXTURE_ISSUER,
-      subject,
-    });
-    expect(postflight.postflight).toEqual(manifest.expectedRecords);
   });
 
   it('completes only the missing records in a valid partial fixture', async () => {
@@ -152,7 +108,7 @@ describe('authenticated staging fixture provisioning', () => {
       },
     });
     const result = await runAuthenticatedFixtureProvisioning(prisma, {
-      mode: 'apply',
+      mode: 'dry-run',
       manifest,
       issuer: AUTHENTICATED_FIXTURE_ISSUER,
       subject,
@@ -230,4 +186,102 @@ describe('authenticated staging fixture provisioning', () => {
       })).toBe(0);
     },
   );
+
+  it('creates the isolated graph once and reuses it idempotently', async () => {
+    const syntheticUser = await createSyntheticIdentity();
+    await expect(prisma.$transaction(async (transaction) => {
+      const transactionalClient = {
+        $transaction: async <T>(
+          operation: (client: Prisma.TransactionClient) => Promise<T>,
+        ): Promise<T> => operation(transaction),
+      } as unknown as PrismaClient;
+      const applied = await runAuthenticatedFixtureProvisioning(transactionalClient, {
+        mode: 'apply',
+        manifest,
+        issuer: AUTHENTICATED_FIXTURE_ISSUER,
+        subject,
+      });
+      expect(applied.created).toEqual(manifest.expectedRecords);
+
+      const projectionService = createAuthenticatedCharacterViewService(
+        createPrismaAuthenticatedGameContextRepository(transaction),
+        createPrismaAuthenticatedCharacterViewRepository(transactionalClient as typeof prisma),
+      );
+      const projections = [
+        await projectionService.load(syntheticUser.id, { view: 'SUMMARY' }),
+        await projectionService.load(syntheticUser.id, { view: 'SHEET' }),
+        await projectionService.load(syntheticUser.id, { view: 'INVENTORY' }),
+        await projectionService.load(syntheticUser.id, { view: 'EQUIPMENT' }),
+        await projectionService.load(syntheticUser.id, { view: 'ABILITIES' }),
+      ];
+      expect(projections.map((projection) => projection.view)).toEqual([
+        'SUMMARY',
+        'SHEET',
+        'INVENTORY',
+        'EQUIPMENT',
+        'ABILITIES',
+      ]);
+      expect(JSON.stringify(projections)).not.toMatch(
+        /userId|actorId|campaignId|contentVersionId|metadata|MASTER_ONLY/i,
+      );
+      const inventoryProjection = projections[2];
+      if (inventoryProjection?.view !== 'INVENTORY') throw new Error('Inventory projection missing');
+      expect(inventoryProjection.data.items.map((item) => ({
+        name: item.name,
+        quantity: item.quantity,
+        equipped: item.equipped,
+      }))).toContainEqual({ name: 'Casaco de Viagem', quantity: 1, equipped: true });
+      expect(inventoryProjection.data.items.map((item) => item.name)).toContain('Tônico de Treino');
+      expect(inventoryProjection.data.items.map((item) => item.name)).toContain('Anotações de Campo');
+
+      const abilitiesProjection = projections[4];
+      if (abilitiesProjection?.view !== 'ABILITIES') throw new Error('Abilities projection missing');
+      expect(abilitiesProjection.data.abilities.map((ability) => ({
+        name: ability.name,
+        category: ability.category,
+      }))).toContainEqual({ name: 'Concentração Estável', category: 'PASSIVE' });
+      expect(abilitiesProjection.data.abilities.map((ability) => ability.name)).toContain('Passo Rápido');
+      expect(abilitiesProjection.data.abilities.map((ability) => ability.name)).toContain('Faísca Arcana');
+
+      const repeated = await runAuthenticatedFixtureProvisioning(transactionalClient, {
+        mode: 'apply',
+        manifest,
+        issuer: AUTHENTICATED_FIXTURE_ISSUER,
+        subject,
+      });
+      expect(repeated.created).toEqual({
+        player: 0,
+        world: 0,
+        campaign: 0,
+        actor: 0,
+        campaignMembership: 0,
+        actorControl: 0,
+        actorAttribute: 0,
+        actorResource: 0,
+        actorDerivedSnapshot: 0,
+        contentDefinition: 0,
+        contentVersion: 0,
+        inventoryEntry: 0,
+        equipmentSlot: 0,
+        actorContent: 0,
+        activeEffect: 0,
+      });
+      expect(repeated.reused).toEqual(manifest.expectedRecords);
+
+      const postflight = await runAuthenticatedFixtureProvisioning(transactionalClient, {
+        mode: 'postflight',
+        manifest,
+        issuer: AUTHENTICATED_FIXTURE_ISSUER,
+        subject,
+      });
+      expect(postflight.postflight).toEqual(manifest.expectedRecords);
+      throw new Error('intentional fixture apply rollback');
+    })).rejects.toThrow('intentional fixture apply rollback');
+    expect(await prisma.player.count({
+      where: { slug: AUTHENTICATED_FIXTURE.playerSlug },
+    })).toBe(0);
+    expect(await prisma.contentDefinition.count({
+      where: { code: { startsWith: 'oauth-test-' } },
+    })).toBe(0);
+  });
 });

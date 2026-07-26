@@ -72,6 +72,24 @@ Uma referência desconhecida, revogada, alheia ou usada fora da campanha
 selecionada retorna o mesmo estado `AUTHORIZATION_ERROR`. A resposta não revela
 se o recurso existe, seu nome, owner ou personagem.
 
+`loadAuthenticatedCharacterView` carrega sob demanda uma seção detalhada do
+personagem já selecionado. O input fechado aceita:
+
+```json
+{
+  "view": "SUMMARY | SHEET | INVENTORY | EQUIPMENT | ABILITIES",
+  "campaignSelectionRef": "sel_...",
+  "characterSelectionRef": "sel_...",
+  "cursor": "cur_..."
+}
+```
+
+O cursor existe somente em `INVENTORY` e `ABILITIES`, representa páginas de no
+máximo 20 registros e é vinculado ao User, Actor, view e offset. Ele nunca é
+prova de autorização: toda chamada resolve novamente User, Player, membership e
+controle e a consulta Prisma repete a autorização dentro de uma transação
+`REPEATABLE READ`.
+
 ## Consulta autorizada
 
 A consulta parte de `User.id`, nunca de `Player`, `Campaign` ou `Actor`
@@ -85,9 +103,9 @@ fornecido pelo cliente. O Prisma filtra antes da projeção:
 - no máximo 20 campanhas e 100 controles, com sentinela de integridade.
 
 O service confirma novamente a coerência de `userId`, campaign, membership,
-controle e ator. `CONTROL` satisfaz leitura; `VIEW` não é promovido a controle;
-um `OBSERVER` nunca recebe capacidade mutável. A projeção não publica role ou
-permission porque a UI desta fase não precisa desses detalhes.
+controle e ator. `CONTROL` satisfaz leitura; `VIEW` não é promovido a controle.
+As views detalhadas admitem `OWNER`, `GM` e `PLAYER`, mas não `OBSERVER`; role e
+permission não são publicados.
 
 ## Projeções públicas
 
@@ -111,13 +129,29 @@ permission porque a UI desta fase não precisa desses detalhes.
 - estado da tela, navegação e CTA;
 - `canMutate: false` e `readOnly: true`.
 
-Não existe `MasterContext` no contrato MCP. A consulta e os DTOs não selecionam
-nem aceitam:
+As projeções detalhadas são cinco DTOs allowlisted:
+
+- `CharacterSummaryView`: identidade pública, nível, status, campanha/mundo,
+  HP/Mana/SP, contagem de efeitos e continuidade pública;
+- `CharacterSheetView`: atributos armazenados e efetivos, recursos, progressão,
+  atributos secundários, ruleset e efeitos públicos;
+- `InventoryView`: moeda persistida, peso, até 20 itens por página, quantidade,
+  categoria, estado e slots equipados;
+- `EquipmentView`: os dez slots oficiais, item, requisitos, bônus e ação
+  pública, sem controles de equipar;
+- `AbilitiesView`: skill, spell e talent em `LEARNING`, `KNOWN` ou `MASTERED`,
+  com perfil público validado, custo, alvo, efeitos e bônus.
+
+Perícias, proficiências, profissões, fadiga, sono, qualidade, durabilidade e
+cargas por instância não existem no schema atual. A resposta marca esses campos
+como `NOT_PERSISTED_IN_CURRENT_VERSION`; não os infere.
+
+Não existe `MasterContext` no contrato MCP. A consulta e os DTOs não publicam:
 
 - metadata livre;
-- descrição, appearance ou personality;
+- appearance, personality, notes ou metadata;
 - GameEvent ou payload narrativo;
-- inventário e conteúdo;
+- conteúdo bloqueado ou ainda não possuído;
 - objetivos secretos, armadilhas ou rolagens;
 - resultados futuros;
 - flags administrativas;
@@ -130,10 +164,10 @@ fase não cria `GameSession`.
 
 ## Recurso UI
 
-O recurso autenticado é:
+O recurso autenticado v2 é:
 
 ```text
-ui://game/authenticated-home/v1.html
+ui://game/authenticated-home/v2.html
 ```
 
 Ele usa um bundle separado da fixture e mostra:
@@ -142,14 +176,17 @@ Ele usa um bundle separado da fixture e mostra:
 - autenticado sem campanha;
 - lista de campanhas;
 - seleção de campanha/personagem somente por leitura;
-- contexto selecionado;
+- abas Resumo, Ficha, Inventário, Equipamento e Habilidades;
+- carregamento lazy, retry idêntico, paginação e detalhe local;
+- marcadores explícitos para dados ainda não persistidos;
 - erro genérico de autorização;
 - reconexão.
 
 Em staging, o banner é exatamente `STAGING — CONTA SINTÉTICA`. Não há botões de
-ataque, item, equipamento, criação, gameplay ou persistência. O input narrativo
-e `sendFollowUpMessage` foram deixados para task separada para não misturar
-leitura autenticada com um novo canal de intenção.
+ataque, item, equipamento, criação, gameplay ou persistência. O cache, a aba e
+o detalhe selecionado existem somente na instância do widget. Remontagem relê o
+contexto oficial. O input narrativo e `sendFollowUpMessage` permanecem fora do
+escopo.
 
 ## Auditoria
 
@@ -186,16 +223,24 @@ participa. O script cria ou reutiliza exatamente:
 - Player `OAuth Staging Tester`;
 - World `OAuth Test World`;
 - Campaign `OAuth Readonly Test`;
-- Actor `Test Adventurer`;
+- Actor `Test Adventurer`, nível 3, com identidade pública sintética;
 - CampaignMembership `PLAYER/ACTIVE`;
 - ActorControl `CONTROL`.
+- nove atributos, três recursos e snapshot mecânico `core-v1.3`;
+- sete definições/versionamentos sintéticos allowlisted;
+- três itens de inventário, incluindo armadura equipada, consumível e item
+  narrativo;
+- skill, spell e talent/passive vinculados ao Actor;
+- um efeito público temporário.
 
-O ruleset publicado `core-v1.3` é apenas reutilizado; o script falha se ele não
-existir e nunca o cria. Dry-run executa a transação completa e força rollback.
+O registry oficial materializa ou reutiliza de modo determinístico o ruleset e
+os registries compatíveis `core-v1.3`. Dry-run executa a transação completa e
+força rollback.
 Reexecução não duplica entidades. Grant revogado, código sintético usado fora
 do grafo esperado ou fixture divergente falha
 fechado em vez de reativar ou adotar dados. O pós-check exige um único grafo,
-sem encontro, inventário, conteúdo de ator, conteúdo do World, NPC ou GameEvent.
+os counts exatos do manifesto, códigos de conteúdo na allowlist, ausência de
+encontro, NPC e GameEvent, e uma ficha mecânica cujo hash continua válido.
 O manifesto versionado é estrito e não contém subject, email, IDs, token,
 credencial ou conexão.
 

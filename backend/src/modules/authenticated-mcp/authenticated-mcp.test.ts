@@ -39,9 +39,17 @@ import {
   AUTHENTICATED_HOME_RESOURCE_URI,
   authenticatedBootstrapSchema,
   GET_AUTHENTICATED_BOOTSTRAP_TOOL,
+  LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL,
   LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL,
 } from './authenticated-mcp.server.js';
 import { authenticatedGameContextSchema } from '../authenticated-game-context/authenticated-game-context.dto.js';
+import { createAuthenticatedCharacterViewService } from '../authenticated-character-view/authenticated-character-view.service.js';
+import type {
+  AuthenticatedCharacterSnapshot,
+  AuthenticatedCharacterViewRepository,
+} from '../authenticated-character-view/authenticated-character-view.types.js';
+import { authenticatedCharacterViewSchema } from '../authenticated-character-view/authenticated-character-view.dto.js';
+import { authenticatedSelectionRef } from '../authenticated-game-context/authenticated-selection-ref.js';
 
 const widgetAssets: WidgetAssets = {
   readHome: () => Promise.resolve('<!doctype html><title>Public fixture</title>'),
@@ -137,6 +145,80 @@ function gameAccessRepository(): AuthenticatedGameContextRepository {
   };
 }
 
+function minimalCharacterSnapshot(): AuthenticatedCharacterSnapshot {
+  const primaryAttributes = {
+    strength: 10,
+    vitality: 10,
+    agility: 10,
+    dexterity: 10,
+    intelligence: 10,
+    wisdom: 10,
+    perception: 10,
+    willpower: 10,
+    luck: 10,
+  };
+  return {
+    actor: {
+      id: 'actor-synthetic',
+      name: 'Test Adventurer',
+      species: null,
+      className: null,
+      role: null,
+      description: null,
+      level: 1,
+      xp: 0,
+      gold: 0,
+      status: 'active',
+      campaignName: 'OAuth Readonly Test',
+      worldName: 'OAuth Test World',
+      engineTick: 0n,
+    },
+    storedAttributes: Object.entries(primaryAttributes).map(([code, baseValue]) => ({
+      code,
+      baseValue,
+      earnedValue: 0,
+      xp: 0,
+    })),
+    mechanicalSheet: {
+      primaryAttributes,
+      resources: {
+        hp: { current: 20, max: 20, stateVersion: 1 },
+        mana: { current: 10, max: 10, stateVersion: 1 },
+        sp: { current: 10, max: 10, stateVersion: 1 },
+      },
+      secondaryAttributes: {
+        actorPhysicalPower: 10,
+        actorMagicalPower: 10,
+        physicalDefense: 5,
+        magicalDefense: 5,
+        accuracy: 10,
+        evasion: 10,
+        stealth: 10,
+        detection: 10,
+        baseAttackSpeedBps: 10_000,
+        baseCastingSpeedBps: 10_000,
+        criticalChanceBps: 500,
+        criticalDamageBps: 15_000,
+        movementSpeed: 5,
+        carryingCapacity: 50,
+        physicalResistanceBps: 0,
+        magicalResistanceBps: 0,
+        elementalResistanceBps: {},
+        hpRegen: 1,
+        manaRegen: 1,
+        spRegen: 1,
+      },
+      mechanicsStateVersion: 1,
+      inventoryStateVersion: 1,
+      effectsStateVersion: 1,
+      ruleset: { code: 'core-v1', revision: '1.2.0' },
+    },
+    inventory: [],
+    abilities: [],
+    statusEffects: [],
+  };
+}
+
 interface AuthenticatedHost {
   readonly audits: HttpAuditRecord[];
   readonly endpoint: URL;
@@ -152,6 +234,9 @@ async function startHost(
   configOverrides: Partial<OAuthResourceServerConfig> = {},
   gameContextRepository: AuthenticatedGameContextRepository = {
     findGameAccessByUserId: () => Promise.resolve(null),
+  },
+  characterViewRepository: AuthenticatedCharacterViewRepository = {
+    loadAuthorizedCharacterSnapshot: () => Promise.resolve(null),
   },
 ): Promise<AuthenticatedHost> {
   const app = express();
@@ -186,6 +271,7 @@ async function startHost(
       APP_ENV: 'test',
       NODE_ENV: 'test',
     }),
+    createAuthenticatedCharacterViewService(gameContextRepository, characterViewRepository),
     widgetAssets,
   ));
 
@@ -515,7 +601,7 @@ describe('authenticated MCP resource server', () => {
     const { client, transport } = await connectClient(host, await host.token());
     try {
       const tools = await client.listTools();
-      expect(tools.tools).toHaveLength(2);
+      expect(tools.tools).toHaveLength(3);
       expect(tools.tools[0]).toMatchObject({
         name: GET_AUTHENTICATED_BOOTSTRAP_TOOL,
         annotations: {
@@ -557,11 +643,28 @@ describe('authenticated MCP resource server', () => {
       [identity('active-subject')],
       {},
       gameAccessRepository(),
+      {
+        loadAuthorizedCharacterSnapshot: () => Promise.resolve(minimalCharacterSnapshot()),
+      },
     );
     const { client, transport } = await connectClient(host, await host.token());
     try {
       const tools = await client.listTools();
       expect(tools.tools.find((tool) => tool.name === LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL))
+        .toMatchObject({
+          annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+          _meta: {
+            ui: {
+              resourceUri: AUTHENTICATED_HOME_RESOURCE_URI,
+            },
+          },
+        });
+      expect(tools.tools.find((tool) => tool.name === LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL))
         .toMatchObject({
           annotations: {
             readOnlyHint: true,
@@ -619,6 +722,39 @@ describe('authenticated MCP resource server', () => {
         result: 'allowed',
         reasonCode: 'context_loaded',
         tool: LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL,
+      });
+
+      const characterResult = CallToolResultSchema.parse(await client.callTool({
+        name: LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL,
+        arguments: {
+          view: 'SUMMARY',
+          campaignSelectionRef: authenticatedSelectionRef(
+            'campaign',
+            '00000000-0000-4000-8000-000000000001',
+            'campaign-synthetic',
+          ),
+          characterSelectionRef: authenticatedSelectionRef(
+            'character',
+            '00000000-0000-4000-8000-000000000001',
+            'actor-synthetic',
+          ),
+        },
+      }));
+      expect(characterResult.isError, JSON.stringify(characterResult)).not.toBe(true);
+      expect(authenticatedCharacterViewSchema.parse(characterResult.structuredContent))
+        .toMatchObject({
+          view: 'SUMMARY',
+          readOnly: true,
+          data: { identity: { name: 'Test Adventurer' } },
+        });
+      expect(JSON.stringify(characterResult)).not.toMatch(
+        /actor-synthetic|campaign-synthetic|userId|issuer|subject|token|metadata|MASTER_ONLY/i,
+      );
+      expect(host.audits.at(-1)?.authentication).toMatchObject({
+        category: 'game_context_allowed',
+        result: 'allowed',
+        reasonCode: 'character_summary_loaded',
+        tool: LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL,
       });
     } finally {
       await transport.terminateSession();
@@ -755,7 +891,7 @@ describe('authenticated MCP resource server', () => {
       expect(suspended.status).toBe(403);
 
       records[0] = identity('active-subject');
-      expect((await client.listTools()).tools).toHaveLength(2);
+      expect((await client.listTools()).tools).toHaveLength(3);
     } finally {
       await transport.terminateSession();
       await client.close();
