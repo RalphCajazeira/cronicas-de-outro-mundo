@@ -3,7 +3,7 @@ export interface HostCompatibilityApi {
   toolResponseMetadata?: unknown;
   callTool?: (
     name: string,
-    argumentsValue: Record<string, string>,
+    argumentsValue: Record<string, unknown>,
   ) => Promise<unknown>;
   sendFollowUpMessage?: (input: {
     prompt: string;
@@ -82,7 +82,7 @@ export function readCompatibilityToolOutput(
 export async function callCompatibilityTool(
   host: HostCompatibilityWindow,
   name: string,
-  argumentsValue: Record<string, string>,
+  argumentsValue: Record<string, unknown>,
 ): Promise<unknown> {
   const callTool = host.openai?.callTool;
   if (callTool === undefined) {

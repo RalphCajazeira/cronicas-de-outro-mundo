@@ -108,7 +108,7 @@ Quando o manifesto foi adicionado ou modificado e o job `release` passou, o job
 
 1. é admitido automaticamente somente pela branch policy de `develop`;
 2. confirma novamente o SHA, branch, Node, health e readiness live;
-3. confirma o histórico de 14 migrations e o alvo PostgreSQL allowlisted;
+3. confirma o histórico de migrations e o alvo PostgreSQL allowlisted;
 4. executa a mesma entrada em dry-run com rollback;
 5. executa apply em uma transação serializable com espera e duração limitadas;
 6. executa postflight read-only.
@@ -156,9 +156,12 @@ Saída:
 
 Comentários, strings, identifiers quoted, casing, whitespace e múltiplos
 statements são analisados sem despejar SQL no log. Conteúdo não compreendido é
-sempre `high`. Em `high`, o job falha antes de acessar o banco ou o Deploy Hook e
-lista apenas arquivo e categoria segura. A análise ou execução de uma migration
-high exige nova task e autorização específica de Ralph.
+sempre `high`. Em `high`, o job falha antes de acessar o banco ou o Deploy Hook,
+salvo quando um manifesto versionado da própria task fixa exatamente o único
+caminho e o checksum SHA-256 da migration autorizada. O manifesto não muda a
+classificação: arquivo adicional, checksum divergente ou outra migration
+continuam falhando fechado. A análise ou execução de uma migration high exige
+task e autorização específicas de Ralph.
 
 ## Preflight, migration e pós-verificação
 

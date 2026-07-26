@@ -445,7 +445,7 @@ async function verifyCompleteCleanSlateCycles(
     await client.connect();
     try {
       const before = await inspectCleanSlateObjects(client);
-      if (before.tables !== 34 || before.enums !== 30 || before.functions !== 25 || before.prismaHistory !== 1) {
+      if (before.tables !== 35 || before.enums !== 31 || before.functions !== 25 || before.prismaHistory !== 1) {
         throw new Error(`Clean-slate cycle ${cycle} precondition catalog is incomplete`);
       }
       await cleanSlateApplicationSchema(client);

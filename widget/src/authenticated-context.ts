@@ -10,12 +10,14 @@ const characterSchema = z.object({
   selectionRef: selectionRefSchema,
   displayName: z.string().min(1).max(200),
   level: z.number().int().min(1),
+  accessLabel: z.enum(['Somente consulta', 'Jogável']),
 }).strict();
 const campaignSchema = z.object({
   selectionRef: selectionRefSchema,
   displayName: z.string().min(1).max(200),
   worldName: z.string().min(1).max(200),
   status: z.enum(['draft', 'active', 'paused', 'completed', 'archived']),
+  sessionVersion: z.number().int().min(0),
   characters: z.array(characterSchema).max(100),
 }).strict();
 
@@ -48,6 +50,15 @@ export const authenticatedContextSchema = z.object({
       resources: z.array(resourceSchema).max(3),
       readOnly: z.literal(true),
     }).strict().nullable(),
+    gameSession: z.object({
+      status: z.enum(['NONE', 'ACTIVE', 'UNAVAILABLE']),
+      stateVersion: z.number().int().min(0),
+      canContinue: z.boolean(),
+      selection: z.object({
+        campaignSelectionRef: selectionRefSchema,
+        characterSelectionRef: selectionRefSchema,
+      }).strict().nullable(),
+    }).strict(),
     sessionState: z.enum([
       'NO_PLAYER',
       'NO_CAMPAIGN',
@@ -61,6 +72,8 @@ export const authenticatedContextSchema = z.object({
       canSelectCharacter: z.boolean(),
       canViewContext: z.boolean(),
       canMutate: z.literal(false),
+      canPersistSelection: z.boolean(),
+      canContinue: z.boolean(),
     }).strict(),
     cta: z.object({
       kind: z.enum([
@@ -69,6 +82,8 @@ export const authenticatedContextSchema = z.object({
         'SELECT_CAMPAIGN',
         'SELECT_CHARACTER',
         'VIEW_CONTEXT',
+        'CONFIRM_SELECTION',
+        'CONTINUE',
         'RECONNECT',
       ]),
       label: z.string().min(1).max(100),

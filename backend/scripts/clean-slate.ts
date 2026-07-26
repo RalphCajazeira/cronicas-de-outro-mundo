@@ -11,7 +11,7 @@ const { Client } = pg;
 export const cleanSlateObjects = {
   tables: [
     'ActiveEffect', 'Actor', 'ActorAttribute', 'ActorContent', 'ActorControl',
-    'ActorDerivedSnapshot', 'ActorEquipmentSlot', 'ActorResource', 'AuditEvent',
+    'ActorDerivedSnapshot', 'ActorEquipmentSlot', 'ActorResource', 'AuditEvent', 'GameSession',
     'Campaign', 'CampaignMembership', 'ContentDefinition',
     'ContentEffectBinding', 'ContentProfileVersion', 'ContentVersion', 'EffectResolution',
     'EffectRoll', 'EffectRulesVersion', 'Encounter', 'EncounterConsequence',
@@ -22,7 +22,7 @@ export const cleanSlateObjects = {
   enums: [
     'ActiveEffectDurationType', 'ActiveEffectKind', 'ActorAttributeCode', 'ActorContentState',
     'ActorControlPermission', 'ActorEquipmentSlotRef', 'ActorResourceType', 'ActorStatus',
-    'ActorType', 'AuditDecision', 'CampaignMembershipRole', 'CampaignMembershipStatus',
+    'ActorType', 'AuditDecision', 'CampaignMembershipRole', 'CampaignMembershipStatus', 'GameSessionStatus',
     'CampaignStatus', 'ContentEffectBindingKind', 'ContentProfileMode', 'ContentStatus', 'ContentType',
     'EffectResolutionOperation', 'EffectRollKind', 'EncounterCompletionCandidate',
     'EncounterEphemeralKind', 'EncounterLifecycleStatus', 'EncounterOperationKind',

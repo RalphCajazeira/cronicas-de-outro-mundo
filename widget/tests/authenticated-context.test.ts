@@ -4,7 +4,10 @@ import {
   renderAuthenticatedContext,
   renderAuthenticatedFailure,
 } from '../src/authenticated-render.js';
-import { parseAuthenticatedToolResult } from '../src/authenticated-tool-result.js';
+import {
+  parseAuthenticatedSelectionResult,
+  parseAuthenticatedToolResult,
+} from '../src/authenticated-tool-result.js';
 
 const campaignSelectionRef = `sel_${'a'.repeat(43)}`;
 const characterSelectionRef = `sel_${'b'.repeat(43)}`;
@@ -32,10 +35,12 @@ function context(
         displayName: 'OAuth Readonly Test',
         worldName: 'OAuth Test World',
         status: 'active',
+        sessionVersion: 1,
         characters: [{
           selectionRef: characterSelectionRef,
           displayName: 'Test Adventurer',
           level: 1,
+          accessLabel: 'Jogável',
         }],
       }],
       activeContext: {
@@ -44,14 +49,22 @@ function context(
           displayName: 'OAuth Readonly Test',
           worldName: 'OAuth Test World',
           status: 'active',
+          sessionVersion: 1,
         },
         character: {
           selectionRef: characterSelectionRef,
           displayName: 'Test Adventurer',
           level: 1,
+          accessLabel: 'Jogável',
         },
         resources: [],
         readOnly: true,
+      },
+      gameSession: {
+        status: 'ACTIVE',
+        stateVersion: 1,
+        canContinue: true,
+        selection: { campaignSelectionRef, characterSelectionRef },
       },
       sessionState: 'READ_ONLY_READY',
       navigation: {
@@ -59,6 +72,8 @@ function context(
         canSelectCharacter: false,
         canViewContext: true,
         canMutate: false,
+        canPersistSelection: true,
+        canContinue: true,
       },
       cta: {
         kind: 'VIEW_CONTEXT',
@@ -117,6 +132,8 @@ describe('authenticated read-only widget', () => {
           canSelectCharacter: false,
           canViewContext: false,
           canMutate: false,
+          canPersistSelection: false,
+          canContinue: false,
         },
         cta: { kind: 'LINK_PLAYER', label: 'Aguardar vínculo do jogador' },
       },
@@ -135,6 +152,8 @@ describe('authenticated read-only widget', () => {
           canSelectCharacter: false,
           canViewContext: false,
           canMutate: false,
+          canPersistSelection: false,
+          canContinue: false,
         },
         cta: { kind: 'WAIT_FOR_CAMPAIGN', label: 'Nenhuma campanha autorizada' },
       },
@@ -152,6 +171,8 @@ describe('authenticated read-only widget', () => {
           canSelectCharacter: false,
           canViewContext: false,
           canMutate: false,
+          canPersistSelection: false,
+          canContinue: false,
         },
         cta: { kind: 'SELECT_CAMPAIGN', label: 'Selecionar campanha' },
       },
@@ -173,6 +194,8 @@ describe('authenticated read-only widget', () => {
           canSelectCharacter: false,
           canViewContext: false,
           canMutate: false,
+          canPersistSelection: false,
+          canContinue: false,
         },
         cta: { kind: 'RECONNECT', label: 'Reconectar com segurança' },
       },
@@ -194,5 +217,63 @@ describe('authenticated read-only widget', () => {
     expect(second).toBe(first);
     expect(first).not.toContain('<img');
     expect(first).toContain('&lt;img');
+  });
+
+  it('renders confirmation, safe retry, conflict recovery, and Continue without mechanical controls', () => {
+    const preview = context();
+    preview.widgetContext.gameSession = {
+      status: 'NONE',
+      stateVersion: 0,
+      canContinue: false,
+      selection: null,
+    };
+    preview.widgetContext.activeContext!.campaign.sessionVersion = 0;
+    expect(renderAuthenticatedContext(preview)).toContain('data-action="confirm-selection"');
+
+    const renderState = {
+      activeView: 'SUMMARY' as const,
+      view: null,
+      loading: false,
+      error: null,
+      selectedDetail: null,
+    };
+    const safeRetry = renderAuthenticatedContext(preview, {
+      ...renderState,
+      selectionFeedback: 'Repita a mesma solicitação.',
+      selectionRecovery: 'SAFE_RETRY',
+    });
+    expect(safeRetry).toContain('data-action="retry-selection"');
+    const conflict = renderAuthenticatedContext(preview, {
+      ...renderState,
+      selectionFeedback: 'A seleção mudou.',
+      selectionRecovery: 'RELOAD_REQUIRED',
+    });
+    expect(conflict).toContain('data-action="reload-context"');
+
+    const persisted = renderAuthenticatedContext(context());
+    expect(persisted).toContain('data-action="continue"');
+    expect(persisted).not.toMatch(/data-action="attack|data-action="use|data-action="equip/i);
+  });
+
+  it('strictly parses stable selection results and rejects privileged additions', () => {
+    const result = {
+      status: 'SUCCESS',
+      previousSessionVersion: 0,
+      sessionVersion: 1,
+      selection: { campaignSelectionRef, characterSelectionRef },
+      canContinue: true,
+      recovery: 'NONE',
+      message: 'Seleção salva.',
+    };
+    const selectionToolResult = (structuredContent: unknown) => ({
+      content: [{ type: 'text' as const, text: 'Seleção segura' }],
+      structuredContent,
+    });
+    expect(parseAuthenticatedSelectionResult(selectionToolResult(result)))
+      .toEqual(result);
+    expect(() => parseAuthenticatedSelectionResult(selectionToolResult({
+      ...result,
+      MASTER_ONLY: 'secret',
+    }))).toThrow(/contrato seguro/u);
   });
 });

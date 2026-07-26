@@ -10,6 +10,7 @@ import {
 } from './authenticated-render.js';
 import {
   parseAuthenticatedCharacterViewResult,
+  parseAuthenticatedSelectionResult,
   parseAuthenticatedToolResult,
 } from './authenticated-tool-result.js';
 import {
@@ -54,6 +55,9 @@ let bufferedHostResult: unknown | undefined;
 let narrativeDraft = '';
 let narrativeSending = false;
 let narrativeError: string | null = null;
+let selectionFeedback: string | null = null;
+let selectionRecovery: 'NONE' | 'RELOAD_REQUIRED' | 'SAFE_RETRY' | 'SELECT_AGAIN' = 'NONE';
+let lastSelectionArguments: Record<string, unknown> | null = null;
 
 function render(): void {
   if (context === null) return;
@@ -68,6 +72,8 @@ function render(): void {
       sending: narrativeSending,
       error: narrativeError,
     },
+    selectionFeedback,
+    selectionRecovery,
   });
 }
 
@@ -114,6 +120,25 @@ function applyResult(input: unknown): void {
     const isCharacterView = typeof structured === 'object'
       && structured !== null
       && 'view' in structured;
+    const isSelectionResult = typeof structured === 'object'
+      && structured !== null
+      && 'status' in structured
+      && 'sessionVersion' in structured
+      && 'recovery' in structured;
+    if (isSelectionResult) {
+      const result = parseAuthenticatedSelectionResult(input);
+      loading = false;
+      selectionFeedback = result.message;
+      selectionRecovery = result.recovery;
+      if (result.status === 'SUCCESS') {
+        lastSelectionArguments = null;
+        loadContext({});
+        return;
+      }
+      if (result.recovery !== 'SAFE_RETRY') lastSelectionArguments = null;
+      render();
+      return;
+    }
     if (isCharacterView) {
       const view = parseAuthenticatedCharacterViewResult(input);
       const requestedCursor = lastViewArguments?.view === view.view
@@ -158,7 +183,7 @@ function applyResult(input: unknown): void {
   }
 }
 
-function callHostTool(name: string, argumentsValue: Record<string, string>): Promise<unknown> {
+function callHostTool(name: string, argumentsValue: Record<string, unknown>): Promise<unknown> {
   if (compatibilityBridgeActive) {
     return callCompatibilityTool(window, name, argumentsValue);
   }
@@ -223,6 +248,44 @@ function loadContext(argumentsValue: Record<string, string>): void {
   });
 }
 
+function confirmSelection(): void {
+  const active = context?.widgetContext.activeContext;
+  if (active?.character === null
+    || active?.character === undefined
+    || context?.widgetContext.navigation.canPersistSelection !== true
+    || loading) return;
+  const argumentsValue = {
+    campaignSelectionRef: active.campaign.selectionRef,
+    characterSelectionRef: active.character.selectionRef,
+    idempotencyKey: crypto.randomUUID(),
+    baseSessionVersion: active.campaign.sessionVersion,
+  };
+  lastSelectionArguments = argumentsValue;
+  selectionFeedback = null;
+  selectionRecovery = 'NONE';
+  loading = true;
+  render();
+  void callHostTool('selectAuthenticatedGameContext', argumentsValue).then(applyResult).catch(() => {
+    loading = false;
+    selectionFeedback = 'Não foi possível confirmar agora. Repita com a mesma chave de segurança.';
+    selectionRecovery = 'SAFE_RETRY';
+    render();
+  });
+}
+
+function retrySelection(): void {
+  if (lastSelectionArguments === null || loading) return;
+  loading = true;
+  selectionFeedback = null;
+  render();
+  void callHostTool('selectAuthenticatedGameContext', lastSelectionArguments).then(applyResult).catch(() => {
+    loading = false;
+    selectionFeedback = 'A nova tentativa segura não pôde ser concluída.';
+    selectionRecovery = 'SAFE_RETRY';
+    render();
+  });
+}
+
 function loadView(view: AuthenticatedViewName, cursor?: string): void {
   const refs = selectedRefs();
   if (refs === null) return;
@@ -276,6 +339,21 @@ function handleClick(event: Event): void {
     retry();
     return;
   }
+  if (target.dataset.action === 'confirm-selection') {
+    confirmSelection();
+    return;
+  }
+  if (target.dataset.action === 'retry-selection') {
+    retrySelection();
+    return;
+  }
+  if (target.dataset.action === 'reload-context' || target.dataset.action === 'continue') {
+    lastSelectionArguments = null;
+    selectionFeedback = null;
+    selectionRecovery = 'NONE';
+    loadContext({});
+    return;
+  }
   if (target.dataset.action === 'load-more') {
     const current = views[activeView];
     const cursor = current?.view === 'INVENTORY' || current?.view === 'ABILITIES'
@@ -305,10 +383,18 @@ function handleClick(event: Event): void {
   const campaignSelectionRef = target.dataset.campaignSelectionRef;
   const characterSelectionRef = target.dataset.characterSelectionRef;
   if (characterSelectionRef !== undefined && campaignSelectionRef !== undefined) {
+    lastSelectionArguments = null;
+    selectionFeedback = null;
+    selectionRecovery = 'NONE';
     loadContext({ campaignSelectionRef, characterSelectionRef });
     return;
   }
-  if (campaignSelectionRef !== undefined) loadContext({ campaignSelectionRef });
+  if (campaignSelectionRef !== undefined) {
+    lastSelectionArguments = null;
+    selectionFeedback = null;
+    selectionRecovery = 'NONE';
+    loadContext({ campaignSelectionRef });
+  }
 }
 
 function handleInput(event: Event): void {

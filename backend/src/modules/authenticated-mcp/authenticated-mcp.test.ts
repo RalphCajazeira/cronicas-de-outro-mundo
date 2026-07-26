@@ -41,6 +41,7 @@ import {
   GET_AUTHENTICATED_BOOTSTRAP_TOOL,
   LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL,
   LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL,
+  SELECT_AUTHENTICATED_GAME_CONTEXT_TOOL,
 } from './authenticated-mcp.server.js';
 import { authenticatedGameContextSchema } from '../authenticated-game-context/authenticated-game-context.dto.js';
 import { createAuthenticatedCharacterViewService } from '../authenticated-character-view/authenticated-character-view.service.js';
@@ -50,6 +51,9 @@ import type {
 } from '../authenticated-character-view/authenticated-character-view.types.js';
 import { authenticatedCharacterViewSchema } from '../authenticated-character-view/authenticated-character-view.dto.js';
 import { authenticatedSelectionRef } from '../authenticated-game-context/authenticated-selection-ref.js';
+import { createAuthenticatedGameSessionService } from '../authenticated-game-session/authenticated-game-session.service.js';
+import type { AuthenticatedGameSessionRepository } from '../authenticated-game-session/authenticated-game-session.types.js';
+import { authenticatedGameSessionSelectionResultSchema } from '../authenticated-game-session/authenticated-game-session.dto.js';
 
 const widgetAssets: WidgetAssets = {
   readHome: () => Promise.resolve('<!doctype html><title>Public fixture</title>'),
@@ -238,6 +242,17 @@ async function startHost(
   characterViewRepository: AuthenticatedCharacterViewRepository = {
     loadAuthorizedCharacterSnapshot: () => Promise.resolve(null),
   },
+  gameSessionRepository: AuthenticatedGameSessionRepository = {
+    select: (_userId, input) => Promise.resolve({
+      status: 'REJECTED',
+      previousSessionVersion: input.baseSessionVersion,
+      sessionVersion: input.baseSessionVersion,
+      selection: null,
+      canContinue: false,
+      recovery: 'SELECT_AGAIN',
+      message: 'A seleção solicitada não está disponível para esta conta.',
+    }),
+  },
 ): Promise<AuthenticatedHost> {
   const app = express();
   const audits: HttpAuditRecord[] = [];
@@ -273,6 +288,7 @@ async function startHost(
     }),
     createAuthenticatedCharacterViewService(gameContextRepository, characterViewRepository),
     widgetAssets,
+    createAuthenticatedGameSessionService(gameSessionRepository),
   ));
 
   return {
@@ -596,12 +612,12 @@ describe('authenticated MCP resource server', () => {
     }
   });
 
-  it('exposes only the minimal read-only authenticated bootstrap and performs no domain access', async () => {
+  it('exposes the authenticated catalog while bootstrap performs no domain access', async () => {
     const host = await startHost([identity('active-subject')]);
     const { client, transport } = await connectClient(host, await host.token());
     try {
       const tools = await client.listTools();
-      expect(tools.tools).toHaveLength(3);
+      expect(tools.tools).toHaveLength(4);
       expect(tools.tools[0]).toMatchObject({
         name: GET_AUTHENTICATED_BOOTSTRAP_TOOL,
         annotations: {
@@ -675,6 +691,21 @@ describe('authenticated MCP resource server', () => {
           _meta: {
             ui: {
               resourceUri: AUTHENTICATED_HOME_RESOURCE_URI,
+            },
+          },
+        });
+      expect(tools.tools.find((tool) => tool.name === SELECT_AUTHENTICATED_GAME_CONTEXT_TOOL))
+        .toMatchObject({
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+          _meta: {
+            ui: {
+              resourceUri: AUTHENTICATED_HOME_RESOURCE_URI,
+              visibility: ['app'],
             },
           },
         });
@@ -804,6 +835,64 @@ describe('authenticated MCP resource server', () => {
     }
   });
 
+  it('keeps selection app-only, versioned, idempotent, and mechanically non-destructive', async () => {
+    const calls: Array<{ userId: string; baseSessionVersion: number; origin: string }> = [];
+    const campaignSelectionRef = authenticatedSelectionRef(
+      'campaign',
+      '00000000-0000-4000-8000-000000000001',
+      'campaign-synthetic',
+    );
+    const characterSelectionRef = authenticatedSelectionRef(
+      'character',
+      '00000000-0000-4000-8000-000000000001',
+      'actor-synthetic',
+    );
+    const host = await startHost(
+      [identity('active-subject')],
+      {},
+      gameAccessRepository(),
+      { loadAuthorizedCharacterSnapshot: () => Promise.resolve(minimalCharacterSnapshot()) },
+      {
+        select: (userId, input, selectionAudit) => {
+          calls.push({ userId, baseSessionVersion: input.baseSessionVersion, origin: selectionAudit.origin });
+          return Promise.resolve({
+            status: 'SUCCESS',
+            previousSessionVersion: 0,
+            sessionVersion: 1,
+            selection: { campaignSelectionRef, characterSelectionRef },
+            canContinue: true,
+            recovery: 'NONE',
+            message: 'Campanha e personagem salvos para continuar depois.',
+          });
+        },
+      },
+    );
+    const { client, transport } = await connectClient(host, await host.token());
+    try {
+      const selected = CallToolResultSchema.parse(await client.callTool({
+        name: SELECT_AUTHENTICATED_GAME_CONTEXT_TOOL,
+        arguments: {
+          campaignSelectionRef,
+          characterSelectionRef,
+          idempotencyKey: 'selection-test-001',
+          baseSessionVersion: 0,
+        },
+      }));
+      expect(authenticatedGameSessionSelectionResultSchema.parse(selected.structuredContent))
+        .toMatchObject({ status: 'SUCCESS', sessionVersion: 1, canContinue: true });
+      expect(calls).toEqual([{
+        userId: '00000000-0000-4000-8000-000000000001',
+        baseSessionVersion: 0,
+        origin: 'widget',
+      }]);
+      expect(JSON.stringify(selected)).not.toMatch(/campaign-synthetic|actor-synthetic|userId|MASTER_ONLY/i);
+    } finally {
+      await transport.terminateSession();
+      await client.close();
+      await host.close();
+    }
+  });
+
   it('binds one identity per session, rejects a subject change, and isolates another session', async () => {
     const host = await startHost([identity('active-subject'), identity('second-subject')]);
     const first = await connectClient(host, await host.token('active-subject'));
@@ -891,7 +980,7 @@ describe('authenticated MCP resource server', () => {
       expect(suspended.status).toBe(403);
 
       records[0] = identity('active-subject');
-      expect((await client.listTools()).tools).toHaveLength(3);
+      expect((await client.listTools()).tools).toHaveLength(4);
     } finally {
       await transport.terminateSession();
       await client.close();

@@ -37,6 +37,8 @@ import { createAuthenticatedGameContextService } from './modules/authenticated-g
 import type { AuthenticatedGameContextRepository } from './modules/authenticated-game-context/authenticated-game-context.types.js';
 import type { AuthenticatedCharacterViewRepository } from './modules/authenticated-character-view/authenticated-character-view.types.js';
 import { createAuthenticatedCharacterViewService } from './modules/authenticated-character-view/authenticated-character-view.service.js';
+import { createAuthenticatedGameSessionService } from './modules/authenticated-game-session/authenticated-game-session.service.js';
+import type { AuthenticatedGameSessionRepository } from './modules/authenticated-game-session/authenticated-game-session.types.js';
 
 export interface AppDependencies {
   actorRepository: ActorRepository;
@@ -50,6 +52,7 @@ export interface AppDependencies {
   identityRepository?: IdentityRepository;
   authenticatedGameContextRepository?: AuthenticatedGameContextRepository;
   authenticatedCharacterViewRepository?: AuthenticatedCharacterViewRepository;
+  authenticatedGameSessionRepository?: AuthenticatedGameSessionRepository;
   releaseInfo?: ReleaseInfo;
 }
 
@@ -85,6 +88,19 @@ export function createApp(config: AppConfig, dependencies: AppDependencies) {
         loadAuthorizedCharacterSnapshot: () => Promise.resolve(null),
       },
     );
+    const authenticatedGameSessionService = createAuthenticatedGameSessionService(
+      dependencies.authenticatedGameSessionRepository ?? {
+        select: (_userId, input) => Promise.resolve({
+          status: 'REJECTED' as const,
+          previousSessionVersion: input.baseSessionVersion,
+          sessionVersion: input.baseSessionVersion,
+          selection: null,
+          canContinue: false,
+          recovery: 'SELECT_AGAIN' as const,
+          message: 'A seleção solicitada não está disponível para esta conta.',
+        }),
+      },
+    );
     app.use(createProtectedResourceMetadataRouter(config.OAUTH_RESOURCE_SERVER));
     app.use(
       config.OAUTH_RESOURCE_SERVER.protectedMcpPath,
@@ -95,6 +111,7 @@ export function createApp(config: AppConfig, dependencies: AppDependencies) {
         authenticatedGameContextService,
         authenticatedCharacterViewService,
         widgetAssets,
+        authenticatedGameSessionService,
       ),
     );
   }
