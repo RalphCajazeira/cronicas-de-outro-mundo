@@ -58,6 +58,41 @@ describe('game context tool result parser', () => {
     expect(parseGameContextToolResult(toolResult())).toEqual(disconnected);
   });
 
+  it('restores only the nullable fields proven to be omitted by the ChatGPT host', () => {
+    const { player: _player, resume: _resume, ...hostStructuredContent } = disconnected;
+    expect(parseGameContextToolResult(toolResult({
+      structuredContent: hostStructuredContent,
+    }))).toEqual(disconnected);
+  });
+
+  it('restores an omitted null resume only when the public state cannot continue', () => {
+    const withoutResume = {
+      ...connected,
+      capabilities: { canStartNewGame: true, canContinue: false },
+    };
+    const { resume: _resume, ...hostStructuredContent } = withoutResume;
+    expect(parseGameContextToolResult(toolResult({
+      structuredContent: hostStructuredContent,
+    }))).toEqual({
+      ...withoutResume,
+      resume: null,
+    });
+  });
+
+  it('does not use null restoration to accept inconsistent connected states', () => {
+    const { player: _player, ...missingPlayer } = connected;
+    expectErrorCode(
+      () => parseGameContextToolResult(toolResult({ structuredContent: missingPlayer })),
+      'INVALID_STRUCTURED_CONTENT',
+    );
+
+    const { resume: _resume, ...missingRequiredResume } = connected;
+    expectErrorCode(
+      () => parseGameContextToolResult(toolResult({ structuredContent: missingRequiredResume })),
+      'INVALID_STRUCTURED_CONTENT',
+    );
+  });
+
   it('normalizes a direct CallToolResult without an envelope', () => {
     expect(normalizeToolResultEvent(toolResult())).toEqual(toolResult());
   });

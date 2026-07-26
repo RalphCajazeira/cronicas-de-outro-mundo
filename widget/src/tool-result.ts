@@ -50,6 +50,31 @@ function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+function hasOwn(input: Record<PropertyKey, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(input, key);
+}
+
+function restoreHostOmittedNulls(input: unknown): unknown {
+  if (!isRecord(input)) return input;
+
+  const authState = hasOwn(input, 'authState') ? input.authState : undefined;
+  if (authState !== 'DISCONNECTED' && authState !== 'CONNECTED_FIXTURE') return input;
+
+  const capabilities = hasOwn(input, 'capabilities') ? input.capabilities : undefined;
+  const canContinue = isRecord(capabilities) && hasOwn(capabilities, 'canContinue')
+    ? capabilities.canContinue
+    : undefined;
+  const restorePlayer = authState === 'DISCONNECTED' && !hasOwn(input, 'player');
+  const restoreResume = canContinue === false && !hasOwn(input, 'resume');
+
+  if (!restorePlayer && !restoreResume) return input;
+  return {
+    ...input,
+    ...(restorePlayer ? { player: null } : {}),
+    ...(restoreResume ? { resume: null } : {}),
+  };
+}
+
 function readPath(input: unknown, path: readonly string[]): { present: boolean; value: unknown } {
   let current = input;
   for (const segment of path) {
@@ -168,12 +193,13 @@ export function parseGameContextToolResult(input: unknown): GameContext {
     );
   }
 
-  const parsed = gameContextSchema.safeParse(result.structuredContent);
+  const normalizedStructuredContent = restoreHostOmittedNulls(result.structuredContent);
+  const parsed = gameContextSchema.safeParse(normalizedStructuredContent);
   if (!parsed.success) {
     throw new GameContextToolResultError(
       'INVALID_STRUCTURED_CONTENT',
       'O contexto público retornado pela ferramenta não corresponde ao contrato esperado.',
-      safeContractIssues(result.structuredContent, parsed.error.issues),
+      safeContractIssues(normalizedStructuredContent, parsed.error.issues),
     );
   }
 

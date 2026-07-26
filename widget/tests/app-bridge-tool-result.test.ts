@@ -9,8 +9,6 @@ const disconnectedResult: CallToolResult = {
   content: [{ type: 'text', text: 'Resumo textual não autoritativo.' }],
   structuredContent: {
     authState: 'DISCONNECTED',
-    player: null,
-    resume: null,
     capabilities: { canStartNewGame: false, canContinue: false },
     environment: { fixtureMode: true, nonProduction: true },
   },
@@ -45,7 +43,13 @@ describe('official AppBridge tool-result lifecycle', () => {
       const input = await received;
       expect(input).toEqual(disconnectedResult);
       expect(input).not.toBeInstanceOf(Event);
-      expect(parseGameContextToolResult(input)).toMatchObject({ authState: 'DISCONNECTED' });
+      expect(parseGameContextToolResult(input)).toEqual({
+        authState: 'DISCONNECTED',
+        player: null,
+        resume: null,
+        capabilities: { canStartNewGame: false, canContinue: false },
+        environment: { fixtureMode: true, nonProduction: true },
+      });
     } finally {
       await app.close();
       await bridge.close();
