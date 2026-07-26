@@ -12,6 +12,12 @@ import {
   parseAuthenticatedCharacterViewResult,
   parseAuthenticatedToolResult,
 } from './authenticated-tool-result.js';
+import {
+  callCompatibilityTool,
+  readCompatibilityToolOutput,
+  readToolResultNotification,
+  sendCompatibilityMessage,
+} from './host-compatibility.js';
 import { normalizeToolResultEvent } from './tool-result.js';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -42,6 +48,11 @@ let errorMessage: string | null = null;
 let selectedDetail: string | null = null;
 let currentCharacterRef: string | null = null;
 let lastViewArguments: Record<string, string> | null = null;
+let compatibilityBridgeActive = false;
+let bufferedHostResult: unknown | undefined;
+let narrativeDraft = '';
+let narrativeSending = false;
+let narrativeError: string | null = null;
 
 function render(): void {
   if (context === null) return;
@@ -51,6 +62,11 @@ function render(): void {
     loading,
     error: errorMessage,
     selectedDetail,
+    narrativeComposer: {
+      draft: narrativeDraft,
+      sending: narrativeSending,
+      error: narrativeError,
+    },
   });
 }
 
@@ -118,6 +134,9 @@ function applyResult(input: unknown): void {
       views = {};
       activeView = 'SUMMARY';
       selectedDetail = null;
+      narrativeDraft = '';
+      narrativeSending = false;
+      narrativeError = null;
       currentCharacterRef = nextCharacterRef;
     }
     context = nextContext;
@@ -138,14 +157,65 @@ function applyResult(input: unknown): void {
   }
 }
 
+function callHostTool(name: string, argumentsValue: Record<string, string>): Promise<unknown> {
+  if (compatibilityBridgeActive) {
+    return callCompatibilityTool(window, name, argumentsValue);
+  }
+  return app.callServerTool({
+    name,
+    arguments: argumentsValue,
+  });
+}
+
+function isRejectedHostResult(input: unknown): boolean {
+  return typeof input === 'object'
+    && input !== null
+    && 'isError' in input
+    && input.isError === true;
+}
+
+async function sendNarrativeMessage(prompt: string): Promise<void> {
+  if (compatibilityBridgeActive) {
+    const result = await sendCompatibilityMessage(window, prompt);
+    if (isRejectedHostResult(result)) throw new Error('Host rejected narrative message.');
+    return;
+  }
+  try {
+    const result = await app.sendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: prompt }],
+    });
+    if (isRejectedHostResult(result)) throw new Error('Host rejected narrative message.');
+  } catch (error) {
+    if (window.openai?.sendFollowUpMessage === undefined) throw error;
+    const result = await sendCompatibilityMessage(window, prompt);
+    if (isRejectedHostResult(result)) throw new Error('Host rejected narrative message.');
+  }
+}
+
+function submitNarrativeAction(): void {
+  const prompt = narrativeDraft.trim();
+  if (prompt.length === 0 || narrativeSending) return;
+  narrativeSending = true;
+  narrativeError = null;
+  render();
+  void sendNarrativeMessage(prompt).then(() => {
+    narrativeDraft = '';
+    narrativeSending = false;
+    narrativeError = null;
+    render();
+  }).catch(() => {
+    narrativeSending = false;
+    narrativeError = 'Não foi possível enviar. O texto foi preservado para nova tentativa.';
+    render();
+  });
+}
+
 function loadContext(argumentsValue: Record<string, string>): void {
   loading = true;
   errorMessage = null;
   render();
-  void app.callServerTool({
-    name: 'loadAuthenticatedGameContext',
-    arguments: argumentsValue,
-  }).then(applyResult).catch(() => {
+  void callHostTool('loadAuthenticatedGameContext', argumentsValue).then(applyResult).catch(() => {
     loading = false;
     errorMessage = 'Não foi possível atualizar o contexto autorizado.';
     render();
@@ -172,10 +242,7 @@ function loadView(view: AuthenticatedViewName, cursor?: string): void {
   loading = true;
   errorMessage = null;
   render();
-  void app.callServerTool({
-    name: 'loadAuthenticatedCharacterView',
-    arguments: argumentsValue,
-  }).then(applyResult).catch(() => {
+  void callHostTool('loadAuthenticatedCharacterView', argumentsValue).then(applyResult).catch(() => {
     loading = false;
     errorMessage = 'Não foi possível carregar esta seção. Tente novamente com a mesma seleção.';
     render();
@@ -190,10 +257,7 @@ function retry(): void {
   loading = true;
   errorMessage = null;
   render();
-  void app.callServerTool({
-    name: 'loadAuthenticatedCharacterView',
-    arguments: lastViewArguments,
-  }).then(applyResult).catch(() => {
+  void callHostTool('loadAuthenticatedCharacterView', lastViewArguments).then(applyResult).catch(() => {
     loading = false;
     errorMessage = 'A nova tentativa não pôde ser concluída.';
     render();
@@ -219,6 +283,13 @@ function handleClick(event: Event): void {
     if (cursor !== null && cursor !== undefined) loadView(activeView, cursor);
     return;
   }
+  if (target.dataset.action === 'quick-choice') {
+    narrativeDraft = target.dataset.prompt ?? '';
+    narrativeError = null;
+    render();
+    queueMicrotask(() => root?.querySelector<HTMLTextAreaElement>('#narrative-action')?.focus());
+    return;
+  }
   const detail = target.dataset.detail;
   if (detail !== undefined) {
     selectedDetail = selectedDetail === detail ? null : detail;
@@ -239,6 +310,25 @@ function handleClick(event: Event): void {
   if (campaignSelectionRef !== undefined) loadContext({ campaignSelectionRef });
 }
 
+function handleInput(event: Event): void {
+  if (!(event.target instanceof HTMLTextAreaElement) || event.target.id !== 'narrative-action') return;
+  narrativeDraft = event.target.value;
+  narrativeError = null;
+  const submitButton = event.target.form?.querySelector<HTMLButtonElement>('button[type="submit"]');
+  if (submitButton !== null && submitButton !== undefined) {
+    submitButton.disabled = narrativeDraft.trim().length === 0 || narrativeSending;
+  }
+}
+
+function handleSubmit(event: SubmitEvent): void {
+  const form = event.target instanceof Element
+    ? event.target.closest<HTMLFormElement>('[data-action="narrative-form"]')
+    : null;
+  if (form === null) return;
+  event.preventDefault();
+  submitNarrativeAction();
+}
+
 function handleKeydown(event: KeyboardEvent): void {
   const tab = event.target instanceof Element
     ? event.target.closest<HTMLButtonElement>('[role="tab"]')
@@ -257,18 +347,41 @@ function handleKeydown(event: KeyboardEvent): void {
   queueMicrotask(() => root?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus());
 }
 
+function handleHostMessage(event: MessageEvent<unknown>): void {
+  const result = readToolResultNotification(event, window.parent);
+  if (result === undefined) return;
+  if (compatibilityBridgeActive) {
+    applyResult(result);
+    return;
+  }
+  bufferedHostResult = result;
+}
+
 app.addEventListener('toolresult', applyResult);
 root.addEventListener('click', handleClick);
 root.addEventListener('keydown', handleKeydown);
+root.addEventListener('input', handleInput);
+root.addEventListener('submit', handleSubmit);
+window.addEventListener('message', handleHostMessage);
 window.addEventListener('pagehide', () => {
   app.removeEventListener('toolresult', applyResult);
   root.removeEventListener('click', handleClick);
   root.removeEventListener('keydown', handleKeydown);
+  root.removeEventListener('input', handleInput);
+  root.removeEventListener('submit', handleSubmit);
+  window.removeEventListener('message', handleHostMessage);
   void app.close();
 }, { once: true });
 
 root.innerHTML = '<div class="loading-state" role="status">Carregando contexto autorizado…</div>';
 void app.connect().catch(() => {
+  compatibilityBridgeActive = true;
+  const initialResult = bufferedHostResult ?? readCompatibilityToolOutput(window);
+  bufferedHostResult = undefined;
+  if (initialResult !== undefined) {
+    applyResult(initialResult);
+    return;
+  }
   root!.innerHTML = renderAuthenticatedFailure(
     'A sessão autenticada não está disponível. Nenhum dado do jogo foi alterado.',
   );
