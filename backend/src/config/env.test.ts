@@ -34,4 +34,94 @@ describe('application configuration', () => {
     expect(parseConfig({ ...validEnvironment, CHATGPT_APP_PROOF_MODE: 'true' }).CHATGPT_APP_PROOF_MODE).toBe(true);
     expect(() => parseConfig({ ...validEnvironment, CHATGPT_APP_PROOF_MODE: 'yes' })).toThrow('Invalid application configuration');
   });
+
+  it('keeps the OAuth resource server disabled unless a complete explicit configuration is present', () => {
+    expect(parseConfig(validEnvironment).OAUTH_RESOURCE_SERVER).toBeUndefined();
+    expect(() => parseConfig({ ...validEnvironment, OAUTH_RESOURCE_SERVER_ENABLED: 'true' }))
+      .toThrow('Invalid application configuration');
+  });
+
+  it('parses a fail-closed loopback OAuth resource server configuration in tests', () => {
+    expect(parseConfig({
+      ...validEnvironment,
+      OAUTH_RESOURCE_SERVER_ENABLED: 'true',
+      OAUTH_ISSUER: 'http://127.0.0.1:4100/issuer',
+      OAUTH_AUTHORIZATION_SERVER: 'http://127.0.0.1:4100/issuer',
+      OAUTH_JWKS_URI: 'http://127.0.0.1:4100/jwks',
+      OAUTH_RESOURCE_URI: 'http://127.0.0.1:3000/mcp-auth',
+      OAUTH_REQUIRED_SCOPES: 'openid',
+      OAUTH_ALLOWED_CLIENT_IDS: 'synthetic-client',
+      OAUTH_ALLOWED_ALGORITHMS: 'ES256,RS256',
+    }).OAUTH_RESOURCE_SERVER).toMatchObject({
+      protectedMcpPath: '/mcp-auth',
+      requiredScopes: ['openid'],
+      allowedClientIds: ['synthetic-client'],
+      allowedAlgorithms: ['ES256', 'RS256'],
+      clockSkewSeconds: 30,
+      jwksTimeoutMs: 2_000,
+      jwksCooldownMs: 30_000,
+      jwksCacheMaxAgeMs: 600_000,
+    });
+  });
+
+  it('accepts the future staging resource only with canonical HTTPS configuration', () => {
+    const stagingResource = 'https://cronicas-de-outro-mundo-staging-api.onrender.com/mcp-auth';
+    expect(parseConfig({
+      ...validEnvironment,
+      NODE_ENV: 'production',
+      PUBLIC_BASE_URL: 'https://cronicas-de-outro-mundo-staging-api.onrender.com',
+      OAUTH_RESOURCE_SERVER_ENABLED: 'true',
+      OAUTH_ISSUER: 'https://project-ref.supabase.co/auth/v1',
+      OAUTH_AUTHORIZATION_SERVER: 'https://project-ref.supabase.co/auth/v1',
+      OAUTH_JWKS_URI: 'https://project-ref.supabase.co/auth/v1/.well-known/jwks.json',
+      OAUTH_RESOURCE_URI: stagingResource,
+      OAUTH_REQUIRED_SCOPES: 'openid',
+      OAUTH_ALLOWED_ALGORITHMS: 'ES256',
+    }).OAUTH_RESOURCE_SERVER?.resourceUri).toBe(stagingResource);
+  });
+
+  it.each([
+    { OAUTH_JWKS_URI: 'http://keys.example.test/jwks' },
+    { OAUTH_JWKS_URI: 'http://127.0.0.2:4100/jwks' },
+    { OAUTH_ALLOWED_ALGORITHMS: 'HS256' },
+    { OAUTH_ALLOWED_ALGORITHMS: 'none' },
+    { OAUTH_RESOURCE_URI: 'http://127.0.0.1:3000/other' },
+    { PUBLIC_BASE_URL: 'http://localhost:3000' },
+    { OAUTH_AUTHORIZATION_SERVER: 'http://127.0.0.1:4100/other-issuer' },
+    { OAUTH_REQUIRED_SCOPES: 'openid,openid' },
+    { OAUTH_REQUIRED_SCOPES: 'game:bootstrap' },
+    { OAUTH_ALLOWED_CLIENT_IDS: 'synthetic-client,synthetic-client' },
+  ])('rejects an unsafe OAuth configuration override: %o', (override) => {
+    expect(() => parseConfig({
+      ...validEnvironment,
+      OAUTH_RESOURCE_SERVER_ENABLED: 'true',
+      OAUTH_ISSUER: 'http://127.0.0.1:4100/issuer',
+      OAUTH_AUTHORIZATION_SERVER: 'http://127.0.0.1:4100/issuer',
+      OAUTH_JWKS_URI: 'http://127.0.0.1:4100/jwks',
+      OAUTH_RESOURCE_URI: 'http://127.0.0.1:3000/mcp-auth',
+      OAUTH_REQUIRED_SCOPES: 'openid',
+      OAUTH_ALLOWED_ALGORITHMS: 'ES256',
+      ...override,
+    })).toThrow('Invalid application configuration');
+  });
+
+  it.each([
+    'https://localhost/auth/v1/.well-known/jwks.json',
+    'https://127.0.0.1/auth/v1/.well-known/jwks.json',
+    'https://[::1]/auth/v1/.well-known/jwks.json',
+    'https://auth.internal/auth/v1/.well-known/jwks.json',
+  ])('rejects a runtime JWKS host that could target a local or private service: %s', (jwksUri) => {
+    expect(() => parseConfig({
+      ...validEnvironment,
+      NODE_ENV: 'production',
+      PUBLIC_BASE_URL: 'https://api.example.test',
+      OAUTH_RESOURCE_SERVER_ENABLED: 'true',
+      OAUTH_ISSUER: new URL('/auth/v1', jwksUri).href,
+      OAUTH_AUTHORIZATION_SERVER: new URL('/auth/v1', jwksUri).href,
+      OAUTH_JWKS_URI: jwksUri,
+      OAUTH_RESOURCE_URI: 'https://api.example.test/mcp-auth',
+      OAUTH_REQUIRED_SCOPES: 'openid',
+      OAUTH_ALLOWED_ALGORITHMS: 'ES256',
+    })).toThrow('Invalid application configuration');
+  });
 });

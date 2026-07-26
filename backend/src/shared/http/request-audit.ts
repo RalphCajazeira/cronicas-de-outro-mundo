@@ -18,10 +18,19 @@ export interface AuditErrorDiagnostic {
   issues?: Array<{ code: string; message?: string; path: string }>;
 }
 
+export interface AuthenticationAuditDiagnostic {
+  category: string;
+  issuerDisposition: 'allowed' | 'missing' | 'not_evaluated' | 'rejected';
+  result: 'allowed' | 'denied' | 'pending';
+  subjectFingerprint?: string;
+  tool?: string;
+}
+
 export interface HttpAuditRecord {
   event: 'http_request_completed';
   timestamp: string;
   requestId: string;
+  traceId: string;
   source: 'gpt_api' | 'public';
   method: string;
   path: string;
@@ -33,6 +42,7 @@ export interface HttpAuditRecord {
   operationId?: string;
   encounter?: Record<string, AuditValue>;
   performance?: OperationTelemetrySnapshot;
+  authentication?: AuthenticationAuditDiagnostic;
 }
 
 export type AuditLogWriter = (record: HttpAuditRecord) => void;
@@ -334,6 +344,21 @@ export function setAuditError(response: Response, diagnostic: AuditErrorDiagnost
   response.locals.auditError = diagnostic;
 }
 
+export function setAuthenticationAudit(
+  response: Response,
+  diagnostic: AuthenticationAuditDiagnostic,
+): void {
+  response.locals.authenticationAudit = diagnostic;
+}
+
+export function updateAuthenticationAudit(
+  response: Response,
+  diagnostic: Partial<AuthenticationAuditDiagnostic>,
+): void {
+  const current = response.locals.authenticationAudit as AuthenticationAuditDiagnostic | undefined;
+  if (current !== undefined) response.locals.authenticationAudit = { ...current, ...diagnostic };
+}
+
 export const writeHttpAuditLog: AuditLogWriter = (record) => {
   console.info(JSON.stringify(record));
 };
@@ -341,6 +366,7 @@ export const writeHttpAuditLog: AuditLogWriter = (record) => {
 export function createRequestAudit(writer?: AuditLogWriter): RequestHandler {
   return (request: Request, response: Response, next: NextFunction) => {
     const requestId = randomUUID();
+    const traceId = randomUUID();
     const operationTelemetry = createOperationTelemetryContext();
     const requestPath = (request.originalUrl.split('?', 1)[0] ?? request.path).replace(/[\r\n]/g, '').slice(0, 500);
     const startedAt = process.hrtime.bigint();
@@ -348,6 +374,7 @@ export function createRequestAudit(writer?: AuditLogWriter): RequestHandler {
     const originalJson = response.json.bind(response);
 
     response.setHeader('x-request-id', requestId);
+    response.setHeader('x-trace-id', traceId);
     response.json = ((body: unknown) => {
       responseBody = body;
       return originalJson(body);
@@ -357,12 +384,14 @@ export function createRequestAudit(writer?: AuditLogWriter): RequestHandler {
       if (writer === undefined) return;
       const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
       const auditError = response.locals.auditError as AuditErrorDiagnostic | undefined;
+      const authentication = response.locals.authenticationAudit as AuthenticationAuditDiagnostic | undefined;
       const encounter = summarizeEncounterAudit(response.locals.encounterAudit);
       const performance = operationTelemetrySnapshot(operationTelemetry);
       writer({
         event: 'http_request_completed',
         timestamp: new Date().toISOString(),
         requestId,
+        traceId,
         source: requestPath.startsWith('/api/v1') ? 'gpt_api' : 'public',
         method: request.method,
         path: requestPath,
@@ -373,6 +402,7 @@ export function createRequestAudit(writer?: AuditLogWriter): RequestHandler {
         ...(encounter === undefined ? {} : { operationId: 'manageEncounter', encounter }),
         ...(performance === undefined ? {} : { performance }),
         ...(auditError === undefined ? {} : { error: auditError }),
+        ...(authentication === undefined ? {} : { authentication }),
       });
     });
 

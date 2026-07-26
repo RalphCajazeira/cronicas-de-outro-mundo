@@ -20,6 +20,10 @@ import {
   createFileWidgetAssets,
   type WidgetAssets,
 } from './modules/chatgpt-app/resources/widget-assets.js';
+import { createAuthenticatedMcpRouter } from './modules/authenticated-mcp/authenticated-mcp.routes.js';
+import { createProtectedResourceMetadataRouter } from './modules/oauth-resource-server/protected-resource-metadata.routes.js';
+import { createIdentityService } from './modules/identity/identity.service.js';
+import type { IdentityRepository } from './modules/identity/identity.types.js';
 
 export interface AppDependencies {
   actorRepository: ActorRepository;
@@ -29,6 +33,7 @@ export interface AppDependencies {
   auditLog?: AuditLogWriter;
   encounterHttpService: EncounterHttpService;
   chatGptAppWidgetAssets?: WidgetAssets;
+  identityRepository?: IdentityRepository;
 }
 
 export function createApp(config: AppConfig, dependencies: AppDependencies) {
@@ -41,6 +46,17 @@ export function createApp(config: AppConfig, dependencies: AppDependencies) {
   app.use('/health', createHealthRouter(dependencies.readiness));
   app.use('/openapi.json', createOpenApiRouter(config.PUBLIC_BASE_URL ?? `http://localhost:${config.PORT}`));
   app.use('/mcp', createChatGptAppRouter(config, widgetAssets));
+  if (config.OAUTH_RESOURCE_SERVER !== undefined) {
+    if (dependencies.identityRepository === undefined) {
+      throw new Error('OAuth identity repository is unavailable');
+    }
+    const identityService = createIdentityService(dependencies.identityRepository);
+    app.use(createProtectedResourceMetadataRouter(config.OAUTH_RESOURCE_SERVER));
+    app.use(
+      config.OAUTH_RESOURCE_SERVER.protectedMcpPath,
+      createAuthenticatedMcpRouter(config.NODE_ENV, config.OAUTH_RESOURCE_SERVER, identityService),
+    );
+  }
   app.use('/chatgpt-app-preview', createChatGptAppPreviewRouter(config, widgetAssets));
   app.use('/api/v1', createApiKeyAuth(config.RPG_API_KEY));
   app.use('/api/v1/encounters', createEncounterHttpRouter(dependencies.encounterHttpService));
