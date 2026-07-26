@@ -25,7 +25,7 @@ function shell(context: AuthenticatedContext, content: string): string {
         </div>
       </header>
       <main>${content}</main>
-      <footer>Nenhuma ação mecânica ou narrativa pode ser executada nesta tela.</footer>
+      <footer>Consultas são somente leitura. Ações narrativas seguem para a conversa e não alteram o estado mecânico.</footer>
     </div>
   `;
 }
@@ -341,6 +341,51 @@ export interface AuthenticatedRenderState {
   readonly loading: boolean;
   readonly error: string | null;
   readonly selectedDetail: string | null;
+  readonly narrativeComposer?: {
+    readonly draft: string;
+    readonly sending: boolean;
+    readonly error: string | null;
+  };
+}
+
+const quickNarrativeChoices = [
+  'Observar os arredores com atenção.',
+  'Conversar com quem está por perto.',
+  'Seguir em frente com cautela.',
+] as const;
+
+function narrativeComposer(state: AuthenticatedRenderState['narrativeComposer']): string {
+  const draft = state?.draft ?? '';
+  const sending = state?.sending ?? false;
+  const error = state?.error ?? null;
+  return `
+    <section class="narrative-composer" aria-labelledby="narrative-action-title">
+      <div>
+        <p class="chapter">Ação livre</p>
+        <h3 id="narrative-action-title">O que seu personagem faz?</h3>
+        <p>O texto será enviado à conversa. Nenhuma mutação mecânica é executada por este campo.</p>
+      </div>
+      <div class="quick-choices" aria-label="Escolhas narrativas rápidas">
+        ${quickNarrativeChoices.map((choice) => `
+          <button type="button" data-action="quick-choice" data-prompt="${escapeHtml(choice)}"
+            ${sending ? 'disabled' : ''}>${escapeHtml(choice)}</button>
+        `).join('')}
+      </div>
+      <form data-action="narrative-form">
+        <label for="narrative-action">Descreva sua ação...</label>
+        <textarea id="narrative-action" name="narrative-action" rows="3" maxlength="500"
+          placeholder="Descreva sua ação..." ${sending ? 'disabled' : ''}>${escapeHtml(draft)}</textarea>
+        <div class="composer-actions">
+          <span class="composer-status" aria-live="polite">
+            ${sending ? 'Enviando para a conversa…' : error === null ? '' : escapeHtml(error)}
+          </span>
+          <button type="submit" ${sending || draft.trim().length === 0 ? 'disabled' : ''}>
+            ${sending ? 'Enviando…' : 'Enviar'}
+          </button>
+        </div>
+      </form>
+    </section>
+  `;
 }
 
 function characterHome(context: AuthenticatedContext, state: AuthenticatedRenderState): string {
@@ -383,6 +428,7 @@ function characterHome(context: AuthenticatedContext, state: AuthenticatedRender
       </div>
       ${tabs(state.activeView)}
       ${body}
+      ${narrativeComposer(state.narrativeComposer)}
     </section>
   `);
 }

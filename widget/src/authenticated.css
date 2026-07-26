@@ -297,6 +297,75 @@ footer { margin-top: 22px; color: #81796f; font-size: .72rem; text-align: center
 
 .load-more { width: 100%; background: rgba(157, 87, 46, .25); }
 
+.narrative-composer {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid rgba(222, 193, 134, .2);
+  border-radius: 16px;
+  background: rgba(0, 0, 0, .16);
+}
+
+.narrative-composer h3 { font-size: 1.08rem; }
+.narrative-composer p { margin: 6px 0 0; font-size: .82rem; }
+
+.quick-choices {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  padding-bottom: 3px;
+}
+
+.quick-choices button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 7px 10px;
+  border-color: rgba(215, 169, 86, .35);
+  background: rgba(157, 87, 46, .18);
+  color: #e7d4ae;
+  font-size: .75rem;
+}
+
+.narrative-composer form { display: grid; gap: 7px; }
+.narrative-composer label { color: #d8bd87; font-size: .76rem; font-weight: 750; }
+
+.narrative-composer textarea {
+  width: 100%;
+  min-height: 78px;
+  resize: vertical;
+  padding: 11px 12px;
+  border: 1px solid rgba(222, 193, 134, .28);
+  border-radius: 11px;
+  background: rgba(10, 9, 14, .72);
+  color: #f7f0dc;
+  font: inherit;
+  line-height: 1.45;
+}
+
+.narrative-composer textarea:focus-visible {
+  outline: 3px solid #f5cf7a;
+  outline-offset: 2px;
+}
+
+.composer-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.composer-status {
+  color: #dca48f;
+  font-size: .75rem;
+}
+
+button:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+  opacity: .58;
+}
+
 @media (max-width: 520px) {
   .authenticated-shell { padding: 14px; border-radius: 16px; }
   .environment-banner { margin: -14px -14px 16px; }
@@ -305,4 +374,6 @@ footer { margin-top: 22px; color: #81796f; font-size: .72rem; text-align: center
   .view-panel { padding: 14px; }
   .section-heading { align-items: stretch; flex-direction: column; }
   .stat-grid, .equipment-grid { grid-template-columns: 1fr; }
+  .composer-actions { align-items: stretch; flex-direction: column; }
+  .composer-actions button { width: 100%; }
 }

@@ -189,4 +189,40 @@ describe('authenticated character widget v2', () => {
       selectedDetail: null,
     })).toContain('data-action="retry"');
   });
+
+  it('renders a non-mechanical narrative composer with quick choices and safe status', () => {
+    const html = renderAuthenticatedContext(context, {
+      activeView: 'SUMMARY',
+      view: summary,
+      loading: false,
+      error: null,
+      selectedDetail: null,
+      narrativeComposer: {
+        draft: '<ação livre>',
+        sending: false,
+        error: null,
+      },
+    });
+    expect(html).toContain('Descreva sua ação...');
+    expect(html).toContain('data-action="narrative-form"');
+    expect(html).toContain('data-action="quick-choice"');
+    expect(html).toContain('&lt;ação livre&gt;');
+    expect(html).not.toContain('<ação livre>');
+    expect(html).toContain('Nenhuma mutação mecânica');
+
+    const sending = renderAuthenticatedContext(context, {
+      activeView: 'SUMMARY',
+      view: summary,
+      loading: false,
+      error: null,
+      selectedDetail: null,
+      narrativeComposer: {
+        draft: 'Observar.',
+        sending: true,
+        error: null,
+      },
+    });
+    expect(sending).toContain('Enviando para a conversa');
+    expect(sending).toContain('disabled');
+  });
 });
