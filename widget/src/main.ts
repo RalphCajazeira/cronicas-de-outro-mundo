@@ -26,6 +26,7 @@ function paint(): void {
 
 function applyToolResult(input: unknown): void {
   const context = parseGameContextToolResult(input);
+  delete root!.dataset.contractDiagnostic;
   state = state === null
     ? createInitialState(context)
     : reduceAppState(state, { type: 'APPLY_CONTEXT', context });
@@ -48,6 +49,7 @@ function reportSafeContractDiagnostic(error: unknown): void {
     diagnostics: error.diagnostics,
   };
   console.error('[cronicas-widget] toolresult contract diagnostic', safeDiagnostic);
+  root!.dataset.contractDiagnostic = JSON.stringify(safeDiagnostic);
   Object.defineProperty(window, '__CRONICAS_SAFE_CONTRACT_DIAGNOSTIC__', {
     configurable: true,
     enumerable: false,
