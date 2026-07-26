@@ -2,17 +2,39 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  ActiveEffectDurationType,
+  ActiveEffectKind,
+  ActorContentState,
   ActorControlPermission,
+  ActorEquipmentSlotRef,
   ActorStatus,
   ActorType,
   CampaignMembershipRole,
   CampaignMembershipStatus,
   CampaignStatus,
+  ContentStatus,
+  ContentType,
+  InventoryEntryKind,
+  InventoryInstanceLifecycle,
   Prisma,
   UserStatus,
   type PrismaClient,
 } from '../src/generated/prisma/client.js';
+import {
+  createActorMechanicalState,
+  loadActorMechanicalSheet,
+  recomputeActorDerivedSnapshot,
+} from '../src/modules/actors/actor-mechanics.service.js';
+import {
+  publishContentVersion,
+  resolveContentPublicationRegistryContext,
+  type ContentPublicationInput,
+  type PublishedContent,
+} from '../src/modules/content/content-publication.service.js';
+import { materializeStarterContentBlueprint } from '../src/modules/content/starter-content-blueprints.js';
 import { CORE_V1_3_VERSION_CODE } from '../src/modules/rules/core-v1/core-v1.progression-v3.js';
+import { getInitialAttributePreset } from '../src/modules/rules/core-v1/index.js';
+import { ensureCurrentCoreRulesetVersion } from '../src/modules/rules/ruleset.registry.js';
 import { validateStagingTarget } from './staging-database.js';
 import {
   AUTHENTICATED_FIXTURE_MANIFEST_PATH,
@@ -40,6 +62,10 @@ export const AUTHENTICATED_FIXTURE = {
   campaignName: 'OAuth Readonly Test',
   actorCode: 'test-adventurer',
   actorName: 'Test Adventurer',
+  actorSpecies: 'Humana',
+  actorClassName: 'Explorador',
+  actorRole: 'Aventureiro',
+  actorDescription: 'Personagem sintético para validar a experiência autenticada somente leitura.',
 } as const;
 
 export type FixtureProvisionMode = 'dry-run' | 'apply' | 'postflight';
@@ -49,7 +75,16 @@ type FixtureRecordType =
   | 'campaign'
   | 'actor'
   | 'campaignMembership'
-  | 'actorControl';
+  | 'actorControl'
+  | 'actorAttribute'
+  | 'actorResource'
+  | 'actorDerivedSnapshot'
+  | 'contentDefinition'
+  | 'contentVersion'
+  | 'inventoryEntry'
+  | 'equipmentSlot'
+  | 'actorContent'
+  | 'activeEffect';
 type FixtureRecordCounts = Record<FixtureRecordType, number>;
 
 export interface FixtureProvisioningResult {
@@ -90,6 +125,15 @@ function emptyRecordCounts(): FixtureRecordCounts {
     actor: 0,
     campaignMembership: 0,
     actorControl: 0,
+    actorAttribute: 0,
+    actorResource: 0,
+    actorDerivedSnapshot: 0,
+    contentDefinition: 0,
+    contentVersion: 0,
+    inventoryEntry: 0,
+    equipmentSlot: 0,
+    actorContent: 0,
+    activeEffect: 0,
   };
 }
 
@@ -101,11 +145,24 @@ function expectedRecordCounts(): FixtureRecordCounts {
     actor: 1,
     campaignMembership: 1,
     actorControl: 1,
+    actorAttribute: 9,
+    actorResource: 3,
+    actorDerivedSnapshot: 1,
+    contentDefinition: 7,
+    contentVersion: 7,
+    inventoryEntry: 3,
+    equipmentSlot: 1,
+    actorContent: 3,
+    activeEffect: 1,
   };
 }
 
 function increment(counts: FixtureRecordCounts, type: FixtureRecordType): void {
   counts[type] += 1;
+}
+
+function incrementBy(counts: FixtureRecordCounts, type: FixtureRecordType, amount: number): void {
+  counts[type] += amount;
 }
 
 function requiredEnvironment(name: string): string {
@@ -118,6 +175,175 @@ function requiredEnvironment(name: string): string {
 
 function exactRecord(condition: boolean, safeCode: string): asserts condition {
   if (!condition) throw new FixtureProvisioningError(safeCode);
+}
+
+const fixtureContentCodes = [
+  'oauth-test-travel-coat',
+  'oauth-test-healing-tonic',
+  'oauth-test-field-note',
+  'oauth-test-quick-step',
+  'oauth-test-focused',
+  'oauth-test-focus-veil',
+  'oauth-test-steady-focus',
+] as const;
+
+function publicationInput(
+  worldId: string,
+  campaignId: string,
+  code: typeof fixtureContentCodes[number],
+): ContentPublicationInput {
+  const common = {
+    worldId,
+    campaignId,
+    code,
+    presentation: {},
+    tags: ['oauth-test'],
+    status: ContentStatus.ACTIVE,
+    metadata: {},
+  } as const;
+  if (code === 'oauth-test-travel-coat') {
+    const description = 'Proteção sintética de viagem equipada no corpo.';
+    const blueprint = materializeStarterContentBlueprint({
+      starterBlueprint: 'starter_body_armor',
+      code,
+      name: 'Casaco de Viagem',
+    });
+    return {
+      ...common,
+      contentType: ContentType.ARMOR,
+      name: 'Casaco de Viagem',
+      description,
+      profile: { ...blueprint.profile, description, tags: ['oauth-test'] },
+      inventorySpec: blueprint.inventorySpec,
+    };
+  }
+  if (code === 'oauth-test-healing-tonic') {
+    const description = 'Consumível sintético que restaura HP.';
+    const blueprint = materializeStarterContentBlueprint({
+      starterBlueprint: 'basic_healing_consumable',
+      code,
+      name: 'Tônico de Treino',
+    });
+    return {
+      ...common,
+      contentType: ContentType.CONSUMABLE,
+      name: 'Tônico de Treino',
+      description,
+      profile: { ...blueprint.profile, description, tags: ['oauth-test'] },
+      inventorySpec: blueprint.inventorySpec,
+    };
+  }
+  if (code === 'oauth-test-field-note') {
+    return {
+      ...common,
+      contentType: ContentType.ITEM,
+      name: 'Anotações de Campo',
+      description: 'Registro narrativo sintético sem segredo de mestre.',
+      profile: {
+        schemaVersion: 1,
+        rulesetCode: 'core-v1',
+        profileMode: 'narrative',
+        contentKind: 'item',
+        code,
+        name: 'Anotações de Campo',
+        description: 'Registro narrativo sintético sem segredo de mestre.',
+        tags: ['oauth-test'],
+      },
+      inventorySpec: {
+        schemaVersion: 1,
+        rulesetCode: 'core-v1',
+        inventoryRulesCode: 'core-v1-inventory-v1',
+        unitWeight: 1,
+        stacking: { mode: 'unique' },
+      },
+    };
+  }
+  if (code === 'oauth-test-quick-step') {
+    const description = 'Técnica sintética de mobilidade.';
+    const blueprint = materializeStarterContentBlueprint({
+      starterBlueprint: 'basic_mobility_skill',
+      code,
+      name: 'Passo Rápido',
+    });
+    return {
+      ...common,
+      contentType: ContentType.SKILL,
+      name: 'Passo Rápido',
+      description,
+      profile: { ...blueprint.profile, description, tags: ['oauth-test'] },
+    };
+  }
+  if (code === 'oauth-test-focus-veil') {
+    const description = 'Magia sintética de ataque de alvo único.';
+    const blueprint = materializeStarterContentBlueprint({
+      starterBlueprint: 'basic_offensive_spell',
+      code,
+      name: 'Faísca Arcana',
+      damageElement: 'arcane',
+    });
+    return {
+      ...common,
+      contentType: ContentType.SPELL,
+      name: 'Faísca Arcana',
+      description,
+      profile: { ...blueprint.profile, description, tags: ['oauth-test'] },
+    };
+  }
+  if (code === 'oauth-test-focused') {
+    const description = 'Estado sintético temporário e público.';
+    const blueprint = materializeStarterContentBlueprint({
+      starterBlueprint: 'shadow_wrapped_status',
+      code,
+      name: 'Foco de Treino',
+    });
+    return {
+      ...common,
+      contentType: ContentType.STATUS_EFFECT,
+      name: 'Foco de Treino',
+      description,
+      profile: { ...blueprint.profile, description, tags: ['oauth-test'] },
+    };
+  }
+  return {
+    ...common,
+    contentType: ContentType.TALENT,
+    name: 'Concentração Estável',
+    description: 'Talento passivo sintético de precisão.',
+    profile: {
+      schemaVersion: 1,
+      rulesetCode: 'core-v1',
+      profileMode: 'mechanical',
+      contentKind: 'talent',
+      code,
+      name: 'Concentração Estável',
+      description: 'Talento passivo sintético de precisão.',
+      tags: ['oauth-test'],
+      tier: 1,
+      rarity: 'common',
+      activation: { type: 'passive' },
+      cost: { type: 'none' },
+      passiveModifiers: [{
+        target: 'accuracy',
+        amount: 1,
+        sourceRule: 'content_intrinsic',
+      }],
+    },
+  };
+}
+
+function latestVersion(content: PublishedContent) {
+  const version = content.versions[0];
+  exactRecord(version !== undefined, 'fixture_content_version_missing');
+  return version;
+}
+
+function requiredPublished(
+  published: ReadonlyMap<string, PublishedContent>,
+  code: typeof fixtureContentCodes[number],
+): PublishedContent {
+  const content = published.get(code);
+  exactRecord(content !== undefined, 'fixture_published_content_missing');
+  return content;
 }
 
 export function parseFixtureProvisionMode(arguments_: readonly string[]): FixtureProvisionMode {
@@ -241,11 +467,13 @@ async function inspectFixtureGraph(
       && actor.name === AUTHENTICATED_FIXTURE.actorName
       && actor.actorType === ActorType.CHARACTER
       && actor.status === ActorStatus.ACTIVE
-      && actor.level === 1
-      && actor.species === null
-      && actor.className === null
-      && actor.role === null
-      && actor.description === null
+      && actor.level === 3
+      && actor.xp === 75
+      && actor.gold === 42
+      && actor.species === AUTHENTICATED_FIXTURE.actorSpecies
+      && actor.className === AUTHENTICATED_FIXTURE.actorClassName
+      && actor.role === AUTHENTICATED_FIXTURE.actorRole
+      && actor.description === AUTHENTICATED_FIXTURE.actorDescription
       && JSON.stringify(actor.metadata) === '{}',
     'fixture_actor_postflight_failed',
   );
@@ -288,6 +516,12 @@ async function inspectFixtureGraph(
     gameEvents,
     nonPlayerActors,
     worldContent,
+    actorAttributes,
+    actorResources,
+    actorDerivedSnapshots,
+    contentVersions,
+    equipmentSlots,
+    activeEffects,
   ] = await Promise.all([
     transaction.player.count({ where: { userId } }),
     transaction.world.count({ where: { playerId: player.id } }),
@@ -305,7 +539,27 @@ async function inspectFixtureGraph(
     transaction.actor.count({
       where: { campaignId: campaign.id, actorType: { not: ActorType.CHARACTER } },
     }),
-    transaction.contentDefinition.count({ where: { worldId: world.id } }),
+    transaction.contentDefinition.count({
+      where: {
+        worldId: world.id,
+        campaignId: campaign.id,
+        code: { in: [...fixtureContentCodes] },
+      },
+    }),
+    transaction.actorAttribute.count({ where: { actorId: actor.id } }),
+    transaction.actorResource.count({ where: { actorId: actor.id } }),
+    transaction.actorDerivedSnapshot.count({ where: { actorId: actor.id } }),
+    transaction.contentVersion.count({
+      where: {
+        contentDefinition: {
+          worldId: world.id,
+          campaignId: campaign.id,
+          code: { in: [...fixtureContentCodes] },
+        },
+      },
+    }),
+    transaction.actorEquipmentSlot.count({ where: { actorId: actor.id } }),
+    transaction.activeEffect.count({ where: { targetActorId: actor.id } }),
   ]);
   exactRecord(
     linkedPlayers === 1
@@ -318,13 +572,32 @@ async function inspectFixtureGraph(
       && campaignMemberships === 1
       && actorControls === 1
       && encounters === 0
-      && inventoryEntries === 0
-      && actorContent === 0
+      && inventoryEntries === 3
+      && actorContent === 3
       && gameEvents === 0
       && nonPlayerActors === 0
-      && worldContent === 0,
+      && worldContent === 7
+      && actorAttributes === 9
+      && actorResources === 3
+      && actorDerivedSnapshots === 1
+      && contentVersions === 7
+      && equipmentSlots === 1
+      && activeEffects === 1,
     'fixture_isolation_postflight_failed',
   );
+  const contentCodes = await transaction.contentDefinition.findMany({
+    where: { worldId: world.id },
+    select: { code: true, campaignId: true },
+    orderBy: { code: 'asc' },
+  });
+  exactRecord(
+    contentCodes.length === fixtureContentCodes.length
+      && contentCodes.every((content) =>
+        content.campaignId === campaign.id
+        && fixtureContentCodes.includes(content.code as typeof fixtureContentCodes[number])),
+    'fixture_content_allowlist_postflight_failed',
+  );
+  await loadActorMechanicalSheet(transaction, actor.id);
   return expectedRecordCounts();
 }
 
@@ -335,11 +608,7 @@ async function provisionFixture(
   const created = emptyRecordCounts();
   const reused = emptyRecordCounts();
   const user = await resolveSyntheticUser(transaction, input.issuer, input.subject);
-  const rulesetVersion = await transaction.rulesetVersion.findUnique({
-    where: { code: CORE_V1_3_VERSION_CODE },
-    select: { id: true },
-  });
-  exactRecord(rulesetVersion !== null, 'reviewed_ruleset_missing');
+  const rulesetVersion = await ensureCurrentCoreRulesetVersion(transaction);
 
   const [linkedPlayer, fixturePlayerBySlug, worldsWithCode, campaignsWithCode, actorsWithCode] =
     await Promise.all([
@@ -496,23 +765,57 @@ async function provisionFixture(
         code: AUTHENTICATED_FIXTURE.actorCode,
         name: AUTHENTICATED_FIXTURE.actorName,
         actorType: ActorType.CHARACTER,
-        level: 1,
+        species: AUTHENTICATED_FIXTURE.actorSpecies,
+        className: AUTHENTICATED_FIXTURE.actorClassName,
+        role: AUTHENTICATED_FIXTURE.actorRole,
+        description: AUTHENTICATED_FIXTURE.actorDescription,
+        level: 3,
+        xp: 75,
+        gold: 42,
       },
     });
     increment(created, 'actor');
   } else {
+    const legacyActor = actor.name === AUTHENTICATED_FIXTURE.actorName
+      && actor.actorType === ActorType.CHARACTER
+      && actor.status === ActorStatus.ACTIVE
+      && actor.level === 1
+      && actor.xp === 0
+      && actor.gold === 0
+      && actor.species === null
+      && actor.className === null
+      && actor.role === null
+      && actor.description === null
+      && JSON.stringify(actor.metadata) === '{}';
+    const currentActor = actor.name === AUTHENTICATED_FIXTURE.actorName
+      && actor.actorType === ActorType.CHARACTER
+      && actor.status === ActorStatus.ACTIVE
+      && actor.level === 3
+      && actor.xp === 75
+      && actor.gold === 42
+      && actor.species === AUTHENTICATED_FIXTURE.actorSpecies
+      && actor.className === AUTHENTICATED_FIXTURE.actorClassName
+      && actor.role === AUTHENTICATED_FIXTURE.actorRole
+      && actor.description === AUTHENTICATED_FIXTURE.actorDescription
+      && JSON.stringify(actor.metadata) === '{}';
     exactRecord(
-      actor.name === AUTHENTICATED_FIXTURE.actorName
-        && actor.actorType === ActorType.CHARACTER
-        && actor.status === ActorStatus.ACTIVE
-        && actor.level === 1
-        && actor.species === null
-        && actor.className === null
-        && actor.role === null
-        && actor.description === null
-        && JSON.stringify(actor.metadata) === '{}',
+      legacyActor || currentActor,
       'fixture_actor_conflict',
     );
+    if (legacyActor) {
+      actor = await transaction.actor.update({
+        where: { id: actor.id },
+        data: {
+          species: AUTHENTICATED_FIXTURE.actorSpecies,
+          className: AUTHENTICATED_FIXTURE.actorClassName,
+          role: AUTHENTICATED_FIXTURE.actorRole,
+          description: AUTHENTICATED_FIXTURE.actorDescription,
+          level: 3,
+          xp: 75,
+          gold: 42,
+        },
+      });
+    }
     increment(reused, 'actor');
   }
 
@@ -557,6 +860,200 @@ async function provisionFixture(
       'fixture_control_conflict',
     );
     increment(reused, 'actorControl');
+  }
+
+  const [attributeCount, resourceCount, snapshotCount] = await Promise.all([
+    transaction.actorAttribute.count({ where: { actorId: actor.id } }),
+    transaction.actorResource.count({ where: { actorId: actor.id } }),
+    transaction.actorDerivedSnapshot.count({ where: { actorId: actor.id } }),
+  ]);
+  const mechanicsEmpty = attributeCount === 0 && resourceCount === 0 && snapshotCount === 0;
+  const mechanicsComplete = attributeCount === 9 && resourceCount === 3 && snapshotCount === 1;
+  exactRecord(mechanicsEmpty || mechanicsComplete, 'fixture_mechanics_partial');
+  if (mechanicsEmpty) {
+    await createActorMechanicalState(transaction, {
+      actorId: actor.id,
+      level: actor.level,
+      primaryAttributes: getInitialAttributePreset('balanced'),
+    });
+    incrementBy(created, 'actorAttribute', 9);
+    incrementBy(created, 'actorResource', 3);
+    increment(created, 'actorDerivedSnapshot');
+  } else {
+    incrementBy(reused, 'actorAttribute', 9);
+    incrementBy(reused, 'actorResource', 3);
+    increment(reused, 'actorDerivedSnapshot');
+  }
+
+  const existingDefinitions = await transaction.contentDefinition.findMany({
+    where: {
+      worldId: world.id,
+      campaignId: campaign.id,
+      code: { in: [...fixtureContentCodes] },
+    },
+    select: {
+      id: true,
+      code: true,
+      _count: { select: { versions: true } },
+    },
+  });
+  exactRecord(
+    existingDefinitions.length === 0
+      || (existingDefinitions.length === fixtureContentCodes.length
+        && existingDefinitions.every((definition) =>
+          fixtureContentCodes.includes(definition.code as typeof fixtureContentCodes[number])
+          && definition._count.versions === 1)),
+    'fixture_content_partial',
+  );
+  const registry = await resolveContentPublicationRegistryContext(
+    transaction,
+    CORE_V1_3_VERSION_CODE,
+  );
+  const published = new Map<string, PublishedContent>();
+  for (const code of fixtureContentCodes) {
+    published.set(code, await publishContentVersion(
+      transaction,
+      publicationInput(world.id, campaign.id, code),
+      registry,
+    ));
+  }
+  if (existingDefinitions.length === 0) {
+    incrementBy(created, 'contentDefinition', fixtureContentCodes.length);
+    incrementBy(created, 'contentVersion', fixtureContentCodes.length);
+  } else {
+    incrementBy(reused, 'contentDefinition', fixtureContentCodes.length);
+    incrementBy(reused, 'contentVersion', fixtureContentCodes.length);
+  }
+
+  const [inventoryCount, equipmentSlotCount, actorContentCount, activeEffectCount] =
+    await Promise.all([
+      transaction.inventoryEntry.count({ where: { actorId: actor.id } }),
+      transaction.actorEquipmentSlot.count({ where: { actorId: actor.id } }),
+      transaction.actorContent.count({ where: { actorId: actor.id } }),
+      transaction.activeEffect.count({ where: { targetActorId: actor.id } }),
+    ]);
+  const gameplayEmpty = inventoryCount === 0
+    && equipmentSlotCount === 0
+    && actorContentCount === 0
+    && activeEffectCount === 0;
+  const gameplayComplete = inventoryCount === 3
+    && equipmentSlotCount === 1
+    && actorContentCount === 3
+    && activeEffectCount === 1;
+  exactRecord(gameplayEmpty || gameplayComplete, 'fixture_gameplay_partial');
+
+  if (gameplayEmpty) {
+    const armor = latestVersion(requiredPublished(published, 'oauth-test-travel-coat'));
+    const tonic = latestVersion(requiredPublished(published, 'oauth-test-healing-tonic'));
+    const note = latestVersion(requiredPublished(published, 'oauth-test-field-note'));
+    exactRecord(
+      armor.inventoryRulesVersionId !== null
+        && tonic.inventoryRulesVersionId !== null
+        && note.inventoryRulesVersionId !== null,
+      'fixture_inventory_rules_missing',
+    );
+    const armorEntry = await transaction.inventoryEntry.create({
+      data: {
+        actorId: actor.id,
+        entryRef: 'oauth-test-entry-travel-coat',
+        contentVersionId: armor.id,
+        inventoryRulesVersionId: armor.inventoryRulesVersionId,
+        entryKind: InventoryEntryKind.INSTANCE,
+        quantity: 1,
+        instanceLifecycle: InventoryInstanceLifecycle.AVAILABLE,
+      },
+    });
+    await transaction.inventoryEntry.createMany({
+      data: [{
+        actorId: actor.id,
+        entryRef: 'oauth-test-entry-healing-tonic',
+        contentVersionId: tonic.id,
+        inventoryRulesVersionId: tonic.inventoryRulesVersionId,
+        entryKind: InventoryEntryKind.STACK,
+        quantity: 2,
+        instanceLifecycle: null,
+      }, {
+        actorId: actor.id,
+        entryRef: 'oauth-test-entry-field-note',
+        contentVersionId: note.id,
+        inventoryRulesVersionId: note.inventoryRulesVersionId,
+        entryKind: InventoryEntryKind.INSTANCE,
+        quantity: 1,
+        instanceLifecycle: InventoryInstanceLifecycle.AVAILABLE,
+      }],
+    });
+    await transaction.actorEquipmentSlot.create({
+      data: {
+        actorId: actor.id,
+        slotRef: ActorEquipmentSlotRef.BODY,
+        inventoryEntryId: armorEntry.id,
+      },
+    });
+
+    for (const [code, state] of [
+      ['oauth-test-quick-step', ActorContentState.KNOWN],
+      ['oauth-test-focus-veil', ActorContentState.LEARNING],
+      ['oauth-test-steady-focus', ActorContentState.MASTERED],
+    ] as const) {
+      const content = published.get(code);
+      exactRecord(content !== undefined, 'fixture_actor_content_missing');
+      const version = latestVersion(content);
+      await transaction.actorContent.create({
+        data: {
+          actorId: actor.id,
+          contentDefinitionId: content.id,
+          contentVersionId: version.id,
+          state,
+          rank: state === ActorContentState.MASTERED ? 2 : 1,
+          progress: state === ActorContentState.LEARNING ? 35 : 100,
+          mastery: state === ActorContentState.MASTERED ? 100 : 0,
+        },
+      });
+    }
+
+    const sourceTalent = requiredPublished(published, 'oauth-test-steady-focus');
+    const sourceTalentVersion = latestVersion(sourceTalent);
+    await transaction.activeEffect.create({
+      data: {
+        targetActorId: actor.id,
+        sourceActorId: actor.id,
+        sourceContentVersionId: sourceTalentVersion.id,
+        effectContentVersionId: null,
+        effectRulesVersionId: registry.effectRules.id,
+        originEncounterId: null,
+        effectRef: 'fx_oauthtestfocused',
+        effectIndex: 0,
+        kind: ActiveEffectKind.SECONDARY_MODIFIER,
+        stacks: 1,
+        appliedAtTick: campaign.engineTick,
+        durationType: ActiveEffectDurationType.SCENE,
+        expiresAtTick: null,
+        remainingActions: null,
+        payload: {
+          type: 'secondary_modifier',
+          secondaryCode: 'accuracy',
+          amount: 1,
+        },
+      },
+    });
+    await transaction.actor.update({
+      where: { id: actor.id },
+      data: {
+        inventoryStateVersion: { increment: 1 },
+        effectsStateVersion: { increment: 1 },
+        mechanicsStateVersion: { increment: 2 },
+      },
+    });
+    await recomputeActorDerivedSnapshot(transaction, actor.id);
+    incrementBy(created, 'inventoryEntry', 3);
+    increment(created, 'equipmentSlot');
+    incrementBy(created, 'actorContent', 3);
+    increment(created, 'activeEffect');
+  } else {
+    incrementBy(reused, 'inventoryEntry', 3);
+    increment(reused, 'equipmentSlot');
+    incrementBy(reused, 'actorContent', 3);
+    increment(reused, 'activeEffect');
   }
 
   const postflight = await inspectFixtureGraph(transaction, user.id);
@@ -615,7 +1112,17 @@ function appendSummary(result: FixtureProvisioningResult, durationMs: number): v
     'actor',
     'campaignMembership',
     'actorControl',
+    'actorAttribute',
+    'actorResource',
+    'actorDerivedSnapshot',
+    'contentDefinition',
+    'contentVersion',
+    'inventoryEntry',
+    'equipmentSlot',
+    'actorContent',
+    'activeEffect',
   ];
+  const expected = expectedRecordCounts();
   appendFileSync(summary, [
     `## Protected fixture ${result.mode}`,
     '',
@@ -629,7 +1136,7 @@ function appendSummary(result: FixtureProvisioningResult, durationMs: number): v
     '| Record | Created | Reused | Postflight | Expected |',
     '| --- | ---: | ---: | ---: | ---: |',
     ...recordTypes.map((type) =>
-      `| ${type} | ${result.created[type]} | ${result.reused[type]} | ${result.postflight[type]} | 1 |`),
+      `| ${type} | ${result.created[type]} | ${result.reused[type]} | ${result.postflight[type]} | ${expected[type]} |`),
     '',
   ].join('\n'));
 }

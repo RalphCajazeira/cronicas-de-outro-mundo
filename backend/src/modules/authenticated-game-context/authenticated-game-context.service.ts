@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   ActorControlPermission,
   ActorResourceType,
@@ -19,19 +18,10 @@ import type {
   AuthenticatedCampaignMembershipRecord,
   AuthenticatedGameContextRepository,
 } from './authenticated-game-context.types.js';
+import { authenticatedSelectionRef } from './authenticated-selection-ref.js';
 
 const maximumCampaigns = 20;
 const maximumActorControls = 100;
-
-function selectionRef(kind: 'campaign' | 'character', userId: string, internalId: string): string {
-  return `sel_${createHash('sha256')
-    .update(`authenticated-${kind}-selection:v1`)
-    .update('\0')
-    .update(userId)
-    .update('\0')
-    .update(internalId)
-    .digest('base64url')}`;
-}
 
 function normalizedCampaignStatus(status: AuthenticatedCampaignMembershipRecord['campaign']['status']) {
   return status.toLowerCase() as 'draft' | 'active' | 'paused' | 'completed' | 'archived';
@@ -126,7 +116,7 @@ export function createAuthenticatedGameContextService(
         }
         return {
           record: membership,
-          selectionRef: selectionRef('campaign', userId, membership.campaignId),
+          selectionRef: authenticatedSelectionRef('campaign', userId, membership.campaignId),
         };
       });
       const membershipByCampaign = new Map(memberships.map((membership) => [
@@ -150,7 +140,7 @@ export function createAuthenticatedGameContextService(
         return [{
           record: control,
           campaignId: control.actor.campaignId,
-          selectionRef: selectionRef('character', userId, control.actorId),
+          selectionRef: authenticatedSelectionRef('character', userId, control.actorId),
           effectiveViewOnly: membership.record.role === CampaignMembershipRole.OBSERVER
             || control.permission === ActorControlPermission.VIEW,
         }];

@@ -22,6 +22,15 @@ const manifestSchema = z.object({
     actor: z.literal(1),
     campaignMembership: z.literal(1),
     actorControl: z.literal(1),
+    actorAttribute: z.literal(9),
+    actorResource: z.literal(3),
+    actorDerivedSnapshot: z.literal(1),
+    contentDefinition: z.literal(7),
+    contentVersion: z.literal(7),
+    inventoryEntry: z.literal(3),
+    equipmentSlot: z.literal(1),
+    actorContent: z.literal(3),
+    activeEffect: z.literal(1),
   }).strict(),
 }).strict();
 

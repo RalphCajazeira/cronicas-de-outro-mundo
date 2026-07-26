@@ -1,5 +1,9 @@
 import { authenticatedContextSchema, type AuthenticatedContext } from './authenticated-context.js';
 import { normalizeToolResultEvent } from './tool-result.js';
+import {
+  authenticatedCharacterViewSchema,
+  type AuthenticatedCharacterView,
+} from './authenticated-character-view.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -44,5 +48,16 @@ export function parseAuthenticatedToolResult(input: unknown): AuthenticatedConte
     restoreHostOmittedNulls(result.structuredContent),
   );
   if (!parsed.success) throw new Error('O contexto autenticado não corresponde ao contrato seguro.');
+  return parsed.data;
+}
+
+export function parseAuthenticatedCharacterViewResult(input: unknown): AuthenticatedCharacterView {
+  const result = normalizeToolResultEvent(input);
+  if (result.isError === true) throw new Error('A seção autenticada não pôde ser concluída.');
+  if (result.structuredContent === undefined) {
+    throw new Error('A seção autenticada estruturada não foi recebida.');
+  }
+  const parsed = authenticatedCharacterViewSchema.safeParse(result.structuredContent);
+  if (!parsed.success) throw new Error('A seção autenticada não corresponde ao contrato seguro.');
   return parsed.data;
 }

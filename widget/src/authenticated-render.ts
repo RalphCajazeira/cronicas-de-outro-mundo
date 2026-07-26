@@ -1,4 +1,8 @@
 import type { AuthenticatedContext } from './authenticated-context.js';
+import type {
+  AuthenticatedCharacterView,
+  AuthenticatedViewName,
+} from './authenticated-character-view.js';
 
 function escapeHtml(value: string): string {
   return value
@@ -83,8 +87,7 @@ function characterList(context: AuthenticatedContext): string {
   `;
 }
 
-function resourceList(context: AuthenticatedContext): string {
-  const resources = context.widgetContext.activeContext?.resources ?? [];
+function resourceCards(resources: readonly { code: string; current: number; maximum: number | null }[]): string {
   if (resources.length === 0) {
     return '<p class="empty-note">Nenhum recurso público básico foi materializado para este personagem.</p>';
   }
@@ -100,41 +103,302 @@ function resourceList(context: AuthenticatedContext): string {
   `;
 }
 
-function authorizedHome(context: AuthenticatedContext): string {
+const tabLabels: Readonly<Record<AuthenticatedViewName, string>> = {
+  SUMMARY: 'Resumo',
+  SHEET: 'Ficha',
+  INVENTORY: 'Inventário',
+  EQUIPMENT: 'Equipamento',
+  ABILITIES: 'Habilidades',
+};
+
+function tabs(active: AuthenticatedViewName): string {
+  return `
+    <div class="tabs" role="tablist" aria-label="Seções do personagem">
+      ${(Object.keys(tabLabels) as AuthenticatedViewName[]).map((view) => `
+        <button type="button" role="tab"
+          aria-selected="${String(view === active)}"
+          tabindex="${view === active ? '0' : '-1'}"
+          data-view="${view}">
+          ${tabLabels[view]}
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+function identityLine(identity: {
+  species: string | null;
+  className: string | null;
+  role: string | null;
+  level: number;
+  status: string;
+}): string {
+  return [
+    identity.species,
+    identity.className,
+    identity.role,
+    `Nível ${identity.level}`,
+    identity.status,
+  ].filter((value): value is string => value !== null).map(escapeHtml).join(' · ');
+}
+
+function unavailableList(items: readonly { label: string }[]): string {
+  if (items.length === 0) return '';
+  return `
+    <aside class="unavailable-note">
+      <strong>Ainda não persistido nesta versão</strong>
+      <span>${items.map((item) => escapeHtml(item.label)).join(' · ')}</span>
+    </aside>
+  `;
+}
+
+function summary(view: Extract<AuthenticatedCharacterView, { view: 'SUMMARY' }>): string {
+  return `
+    <section class="view-panel" role="tabpanel">
+      <p class="chapter">${escapeHtml(view.data.identity.worldName)} · ${escapeHtml(view.data.identity.campaignName)}</p>
+      <h2>${escapeHtml(view.data.identity.name)}</h2>
+      <p class="identity-line">${identityLine(view.data.identity)}</p>
+      ${view.data.identity.description === null ? '' : `<p>${escapeHtml(view.data.identity.description)}</p>`}
+      ${resourceCards(view.data.resources)}
+      <div class="summary-strip">
+        <strong>${view.data.activeStatusCount}</strong>
+        <span>estado(s) ativo(s)</span>
+      </div>
+      <div class="continuity">
+        <h3>Continuidade pública</h3>
+        <p>${escapeHtml(view.data.continuitySummary)}</p>
+      </div>
+    </section>
+  `;
+}
+
+function sheet(view: Extract<AuthenticatedCharacterView, { view: 'SHEET' }>): string {
+  return `
+    <section class="view-panel" role="tabpanel">
+      <div class="section-heading">
+        <div><p class="chapter">Ficha mecânica</p><h2>${escapeHtml(view.data.identity.name)}</h2></div>
+        <span class="readonly-pill">${escapeHtml(view.data.ruleset.code)} · ${escapeHtml(view.data.ruleset.revision)}</span>
+      </div>
+      ${resourceCards(view.data.resources)}
+      <h3>Atributos primários</h3>
+      <div class="stat-grid">
+        ${view.data.attributes.map((attribute) => `
+          <article class="stat-card">
+            <span>${escapeHtml(attribute.label)}</span>
+            <strong>${attribute.effective}</strong>
+            <small>base ${attribute.base} + progressão ${attribute.progression} · XP ${attribute.xp}</small>
+          </article>
+        `).join('')}
+      </div>
+      <h3>Atributos secundários</h3>
+      <dl class="secondary-list">
+        ${view.data.secondaryAttributes.map((attribute) => `
+          <div><dt>${escapeHtml(attribute.label)}</dt><dd>${attribute.value}${attribute.unit === 'BASIS_POINTS' ? ' bps' : ''}</dd></div>
+        `).join('')}
+      </dl>
+      <h3>Estados ativos</h3>
+      ${view.data.activeStatusEffects.length === 0
+        ? '<p class="empty-note">Nenhum estado público ativo.</p>'
+        : view.data.activeStatusEffects.map((effect) => `
+          <article class="compact-card">
+            <strong>${escapeHtml(effect.name)}${effect.stacks > 1 ? ` ×${effect.stacks}` : ''}</strong>
+            <span>${escapeHtml(effect.duration)}</span>
+          </article>
+        `).join('')}
+      ${unavailableList(view.data.unavailable)}
+    </section>
+  `;
+}
+
+function inventory(
+  view: Extract<AuthenticatedCharacterView, { view: 'INVENTORY' }>,
+  selectedDetail: string | null,
+): string {
+  return `
+    <section class="view-panel" role="tabpanel">
+      <div class="section-heading">
+        <div><p class="chapter">Carga e posses</p><h2>Inventário</h2></div>
+        <span class="readonly-pill">${view.data.currency.amount} ${escapeHtml(view.data.currency.label)}</span>
+      </div>
+      <p>${view.data.weight.carried} / ${view.data.weight.capacity} de carga · ${escapeHtml(view.data.weight.state)}</p>
+      <div class="item-list">
+        ${view.data.items.length === 0 ? '<p class="empty-note">O inventário está vazio.</p>' : view.data.items.map((item, index) => {
+          const key = `inventory-${index}`;
+          const open = selectedDetail === key;
+          return `
+            <article class="item-card">
+              <button type="button" class="item-button" data-detail="${key}" aria-expanded="${String(open)}">
+                <span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.category)} · ${item.quantity} un.</small></span>
+                <span>${item.equipped ? 'Equipado' : escapeHtml(item.state)}</span>
+              </button>
+              ${open ? `
+                <div class="item-detail">
+                  ${item.description === null ? '' : `<p>${escapeHtml(item.description)}</p>`}
+                  <p>Peso ${item.unitWeight} por unidade · ${item.totalWeight} total</p>
+                  <p>${item.stackable ? 'Empilhável' : 'Único'} · ${item.consumable ? 'Consumível' : 'Não consumível'}</p>
+                </div>
+              ` : ''}
+            </article>
+          `;
+        }).join('')}
+      </div>
+      ${view.data.page.nextCursor === null ? '' : '<button type="button" class="load-more" data-action="load-more">Carregar mais</button>'}
+      ${unavailableList(view.data.unavailable)}
+    </section>
+  `;
+}
+
+function equipment(
+  view: Extract<AuthenticatedCharacterView, { view: 'EQUIPMENT' }>,
+  selectedDetail: string | null,
+): string {
+  return `
+    <section class="view-panel" role="tabpanel">
+      <p class="chapter">Carga equipada</p>
+      <h2>Equipamento</h2>
+      <p>${escapeHtml(view.data.readOnlyNotice)}</p>
+      <div class="equipment-grid">
+        ${view.data.slots.map((slot, index) => {
+          const key = `equipment-${index}`;
+          const open = selectedDetail === key;
+          return `
+            <article class="slot-card">
+              <span>${escapeHtml(slot.label)}</span>
+              ${slot.item === null
+                ? '<strong>Vazio</strong>'
+                : `
+                  <button type="button" class="item-button" data-detail="${key}" aria-expanded="${String(open)}">
+                    <strong>${escapeHtml(slot.item.name)}</strong>
+                  </button>
+                  ${open ? `
+                    <div class="item-detail">
+                      ${slot.item.description === null ? '' : `<p>${escapeHtml(slot.item.description)}</p>`}
+                      ${slot.item.bonuses.map((bonus) => `<p>${escapeHtml(bonus.label)}: ${bonus.amount >= 0 ? '+' : ''}${bonus.amount}</p>`).join('')}
+                      ${slot.item.requirements.map((requirement) => `<p>${escapeHtml(requirement)}</p>`).join('')}
+                    </div>
+                  ` : ''}
+                `}
+            </article>
+          `;
+        }).join('')}
+      </div>
+      ${unavailableList(view.data.unavailable)}
+    </section>
+  `;
+}
+
+function abilities(
+  view: Extract<AuthenticatedCharacterView, { view: 'ABILITIES' }>,
+  selectedDetail: string | null,
+): string {
+  return `
+    <section class="view-panel" role="tabpanel">
+      <p class="chapter">Conhecimento materializado</p>
+      <h2>Habilidades</h2>
+      <div class="item-list">
+        ${view.data.abilities.length === 0 ? '<p class="empty-note">Nenhuma habilidade pública conhecida.</p>' : view.data.abilities.map((ability, index) => {
+          const key = `ability-${index}`;
+          const open = selectedDetail === key;
+          return `
+            <article class="item-card">
+              <button type="button" class="item-button" data-detail="${key}" aria-expanded="${String(open)}">
+                <span><strong>${escapeHtml(ability.name)}</strong><small>${ability.category} · ${ability.state}</small></span>
+                <span>Rank ${ability.rank}</span>
+              </button>
+              ${open ? `
+                <div class="item-detail">
+                  ${ability.description === null ? '' : `<p>${escapeHtml(ability.description)}</p>`}
+                  <p>${escapeHtml(ability.action.activation)} · ${escapeHtml(ability.action.cost)}</p>
+                  <p>${escapeHtml(ability.action.targeting)}</p>
+                  ${ability.action.effects.map((effect) => `<p>${escapeHtml(effect)}</p>`).join('')}
+                  ${ability.bonuses.map((bonus) => `<p>${escapeHtml(bonus.label)}: ${bonus.amount >= 0 ? '+' : ''}${bonus.amount}</p>`).join('')}
+                </div>
+              ` : ''}
+            </article>
+          `;
+        }).join('')}
+      </div>
+      ${view.data.page.nextCursor === null ? '' : '<button type="button" class="load-more" data-action="load-more">Carregar mais</button>'}
+      ${unavailableList(view.data.unavailable)}
+    </section>
+  `;
+}
+
+function viewContent(
+  view: AuthenticatedCharacterView,
+  selectedDetail: string | null,
+): string {
+  if (view.view === 'SUMMARY') return summary(view);
+  if (view.view === 'SHEET') return sheet(view);
+  if (view.view === 'INVENTORY') return inventory(view, selectedDetail);
+  if (view.view === 'EQUIPMENT') return equipment(view, selectedDetail);
+  return abilities(view, selectedDetail);
+}
+
+export interface AuthenticatedRenderState {
+  readonly activeView: AuthenticatedViewName;
+  readonly view: AuthenticatedCharacterView | null;
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly selectedDetail: string | null;
+}
+
+function characterHome(context: AuthenticatedContext, state: AuthenticatedRenderState): string {
   const active = context.widgetContext.activeContext;
-  const selectedCharacter = active?.character;
+  if (active?.character === null || active?.character === undefined) {
+    return shell(context, `
+      <section>
+        <p class="chapter">Jogador conectado</p>
+        <h2>${escapeHtml(context.widgetContext.connectedPlayer ?? '')}</h2>
+        ${context.widgetContext.campaigns.length > 1 || active === null
+          ? `<div class="campaign-grid">${campaignList(context)}</div>`
+          : ''}
+        ${active === null ? '' : `<article class="context-card">${characterList(context)}</article>`}
+      </section>
+    `);
+  }
+  const body = state.loading
+    ? '<div class="loading-state" role="status">Carregando seção autorizada…</div>'
+    : state.error === null
+      ? state.view === null
+        ? `
+          <div class="continuity">
+            <h3>Continuidade pública</h3>
+            <p>${escapeHtml(context.narrativeContext?.continuitySummary ?? 'Escolha uma seção para consultar.')}</p>
+          </div>
+        `
+        : viewContent(state.view, state.selectedDetail)
+      : `
+        <section class="inline-error" role="alert">
+          <p>${escapeHtml(state.error)}</p>
+          <button type="button" data-action="retry">Tentar novamente</button>
+        </section>
+      `;
   return shell(context, `
-    <section aria-labelledby="player-title">
-      <p class="chapter">Jogador conectado</p>
-      <h2 id="player-title">${escapeHtml(context.widgetContext.connectedPlayer ?? '')}</h2>
-      ${context.widgetContext.campaigns.length > 1 || active === null
-        ? `<div class="campaign-grid">${campaignList(context)}</div>`
-        : ''}
-      ${active === null ? '' : `
-        <article class="context-card">
-          <p class="world-name">${escapeHtml(active.campaign.worldName)}</p>
-          <h3>${escapeHtml(active.campaign.displayName)}</h3>
-          <p class="readonly-pill">Contexto oficial somente leitura</p>
-          ${selectedCharacter === null || selectedCharacter === undefined
-            ? characterList(context)
-            : `
-              <div class="character-heading">
-                <span>Personagem autorizado</span>
-                <strong>${escapeHtml(selectedCharacter.displayName)} · Nível ${selectedCharacter.level}</strong>
-              </div>
-              ${resourceList(context)}
-              <div class="continuity">
-                <h4>Continuidade pública</h4>
-                <p>${escapeHtml(context.narrativeContext?.continuitySummary ?? 'Nenhum resumo público disponível.')}</p>
-              </div>
-            `}
-        </article>
-      `}
+    <section class="character-workspace" aria-labelledby="character-title">
+      <div class="character-heading">
+        <p class="chapter">Jogador conectado · ${escapeHtml(context.widgetContext.connectedPlayer ?? '')}</p>
+        <span>${escapeHtml(active.campaign.worldName)} · ${escapeHtml(active.campaign.displayName)}</span>
+        <h2 id="character-title">${escapeHtml(active.character.displayName)}</h2>
+      </div>
+      ${tabs(state.activeView)}
+      ${body}
     </section>
   `);
 }
 
-export function renderAuthenticatedContext(context: AuthenticatedContext): string {
+const defaultState: AuthenticatedRenderState = {
+  activeView: 'SUMMARY',
+  view: null,
+  loading: false,
+  error: null,
+  selectedDetail: null,
+};
+
+export function renderAuthenticatedContext(
+  context: AuthenticatedContext,
+  state: AuthenticatedRenderState = defaultState,
+): string {
   if (context.authState === 'AUTHORIZATION_ERROR') {
     return shell(context, `
       <section class="state-card error-card" role="alert">
@@ -147,7 +411,7 @@ export function renderAuthenticatedContext(context: AuthenticatedContext): strin
   }
   if (context.authState === 'AUTHENTICATED_NO_PLAYER') return noPlayer(context);
   if (context.widgetContext.sessionState === 'NO_CAMPAIGN') return noCampaign(context);
-  return authorizedHome(context);
+  return characterHome(context, state);
 }
 
 export function renderAuthenticatedFailure(message: string): string {

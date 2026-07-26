@@ -13,12 +13,18 @@ import {
 } from '../authenticated-game-context/authenticated-game-context.dto.js';
 import { AuthenticatedGameContextAccessError } from '../authenticated-game-context/authenticated-game-context.errors.js';
 import type { createAuthenticatedGameContextService } from '../authenticated-game-context/authenticated-game-context.service.js';
+import {
+  authenticatedCharacterViewToolOutputSchema,
+  loadAuthenticatedCharacterViewInputSchema,
+} from '../authenticated-character-view/authenticated-character-view.dto.js';
+import type { createAuthenticatedCharacterViewService } from '../authenticated-character-view/authenticated-character-view.service.js';
 import type { WidgetAssets } from '../chatgpt-app/resources/widget-assets.js';
 import { readAuthenticatedMcpContext } from '../oauth-resource-server/oauth-resource-server.middleware.js';
 
 export const GET_AUTHENTICATED_BOOTSTRAP_TOOL = 'getAuthenticatedBootstrap';
 export const LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL = 'loadAuthenticatedGameContext';
-export const AUTHENTICATED_HOME_RESOURCE_URI = 'ui://game/authenticated-home/v1.html';
+export const LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL = 'loadAuthenticatedCharacterView';
+export const AUTHENTICATED_HOME_RESOURCE_URI = 'ui://game/authenticated-home/v2.html';
 
 export const authenticatedBootstrapSchema = z.object({
   authenticated: z.literal(true),
@@ -28,10 +34,12 @@ export const authenticatedBootstrapSchema = z.object({
 }).strict();
 
 type AuthenticatedGameContextService = ReturnType<typeof createAuthenticatedGameContextService>;
+type AuthenticatedCharacterViewService = ReturnType<typeof createAuthenticatedCharacterViewService>;
 
 export function createAuthenticatedMcpServer(
   config: Pick<AppConfig, 'APP_ENV' | 'NODE_ENV'>,
   gameContextService: AuthenticatedGameContextService,
+  characterViewService: AuthenticatedCharacterViewService,
   widgetAssets: WidgetAssets,
 ): McpServer {
   const server = new McpServer(
@@ -136,12 +144,72 @@ export function createAuthenticatedMcpServer(
     },
   );
 
+  registerAppTool(
+    server,
+    LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL,
+    {
+      title: 'Consultar personagem autenticado',
+      description: 'Carrega uma seção autorizada e somente leitura da ficha do personagem conectado.',
+      inputSchema: loadAuthenticatedCharacterViewInputSchema,
+      outputSchema: authenticatedCharacterViewToolOutputSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      _meta: {
+        ui: {
+          resourceUri: AUTHENTICATED_HOME_RESOURCE_URI,
+          visibility: ['model', 'app'],
+        },
+      },
+    },
+    async (input, extra) => {
+      const authenticatedContext = readAuthenticatedMcpContext(extra.authInfo);
+      if (authenticatedContext === undefined || authenticatedContext.userStatus !== 'ACTIVE') {
+        throw new Error('Authenticated MCP context is unavailable');
+      }
+      const resourceFingerprint = input.characterSelectionRef?.slice(4, 16)
+        ?? input.campaignSelectionRef?.slice(4, 16);
+      try {
+        const view = await characterViewService.load(authenticatedContext.userId, input);
+        authenticatedContext.recordAuthorizationDecision({
+          result: 'allowed',
+          reasonCode: `character_${input.view.toLowerCase()}_loaded`,
+          ...(resourceFingerprint === undefined ? {} : { resourceFingerprint }),
+        });
+        return {
+          structuredContent: view,
+          content: [{
+            type: 'text' as const,
+            text: `Seção ${input.view.toLowerCase()} carregada em modo somente leitura.`,
+          }],
+        };
+      } catch (error) {
+        if (!(error instanceof AuthenticatedGameContextAccessError)) throw error;
+        authenticatedContext.recordAuthorizationDecision({
+          result: 'denied',
+          reasonCode: error.reasonCode,
+          ...(resourceFingerprint === undefined ? {} : { resourceFingerprint }),
+        });
+        return {
+          isError: true,
+          content: [{
+            type: 'text' as const,
+            text: 'Esta seção do personagem não está disponível para a conta conectada.',
+          }],
+        };
+      }
+    },
+  );
+
   registerAppResource(
     server,
-    'Crônicas de Outro Mundo — Início autenticado',
+    'Crônicas de Outro Mundo — Personagem autenticado',
     AUTHENTICATED_HOME_RESOURCE_URI,
     {
-      description: 'Interface autenticada somente leitura do jogador.',
+      description: 'Interface autenticada v2 somente leitura do jogador e de seu personagem.',
       mimeType: RESOURCE_MIME_TYPE,
       _meta: {
         ui: {
