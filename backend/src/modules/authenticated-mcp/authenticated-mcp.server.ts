@@ -24,7 +24,7 @@ import { readAuthenticatedMcpContext } from '../oauth-resource-server/oauth-reso
 export const GET_AUTHENTICATED_BOOTSTRAP_TOOL = 'getAuthenticatedBootstrap';
 export const LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL = 'loadAuthenticatedGameContext';
 export const LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL = 'loadAuthenticatedCharacterView';
-export const AUTHENTICATED_HOME_RESOURCE_URI = 'ui://game/authenticated-home/v2.html';
+export const AUTHENTICATED_HOME_RESOURCE_URI = 'ui://game/authenticated-home/v3.html';
 
 export const authenticatedBootstrapSchema = z.object({
   authenticated: z.literal(true),

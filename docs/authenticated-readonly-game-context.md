@@ -167,7 +167,7 @@ fase não cria `GameSession`.
 O recurso autenticado v2 é:
 
 ```text
-ui://game/authenticated-home/v2.html
+ui://game/authenticated-home/v3.html
 ```
 
 Ele usa um bundle separado da fixture e mostra:
