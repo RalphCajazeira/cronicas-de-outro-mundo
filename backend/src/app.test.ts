@@ -15,7 +15,7 @@ import { actorContentFixture, publishedContentFixture, skillPublicationInput } f
 import { inventoryOperationError, inventoryStateVersionConflictError } from './modules/inventory/inventory-http.errors.js';
 import { capturedRichQuickCreationPayload } from '../tests/support/rich-quick-creation-fixture.js';
 
-const config: AppConfig = { NODE_ENV: 'test', HOST: '0.0.0.0', PORT: 3000, DATABASE_URL: 'postgresql://test:test@localhost:5432/test', DIRECT_URL: 'postgresql://test:test@localhost:5432/test', RPG_API_KEY: 'test-key', CHATGPT_APP_PROOF_MODE: false };
+const config: AppConfig = { NODE_ENV: 'test', APP_ENV: 'test', HOST: '0.0.0.0', PORT: 3000, DATABASE_URL: 'postgresql://test:test@localhost:5432/test', DIRECT_URL: 'postgresql://test:test@localhost:5432/test', RPG_API_KEY: 'test-key', CHATGPT_APP_PROOF_MODE: false };
 const primaryAttributes = getInitialAttributePreset('balanced');
 const mechanicalSheet = actorMechanicalSheetFixture(primaryAttributes);
 const actor = {

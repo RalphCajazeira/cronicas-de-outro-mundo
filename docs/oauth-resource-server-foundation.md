@@ -171,13 +171,19 @@ idempotente, não destrutiva e fechada ao mundo externo. A resposta estruturada 
 {
   "authenticated": true,
   "userStatus": "ACTIVE",
-  "environment": "test"
+  "environment": "test",
+  "runtimeMode": "test"
 }
 ```
 
 Não retorna issuer, subject, email, userId, Player, campanha, ator, membership,
 role, narrativa, informação do Mestre, token ou claims. Não executa escrita nem
 consulta campanha.
+
+Na Fase 2D, `environment` passa a usar `APP_ENV` e `runtimeMode` explicita
+`NODE_ENV`. O bootstrap permanece técnico e a nova
+`loadAuthenticatedGameContext` usa projeções allowlisted documentadas em
+`authenticated-readonly-game-context.md`.
 
 ## Avaliação pública do Supabase em 2026-07-26
 

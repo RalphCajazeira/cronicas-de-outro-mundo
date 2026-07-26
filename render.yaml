@@ -17,6 +17,8 @@ projects:
             envVars:
               - key: NODE_ENV
                 value: production
+              - key: APP_ENV
+                value: staging
               - key: NODE_VERSION
                 value: 22.22.0
               - key: HOST

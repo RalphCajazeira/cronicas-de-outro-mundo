@@ -33,6 +33,8 @@ import {
   createFileOAuthUiAssets,
   type OAuthUiAssets,
 } from './modules/oauth-ui/oauth-ui.assets.js';
+import { createAuthenticatedGameContextService } from './modules/authenticated-game-context/authenticated-game-context.service.js';
+import type { AuthenticatedGameContextRepository } from './modules/authenticated-game-context/authenticated-game-context.types.js';
 
 export interface AppDependencies {
   actorRepository: ActorRepository;
@@ -44,6 +46,7 @@ export interface AppDependencies {
   chatGptAppWidgetAssets?: WidgetAssets;
   oauthUiAssets?: OAuthUiAssets;
   identityRepository?: IdentityRepository;
+  authenticatedGameContextRepository?: AuthenticatedGameContextRepository;
   releaseInfo?: ReleaseInfo;
 }
 
@@ -65,11 +68,24 @@ export function createApp(config: AppConfig, dependencies: AppDependencies) {
     if (dependencies.identityRepository === undefined) {
       throw new Error('OAuth identity repository is unavailable');
     }
+    if (dependencies.authenticatedGameContextRepository === undefined) {
+      throw new Error('Authenticated game context repository is unavailable');
+    }
     const identityService = createIdentityService(dependencies.identityRepository);
+    const authenticatedGameContextService = createAuthenticatedGameContextService(
+      dependencies.authenticatedGameContextRepository,
+      config,
+    );
     app.use(createProtectedResourceMetadataRouter(config.OAUTH_RESOURCE_SERVER));
     app.use(
       config.OAUTH_RESOURCE_SERVER.protectedMcpPath,
-      createAuthenticatedMcpRouter(config.NODE_ENV, config.OAUTH_RESOURCE_SERVER, identityService),
+      createAuthenticatedMcpRouter(
+        config,
+        config.OAUTH_RESOURCE_SERVER,
+        identityService,
+        authenticatedGameContextService,
+        widgetAssets,
+      ),
     );
   }
   app.use('/chatgpt-app-preview', createChatGptAppPreviewRouter(config, widgetAssets));

@@ -3,6 +3,7 @@ import path from 'node:path';
 
 export interface WidgetAssets {
   readHome(): Promise<string>;
+  readAuthenticatedHome(): Promise<string>;
   readPreview(): Promise<string>;
 }
 
@@ -27,6 +28,7 @@ async function readWidgetAsset(fileName: string): Promise<string> {
 export function createFileWidgetAssets(): WidgetAssets {
   return {
     readHome: () => readWidgetAsset('home.html'),
+    readAuthenticatedHome: () => readWidgetAsset('authenticated-home.html'),
     readPreview: () => readWidgetAsset('preview.html'),
   };
 }

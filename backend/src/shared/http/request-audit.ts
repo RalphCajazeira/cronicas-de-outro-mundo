@@ -23,6 +23,9 @@ export interface AuthenticationAuditDiagnostic {
   issuerDisposition: 'allowed' | 'missing' | 'not_evaluated' | 'rejected';
   result: 'allowed' | 'denied' | 'pending';
   subjectFingerprint?: string;
+  userFingerprint?: string;
+  resourceFingerprint?: string;
+  reasonCode?: string;
   tool?: string;
 }
 

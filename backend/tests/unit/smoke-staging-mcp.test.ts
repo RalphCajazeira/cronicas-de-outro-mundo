@@ -32,6 +32,7 @@ describe('staging MCP smoke target allowlist', () => {
       { NODE_ENV: 'production', CHATGPT_APP_PROOF_MODE: true },
       {
         readHome: () => Promise.resolve('<!doctype html><title>Local proof</title>'),
+        readAuthenticatedHome: () => Promise.resolve('<!doctype html><title>Authenticated proof</title>'),
         readPreview: () => Promise.resolve('<!doctype html><title>Local preview</title>'),
       },
     ));
@@ -66,6 +67,7 @@ describe('staging MCP smoke target allowlist', () => {
       { NODE_ENV: 'production', CHATGPT_APP_PROOF_MODE: true },
       {
         readHome: () => Promise.resolve('<!doctype html><title>Local proof</title>'),
+        readAuthenticatedHome: () => Promise.resolve('<!doctype html><title>Authenticated proof</title>'),
         readPreview: () => Promise.resolve('<!doctype html><title>Local preview</title>'),
       },
     ));

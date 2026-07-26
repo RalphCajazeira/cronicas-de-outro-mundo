@@ -47,4 +47,10 @@ await Promise.all([
     entryPoint: 'src/preview-host.ts',
     output: 'preview.html',
   }),
+  buildHtml({
+    template: 'authenticated-home.template.html',
+    styles: 'src/authenticated.css',
+    entryPoint: 'src/authenticated-main.ts',
+    output: 'authenticated-home.html',
+  }),
 ]);

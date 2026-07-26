@@ -35,6 +35,7 @@
     "staging:db:postflight": "npm run staging:db:postflight --prefix backend",
     "staging:deploy:trigger": "npm run staging:deploy:trigger --prefix backend",
     "staging:deploy:poll": "npm run staging:deploy:poll --prefix backend",
-    "staging:smoke:mcp": "npm run staging:smoke:mcp --prefix backend"
+    "staging:smoke:mcp": "npm run staging:smoke:mcp --prefix backend",
+    "staging:oauth:readonly-fixture": "npm run staging:oauth:readonly-fixture --prefix backend --"
   }
 }
