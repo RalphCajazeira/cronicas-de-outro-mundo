@@ -72,8 +72,9 @@ Este arquivo registra o estado técnico confirmado conhecido. Fatos mutáveis de
 - A integração OAuth é exclusiva de staging e usa apenas conta sintética. O
   acesso a Player, campanha e Actor depende de vínculos explícitos e permanece
   somente leitura nesta fase.
-- A Fase 2D-B ainda exige merge, rollout canônico, provisioning protegido e
-  validação manual no App OAuth antes de ser considerada implantada.
+- A Fase 2D-B usa rollout e provisioning sintético automáticos em `develop`;
+  sua comprovação operacional e a validação do App OAuth devem vir do workflow
+  e dos smokes atuais, não da mera presença do código na branch.
 - A política de autonomia e as correções finais de auto-resolução exigem novo gate de deploy e atualização manual do GPT Builder.
 - Não assumir migration, deploy, Action, Instructions ou Knowledge atualizados apenas porque o código está em `develop`.
 

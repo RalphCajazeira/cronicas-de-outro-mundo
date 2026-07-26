@@ -20,7 +20,7 @@ Ordem:
 1. validar contratos, autorização negativa, projeções, widget e fixture local;
 2. integrar a branch em `develop` por PR verde;
 3. aguardar o release normal de staging e confirmar o SHA live;
-4. aprovar e executar o provisioning protegido acionado pelo manifesto;
+4. executar automaticamente o provisioning protegido acionado pelo manifesto;
 5. verificar health, readiness, `/mcp`, `/mcp-auth` e logs sanitizados;
 6. atualizar ou recriar somente o App OAuth privado, se o cache de resource URI
    exigir;

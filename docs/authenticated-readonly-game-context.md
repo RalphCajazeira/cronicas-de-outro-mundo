@@ -253,8 +253,10 @@ executar `migrate deploy` como no-op, implantar o SHA exato e validar version,
 health, readiness, `/mcp` e o resource server OAuth. Somente um push em
 `develop` cujo intervalo completo adicione ou altere o manifesto aciona, depois
 do release normal, o job protegido no Environment `staging-high-risk`. O job
-aguarda aprovação, repete a prova do SHA live, executa dry-run, apply
-transacional e postflight. Pushes comuns sem manifesto não aguardam esse gate.
+é admitido automaticamente apenas para `develop`, repete a prova do SHA live,
+executa dry-run, apply transacional e postflight. Não há required reviewer nem
+wait timer; a autorização vem da task e os controles automáticos permanecem
+fail-closed. Pushes comuns sem manifesto não acessam esse Environment.
 
 O smoke MCP autenticado real continua posterior ao job e usa o fluxo OAuth
 interativo da conta sintética. Access token, refresh token e credencial Auth não

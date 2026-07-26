@@ -116,6 +116,7 @@ describe('OAuth staging provisioning guards', () => {
   it('accepts only the strict, secret-free versioned provisioning manifest', () => {
     const manifest = {
       operationId: 'authenticated-readonly-fixture-v1',
+      executionRevision: 2,
       environment: 'staging',
       type: 'AUTHENTICATED_READONLY_FIXTURE',
       enabled: true,

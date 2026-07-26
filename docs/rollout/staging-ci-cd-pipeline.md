@@ -66,9 +66,10 @@ como artifact. A URL de migration deve usar a role dedicada, porta 5432
 `sslmode=verify-full`. Porta 6543, `pgbouncer=true`, TLS não verificado, outro
 project ref, role, database ou schema falham antes da primeira query.
 
-O Environment `staging-high-risk` é restrito a `develop`, exige Ralph como
-reviewer e só é referenciado pelo job condicional de provisioning posterior ao
-release normal. Ele contém exclusivamente:
+O Environment `staging-high-risk` é restrito exclusivamente à branch `develop`,
+não possui required reviewers nem wait timer e só é referenciado pelo job
+condicional de provisioning posterior ao release normal. Ele contém
+exclusivamente:
 
 Secrets:
 
@@ -82,26 +83,34 @@ Variables:
 - `STAGING_SUPABASE_PROJECT_REF`;
 - `STAGING_OAUTH_ISSUER`.
 
-Os secrets só ficam disponíveis depois da aprovação do Environment. O
-provisioning não lê email, senha, token, client secret ou refresh token.
+Os secrets só ficam disponíveis para o job admitido pela branch policy e pelas
+condições do workflow. O provisioning não lê email, senha, token, client secret
+ou refresh token.
+
+Staging é operado autonomamente pelo pipeline/Codex quando a task já autorizou o
+escopo. GitHub Environment reviewer não substitui essa governança. Produção,
+`main`, custo, dado real, operação destrutiva ou escopo ainda não autorizado
+continuam exigindo autorização explícita antes da implementação ou execução.
+Depois da autorização, não há um segundo clique de aprovação no GitHub.
 
 ## Provisioning sintético protegido
 
 O manifesto estrito e secret-free
 `backend/provisioning/staging/authenticated-readonly-fixture.v1.json` representa
-uma única operação versionada. Em `push` para `develop`, o detector compara todo
-o intervalo `github.event.before..github.sha`. Base zerada usa a árvore vazia;
+uma única operação versionada. `executionRevision` registra revisões do executor
+sem mudar a identidade idempotente da fixture. Em `push` para `develop`, o
+detector compara todo o intervalo `github.event.before..github.sha`. Base zerada usa a árvore vazia;
 base inválida, não ancestral, remoção ou rename do manifesto falha fechado.
 `workflow_dispatch` e `repository_dispatch` nunca habilitam o job protegido.
 
 Quando o manifesto foi adicionado ou modificado e o job `release` passou, o job
 `provision_authenticated_fixture`:
 
-1. aguarda aprovação no `staging-high-risk`;
+1. é admitido automaticamente somente pela branch policy de `develop`;
 2. confirma novamente o SHA, branch, Node, health e readiness live;
 3. confirma o histórico de 14 migrations e o alvo PostgreSQL allowlisted;
 4. executa a mesma entrada em dry-run com rollback;
-5. executa apply em uma transação serializable;
+5. executa apply em uma transação serializable com espera e duração limitadas;
 6. executa postflight read-only.
 
 O script resolve somente a tupla exata `(issuer, subject)`, exige um único User
@@ -171,9 +180,11 @@ quantidade idêntica, zero pendências e zero migrations incompletas. Um release
 sem migration é um no-op válido e ainda executa todas as verificações.
 
 Migrations comuns de staging passam a ser automáticas e não devem mais ser
-aplicadas manualmente pelo Codex por rotina. Intervenção manual ocorre somente
-por `high`, divergência, falha, destino ambíguo ou exceção explicitamente
-autorizada.
+aplicadas manualmente pelo Codex por rotina. Uma classificação `high` permanece
+fail-closed até uma task autorizar o escopo e fornecer manifesto versionado,
+branch/PR, SHA exato e validações apropriadas. Uma vez autorizada, sua execução
+de staging também é autônoma, sem reviewer do Environment. Divergência, destino
+ambíguo, produção, `main` ou ausência de autorização continuam bloqueando.
 
 ## Deploy, health e MCP
 

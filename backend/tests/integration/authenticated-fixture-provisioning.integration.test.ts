@@ -5,15 +5,25 @@ import {
   runAuthenticatedFixtureProvisioning,
 } from '../../scripts/provision-authenticated-readonly-fixture.js';
 import type { AuthenticatedFixtureManifest } from '../../scripts/staging-provisioning-manifest.js';
-import { UserStatus, type Prisma, type PrismaClient } from '../../src/generated/prisma/client.js';
+import {
+  ActorControlPermission,
+  ActorType,
+  CampaignMembershipRole,
+  CampaignStatus,
+  UserStatus,
+  type Prisma,
+  type PrismaClient,
+} from '../../src/generated/prisma/client.js';
 import { prisma } from '../../src/shared/database/prisma.js';
 import { createPrismaAuthenticatedGameContextRepository } from '../../src/modules/authenticated-game-context/authenticated-game-context.repository.js';
 import { createPrismaAuthenticatedCharacterViewRepository } from '../../src/modules/authenticated-character-view/authenticated-character-view.repository.js';
 import { createAuthenticatedCharacterViewService } from '../../src/modules/authenticated-character-view/authenticated-character-view.service.js';
+import { ensureCurrentCoreRulesetVersion } from '../../src/modules/rules/ruleset.registry.js';
 
 const subject = '7f43ce60-3dca-4ab0-8fe1-33a2ca9e43ba';
 const manifest: AuthenticatedFixtureManifest = {
   operationId: 'authenticated-readonly-fixture-v1',
+  executionRevision: 2,
   environment: 'staging',
   type: 'AUTHENTICATED_READONLY_FIXTURE',
   enabled: true,
@@ -78,6 +88,72 @@ async function createSyntheticIdentity(
   });
 }
 
+async function createLegacyFixtureGraph(
+  transaction: Prisma.TransactionClient,
+): Promise<{ actorId: string }> {
+  const user = await transaction.user.create({
+    data: {
+      status: UserStatus.ACTIVE,
+      externalIdentities: {
+        create: {
+          issuer: AUTHENTICATED_FIXTURE_ISSUER,
+          subject,
+          email: 'fixture-provisioning@cronicas.example.test',
+          emailVerified: true,
+        },
+      },
+    },
+  });
+  const rulesetVersion = await ensureCurrentCoreRulesetVersion(transaction);
+  const player = await transaction.player.create({
+    data: {
+      userId: user.id,
+      slug: AUTHENTICATED_FIXTURE.playerSlug,
+      displayName: AUTHENTICATED_FIXTURE.playerName,
+    },
+  });
+  const world = await transaction.world.create({
+    data: {
+      playerId: player.id,
+      defaultRulesetVersionId: rulesetVersion.id,
+      code: AUTHENTICATED_FIXTURE.worldCode,
+      name: AUTHENTICATED_FIXTURE.worldName,
+    },
+  });
+  const campaign = await transaction.campaign.create({
+    data: {
+      worldId: world.id,
+      rulesetVersionId: rulesetVersion.id,
+      code: AUTHENTICATED_FIXTURE.campaignCode,
+      name: AUTHENTICATED_FIXTURE.campaignName,
+      status: CampaignStatus.ACTIVE,
+    },
+  });
+  const actor = await transaction.actor.create({
+    data: {
+      campaignId: campaign.id,
+      code: AUTHENTICATED_FIXTURE.actorCode,
+      name: AUTHENTICATED_FIXTURE.actorName,
+      actorType: ActorType.CHARACTER,
+    },
+  });
+  await transaction.campaignMembership.create({
+    data: {
+      campaignId: campaign.id,
+      userId: user.id,
+      role: CampaignMembershipRole.PLAYER,
+    },
+  });
+  await transaction.actorControl.create({
+    data: {
+      actorId: actor.id,
+      userId: user.id,
+      permission: ActorControlPermission.CONTROL,
+    },
+  });
+  return { actorId: actor.id };
+}
+
 describe('authenticated staging fixture provisioning', () => {
   beforeEach(cleanFixtureTestData);
   afterEach(cleanFixtureTestData);
@@ -118,6 +194,51 @@ describe('authenticated staging fixture provisioning', () => {
     expect(result.created.world).toBe(1);
     expect(result.created.campaign).toBe(1);
     expect(result.created.actor).toBe(1);
+  });
+
+  it('upgrades the complete legacy six-record graph atomically without leaving test data', async () => {
+    await expect(prisma.$transaction(async (transaction) => {
+      const { actorId } = await createLegacyFixtureGraph(transaction);
+      const transactionalClient = {
+        $transaction: async <T>(
+          operation: (client: Prisma.TransactionClient) => Promise<T>,
+        ): Promise<T> => operation(transaction),
+      } as unknown as PrismaClient;
+      const result = await runAuthenticatedFixtureProvisioning(transactionalClient, {
+        mode: 'apply',
+        manifest,
+        issuer: AUTHENTICATED_FIXTURE_ISSUER,
+        subject,
+      });
+
+      expect(result.reused).toMatchObject({
+        player: 1,
+        world: 1,
+        campaign: 1,
+        actor: 1,
+        campaignMembership: 1,
+        actorControl: 1,
+      });
+      expect(result.created).toMatchObject({
+        actorAttribute: 9,
+        actorResource: 3,
+        actorDerivedSnapshot: 1,
+        contentDefinition: 7,
+        contentVersion: 7,
+        inventoryEntry: 3,
+        equipmentSlot: 1,
+        actorContent: 3,
+        activeEffect: 1,
+      });
+      expect(await transaction.actor.findUnique({
+        where: { id: actorId },
+        select: { level: true, xp: true, gold: true },
+      })).toEqual({ level: 3, xp: 75, gold: 42 });
+      throw new Error('intentional legacy fixture upgrade rollback');
+    })).rejects.toThrow('intentional legacy fixture upgrade rollback');
+    expect(await prisma.player.count({
+      where: { slug: AUTHENTICATED_FIXTURE.playerSlug },
+    })).toBe(0);
   });
 
   it('rejects an existing Player linked to the synthetic User', async () => {
