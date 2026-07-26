@@ -131,6 +131,7 @@ jobs:
       STAGING_DATABASE_SCHEMA: ${{ vars.STAGING_DATABASE_SCHEMA }}
       STAGING_RENDER_SERVICE_ID: ${{ vars.STAGING_RENDER_SERVICE_ID }}
       STAGING_MCP_RESOURCE_URI: ${{ vars.STAGING_MCP_RESOURCE_URI }}
+      STAGING_OAUTH_RESOURCE_SERVER_ENABLED: ${{ vars.STAGING_OAUTH_RESOURCE_SERVER_ENABLED }}
       STAGING_TARGET_SHA: ${{ github.sha }}
       STAGING_PREVIOUS_SHA: ${{ github.event_name == 'push' && github.event.before || inputs.base_sha }}
       STAGING_EXPECTED_BRANCH: develop

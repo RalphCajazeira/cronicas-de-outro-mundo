@@ -20,6 +20,13 @@ function requiredEnvironment(name: string): string {
   return value;
 }
 
+function requiredBooleanEnvironment(name: string): boolean {
+  const value = requiredEnvironment(name);
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw new SafeSmokeError(`Required staging setting must be true or false: ${name}`);
+}
+
 export function stagingEndpoint(baseValue: string, allowLocal = false): URL {
   let base: URL;
   try {
@@ -42,6 +49,47 @@ async function assertUnavailable(url: URL): Promise<void> {
   if (response.status !== 404) throw new SafeSmokeError(`Expected OAuth-disabled endpoint to return 404: ${url.pathname}`);
 }
 
+async function assertOAuthResourceServerEnabled(base: URL, expectedAuthorizationServer: string): Promise<void> {
+  const resource = new URL('/mcp-auth', base);
+  const rootMetadataUrl = new URL('/.well-known/oauth-protected-resource', base);
+  const canonicalMetadataUrl = new URL('/.well-known/oauth-protected-resource/mcp-auth', base);
+  const [protectedResponse, rootMetadataResponse, canonicalMetadataResponse, incorrectAuthorizationMetadata] = await Promise.all([
+    fetch(resource, { redirect: 'error' }),
+    fetch(rootMetadataUrl, { redirect: 'error' }),
+    fetch(canonicalMetadataUrl, { redirect: 'error' }),
+    fetch(new URL('/.well-known/oauth-authorization-server', base), { redirect: 'error' }),
+  ]);
+  if (protectedResponse.status !== 401) throw new SafeSmokeError('Expected OAuth-enabled MCP endpoint to require authentication');
+  const challenge = protectedResponse.headers.get('www-authenticate') ?? '';
+  if (
+    !challenge.startsWith('Bearer ')
+    || !challenge.includes(`resource_metadata="${canonicalMetadataUrl.href}"`)
+    || !challenge.includes('scope="openid email"')
+  ) {
+    throw new SafeSmokeError('OAuth-enabled MCP endpoint returned an invalid Bearer challenge');
+  }
+  if (rootMetadataResponse.status !== 200 || canonicalMetadataResponse.status !== 200) {
+    throw new SafeSmokeError('OAuth protected resource metadata is unavailable');
+  }
+  const rootMetadata: unknown = await rootMetadataResponse.json();
+  const canonicalMetadata: unknown = await canonicalMetadataResponse.json();
+  const expectedMetadata = {
+    resource: resource.href,
+    authorization_servers: [expectedAuthorizationServer],
+    scopes_supported: ['openid', 'email'],
+    bearer_methods_supported: ['header'],
+  };
+  if (
+    JSON.stringify(rootMetadata) !== JSON.stringify(expectedMetadata)
+    || JSON.stringify(canonicalMetadata) !== JSON.stringify(expectedMetadata)
+  ) {
+    throw new SafeSmokeError('OAuth protected resource metadata does not match the staging contract');
+  }
+  if (incorrectAuthorizationMetadata.status !== 404) {
+    throw new SafeSmokeError('MCP resource server must not impersonate the authorization server');
+  }
+}
+
 function safeGameContext(value: unknown) {
   const parsed = gameContextSchema.parse(value);
   const serialized = JSON.stringify(parsed);
@@ -54,6 +102,8 @@ function safeGameContext(value: unknown) {
 export async function runStagingMcpSmoke(
   baseValue: string,
   expectedResource: string,
+  oauthResourceServerEnabled: boolean,
+  expectedAuthorizationServer: string,
   allowLocal = false,
 ): Promise<{ toolCount: number; resourceCount: number }> {
   const endpoint = stagingEndpoint(baseValue, allowLocal);
@@ -145,12 +195,16 @@ export async function runStagingMcpSmoke(
     }
 
     const base = new URL(endpoint.origin);
-    await Promise.all([
-      assertUnavailable(new URL('/mcp-auth', base)),
-      assertUnavailable(new URL('/.well-known/oauth-protected-resource', base)),
-      assertUnavailable(new URL('/.well-known/oauth-protected-resource/mcp-auth', base)),
-      assertUnavailable(new URL('/.well-known/oauth-authorization-server', base)),
-    ]);
+    if (oauthResourceServerEnabled) {
+      await assertOAuthResourceServerEnabled(base, expectedAuthorizationServer);
+    } else {
+      await Promise.all([
+        assertUnavailable(new URL('/mcp-auth', base)),
+        assertUnavailable(new URL('/.well-known/oauth-protected-resource', base)),
+        assertUnavailable(new URL('/.well-known/oauth-protected-resource/mcp-auth', base)),
+        assertUnavailable(new URL('/.well-known/oauth-authorization-server', base)),
+      ]);
+    }
 
     console.info(`Staging MCP smoke passed with ${toolNames.length} tools and ${resourceUris.length} resources`);
     const summary = process.env.GITHUB_STEP_SUMMARY;
@@ -164,8 +218,8 @@ export async function runStagingMcpSmoke(
         '- Fixture connect/load: passed',
         '- Fixture isolation: passed',
         '- Session DELETE and fresh disconnected session: passed',
-        '- `/mcp-auth`: 404',
-        '- OAuth metadata: unavailable',
+        `- OAuth resource server: ${oauthResourceServerEnabled ? 'enabled and protected' : 'disabled'}`,
+        `- OAuth metadata: ${oauthResourceServerEnabled ? 'root and canonical documents passed' : 'unavailable'}`,
         '',
       ].join('\n'));
     }
@@ -183,6 +237,8 @@ async function main(): Promise<void> {
   await runStagingMcpSmoke(
     requiredEnvironment('STAGING_BASE_URL'),
     requiredEnvironment('STAGING_MCP_RESOURCE_URI'),
+    requiredBooleanEnvironment('STAGING_OAUTH_RESOURCE_SERVER_ENABLED'),
+    `https://${requiredEnvironment('STAGING_SUPABASE_PROJECT_REF')}.supabase.co/auth/v1`,
     allowLocal,
   );
 }
