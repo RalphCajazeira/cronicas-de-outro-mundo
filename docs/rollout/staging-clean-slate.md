@@ -11,8 +11,8 @@ O comando `npm run db:clean-slate --prefix backend` somente aceita:
 - `--environment=staging`: host direto do projeto Virginia e database `postgres`.
 
 Ele exige `--execute` e confirmação explícita. Sem isso, apenas imprime um plano
-sanitizado. O alvo é uma allowlist das 28 tabelas funcionais, 25 enums e 24
-funções criadas pelas doze migrations. Triggers das tabelas allowlisted são
+sanitizado. O alvo é uma allowlist das 33 tabelas funcionais, 30 enums e 24
+funções criadas pelas treze migrations. Triggers das tabelas allowlisted são
 removidos antes das funções; tabelas, `_prisma_migrations` e enums vêm depois,
 tudo em uma transação. Não usa `DROP DATABASE`, `DROP SCHEMA` ou descoberta por
 prefixo. `auth`, `storage`, `realtime`, `extensions` e objetos fora da allowlist
@@ -30,7 +30,7 @@ Com as variáveis do banco de teste protegido:
 npm run test:integration --prefix backend
 ```
 
-O gate aplica as 12 migrations, executa dois ciclos completos de clean-slate e
+O gate aplica as 13 migrations, executa dois ciclos completos de clean-slate e
 `prisma migrate deploy`, e verifica que não restam tabelas, enums, funções nem
 histórico Prisma da aplicação entre os ciclos.
 
@@ -48,7 +48,7 @@ npm run db:clean-slate --prefix backend -- --environment=staging --execute --con
 npm run prisma:migrate:deploy --prefix backend
 ```
 
-4. Verifique `npx prisma migrate status`, os 12 registros concluídos e o catálogo
+4. Verifique `npx prisma migrate status`, os 13 registros concluídos e o catálogo
 da aplicação. Revogue o privilégio temporário imediatamente.
 
 O reset completo remove `_prisma_migrations`; portanto, não execute `migrate
