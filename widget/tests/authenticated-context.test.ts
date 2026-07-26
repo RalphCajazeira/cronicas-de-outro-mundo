@@ -105,6 +105,29 @@ describe('authenticated read-only widget', () => {
     } as AuthenticatedContext))).toThrow(/contrato seguro/u);
   });
 
+  it('restores a null session selection omitted by the ChatGPT host', () => {
+    const withoutSession = context();
+    withoutSession.widgetContext.gameSession = {
+      status: 'NONE',
+      stateVersion: 0,
+      canContinue: false,
+      selection: null,
+    };
+    const hostOutput = structuredClone(withoutSession) as AuthenticatedContext & {
+      widgetContext: AuthenticatedContext['widgetContext'] & {
+        gameSession: Omit<AuthenticatedContext['widgetContext']['gameSession'], 'selection'>;
+      };
+    };
+    delete (hostOutput.widgetContext.gameSession as Partial<
+      AuthenticatedContext['widgetContext']['gameSession']
+    >).selection;
+
+    expect(parseAuthenticatedToolResult({
+      content: [{ type: 'text' as const, text: 'Safe summary' }],
+      structuredContent: hostOutput,
+    })).toEqual(withoutSession);
+  });
+
   it('renders the staging banner, player, campaign, character, and read-only continuity', () => {
     const html = renderAuthenticatedContext(context());
     expect(html).toContain('STAGING — CONTA SINTÉTICA');

@@ -75,6 +75,9 @@ function restoreAuthenticatedContextNulls(input: unknown): unknown {
         resources: restoreNullableResources(input.widgetContext.activeContext.resources),
       }
     : input.widgetContext.activeContext;
+  const gameSession = isRecord(input.widgetContext.gameSession)
+    ? restoreMissingNulls(input.widgetContext.gameSession, ['selection'])
+    : input.widgetContext.gameSession;
   return {
     ...input,
     ...(restorePlayer ? { player: null } : {}),
@@ -83,6 +86,7 @@ function restoreAuthenticatedContextNulls(input: unknown): unknown {
       ...input.widgetContext,
       ...(restoreActive ? { activeContext: null } : { activeContext }),
       ...(restoreConnectedPlayer ? { connectedPlayer: null } : {}),
+      gameSession,
     },
   };
 }
