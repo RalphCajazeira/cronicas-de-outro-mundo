@@ -102,6 +102,11 @@ function appWith(
 
 describe('HTTP API', () => {
   it('returns health without authentication', async () => { const response = await request(appWith()).get('/health'); expect(response.status).toBe(200); expect(response.body).toEqual({ status: 'ok' }); });
+  it('keeps authenticated MCP and its metadata unavailable when OAuth is disabled', async () => {
+    const app = appWith();
+    await request(app).post('/mcp-auth').send({}).expect(404);
+    await request(app).get('/.well-known/oauth-protected-resource/mcp-auth').expect(404);
+  });
   it('returns safe readiness states without authentication', async () => {
     const ready = await request(appWith()).get('/health/ready');
     const notReady = await request(appWith(undefined, undefined, undefined, { check: () => Promise.reject(new Error('postgresql://secret/internal')) })).get('/health/ready');

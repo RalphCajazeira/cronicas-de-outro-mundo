@@ -88,6 +88,7 @@ import {
   capturedRichQuickCreationPayload,
   correctedRichQuickCreationPayload,
 } from '../support/rich-quick-creation-fixture.js';
+import { startOAuthTestIssuer } from '../support/oauth-test-issuer.js';
 
 const config = parseConfig(process.env);
 const { Client } = pg;
@@ -97,6 +98,7 @@ const dependencies = {
   gptRepository: prismaGptRepository,
   readiness: prismaReadinessCheck,
   encounterHttpService: createEncounterHttpService(encounterService),
+  identityRepository: prismaIdentityRepository,
 };
 const app = createApp(config, dependencies);
 const server = app.listen(0);
@@ -9502,6 +9504,103 @@ describe('resolve_beat mechanical vertical slice', () => {
     ] as const;
     for (const [suffix, component] of genericComponents) {
       await resolve(suffix, component, () => Promise.resolve());
+    }
+  });
+});
+
+describe('Phase 2C-A authenticated MCP foundation', () => {
+  it('resolves a synthetic external identity from the local database without writes or campaign access', async () => {
+    const oauthIssuer = await startOAuthTestIssuer();
+    const suffix = randomUUID();
+    const subject = `oauth-subject-${suffix}`;
+    const resourceUri = 'http://127.0.0.1:3000/mcp-auth';
+    const user = await prisma.user.create({ data: {} });
+    const externalIdentity = await prisma.externalIdentity.create({
+      data: {
+        userId: user.id,
+        issuer: oauthIssuer.issuer,
+        subject,
+        email: 'ignored-oauth-attribute@example.test',
+      },
+    });
+    try {
+      const oauthConfig = parseConfig({
+        ...process.env,
+        NODE_ENV: 'test',
+        OAUTH_RESOURCE_SERVER_ENABLED: 'true',
+        OAUTH_ISSUER: oauthIssuer.issuer,
+        OAUTH_AUTHORIZATION_SERVER: oauthIssuer.issuer,
+        OAUTH_JWKS_URI: oauthIssuer.jwksUri,
+        OAUTH_RESOURCE_URI: resourceUri,
+        OAUTH_PROTECTED_MCP_PATH: '/mcp-auth',
+        OAUTH_REQUIRED_SCOPES: 'openid',
+        OAUTH_ALLOWED_ALGORITHMS: 'ES256',
+        OAUTH_JWKS_TIMEOUT_MS: '500',
+        OAUTH_JWKS_COOLDOWN_MS: '0',
+      });
+      const oauthApp = createApp(oauthConfig, dependencies);
+      const oauthApi = request(oauthApp);
+      const token = await oauthIssuer.sign({
+        audience: resourceUri,
+        scope: 'openid',
+        subject,
+      });
+      const countsBefore = await Promise.all([
+        prisma.user.count(),
+        prisma.externalIdentity.count(),
+        prisma.campaign.count(),
+        prisma.auditEvent.count(),
+      ]);
+
+      const initialized = await oauthApi.post('/mcp-auth')
+        .set('authorization', `Bearer ${token}`)
+        .set('accept', 'application/json, text/event-stream')
+        .send({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2025-06-18',
+            capabilities: {},
+            clientInfo: { name: 'integration-oauth-client', version: '0.1.0' },
+          },
+        });
+      expect(initialized.status).toBe(200);
+      const sessionId = initialized.headers['mcp-session-id'];
+      expect(typeof sessionId).toBe('string');
+
+      const toolResponse = await oauthApi.post('/mcp-auth')
+        .set('authorization', `Bearer ${token}`)
+        .set('mcp-session-id', String(sessionId))
+        .set('accept', 'application/json, text/event-stream')
+        .send({
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'tools/call',
+          params: { name: 'getAuthenticatedBootstrap', arguments: {} },
+        });
+      expect(toolResponse.status).toBe(200);
+      const toolBody = bodyRecord(toolResponse);
+      const result = toolBody.result;
+      expect(result).toBeTypeOf('object');
+      expect((result as Record<string, unknown>).structuredContent).toEqual({
+        authenticated: true,
+        userStatus: 'ACTIVE',
+        environment: 'test',
+      });
+      expect(JSON.stringify(result)).not.toMatch(/issuer|subject|email|userId|campaign|player|actor|token|claim/i);
+      await expect(prisma.externalIdentity.findUniqueOrThrow({ where: { id: externalIdentity.id } }))
+        .resolves.toMatchObject({ lastAuthenticatedAt: null });
+      await expect(Promise.all([
+        prisma.user.count(),
+        prisma.externalIdentity.count(),
+        prisma.campaign.count(),
+        prisma.auditEvent.count(),
+      ])).resolves.toEqual(countsBefore);
+    } finally {
+      await prisma.externalIdentity.deleteMany({ where: { id: externalIdentity.id } });
+      await prisma.user.deleteMany({ where: { id: user.id } });
+      await oauthIssuer.close();
     }
   });
 });
