@@ -18,6 +18,11 @@ const rawEnvSchema = z.object({
   RPG_API_KEY: z.string().min(1),
   PUBLIC_BASE_URL: z.string().url().optional(),
   CHATGPT_APP_PROOF_MODE: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+  OAUTH_UI_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+  OAUTH_UI_SUPABASE_URL: z.string().trim().optional(),
+  OAUTH_UI_SUPABASE_PUBLISHABLE_KEY: z.string().trim().optional(),
+  OAUTH_UI_ENVIRONMENT: z.enum(['staging']).default('staging'),
+  OAUTH_UI_BASE_PATH: z.string().trim().default('/oauth'),
   OAUTH_RESOURCE_SERVER_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
   OAUTH_ISSUER: z.string().trim().optional(),
   OAUTH_AUTHORIZATION_SERVER: z.string().trim().optional(),
@@ -34,6 +39,35 @@ const rawEnvSchema = z.object({
 }).superRefine((value, context) => {
   if (value.NODE_ENV === 'production' && value.PUBLIC_BASE_URL === undefined) {
     context.addIssue({ code: 'custom', path: ['PUBLIC_BASE_URL'], message: 'Required in production' });
+  }
+  if (value.OAUTH_UI_ENABLED) {
+    if (value.OAUTH_UI_SUPABASE_URL === undefined) {
+      context.addIssue({ code: 'custom', path: ['OAUTH_UI_SUPABASE_URL'], message: 'Required when OAuth UI is enabled' });
+    } else {
+      try {
+        const url = new URL(value.OAUTH_UI_SUPABASE_URL);
+        if (url.protocol !== 'https:'
+          || url.pathname !== '/'
+          || url.username.length > 0
+          || url.password.length > 0
+          || url.search.length > 0
+          || url.hash.length > 0
+          || !url.hostname.endsWith('.supabase.co')) {
+          throw new Error('invalid');
+        }
+      } catch {
+        context.addIssue({ code: 'custom', path: ['OAUTH_UI_SUPABASE_URL'], message: 'Must be a canonical Supabase HTTPS project URL' });
+      }
+    }
+    if (value.OAUTH_UI_SUPABASE_PUBLISHABLE_KEY === undefined
+      || !/^(?:sb_publishable_[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/u.test(
+        value.OAUTH_UI_SUPABASE_PUBLISHABLE_KEY,
+      )) {
+      context.addIssue({ code: 'custom', path: ['OAUTH_UI_SUPABASE_PUBLISHABLE_KEY'], message: 'Must be a Supabase publishable or legacy anon key' });
+    }
+    if (value.OAUTH_UI_BASE_PATH !== '/oauth') {
+      context.addIssue({ code: 'custom', path: ['OAUTH_UI_BASE_PATH'], message: 'Must use the reviewed /oauth base path' });
+    }
   }
   if (!value.OAUTH_RESOURCE_SERVER_ENABLED) return;
 
@@ -153,6 +187,13 @@ export interface OAuthResourceServerConfig {
   readonly jwksCacheMaxAgeMs: number;
 }
 
+export interface OAuthUiConfig {
+  readonly supabaseUrl: string;
+  readonly supabasePublishableKey: string;
+  readonly environment: 'staging';
+  readonly basePath: '/oauth';
+}
+
 const envSchema = rawEnvSchema.transform((value) => {
   const base = {
     NODE_ENV: value.NODE_ENV,
@@ -163,6 +204,16 @@ const envSchema = rawEnvSchema.transform((value) => {
     RPG_API_KEY: value.RPG_API_KEY,
     ...(value.PUBLIC_BASE_URL === undefined ? {} : { PUBLIC_BASE_URL: value.PUBLIC_BASE_URL }),
     CHATGPT_APP_PROOF_MODE: value.CHATGPT_APP_PROOF_MODE,
+    ...(value.OAUTH_UI_ENABLED
+      ? {
+        OAUTH_UI: {
+          supabaseUrl: new URL(value.OAUTH_UI_SUPABASE_URL ?? '').origin,
+          supabasePublishableKey: value.OAUTH_UI_SUPABASE_PUBLISHABLE_KEY ?? '',
+          environment: value.OAUTH_UI_ENVIRONMENT,
+          basePath: value.OAUTH_UI_BASE_PATH as '/oauth',
+        } satisfies OAuthUiConfig,
+      }
+      : {}),
   };
   if (!value.OAUTH_RESOURCE_SERVER_ENABLED) return base;
   const canonicalUrl = (input: string | undefined) => {
@@ -197,6 +248,7 @@ export interface AppConfig {
   readonly RPG_API_KEY: string;
   readonly PUBLIC_BASE_URL?: string;
   readonly CHATGPT_APP_PROOF_MODE: boolean;
+  readonly OAUTH_UI?: OAuthUiConfig;
   readonly OAUTH_RESOURCE_SERVER?: OAuthResourceServerConfig;
 }
 

@@ -1,6 +1,6 @@
 # Estado Atual — Game-GPT / Crônicas de Outro Mundo
 
-Atualizado em: 2026-07-24
+Atualizado em: 2026-07-26
 
 Este arquivo registra o estado técnico confirmado conhecido. Fatos mutáveis de Git, banco, Render, Supabase e GPT Builder devem ser verificados no ambiente antes de qualquer efeito externo.
 
@@ -9,7 +9,7 @@ Este arquivo registra o estado técnico confirmado conhecido. Fatos mutáveis de
 - Repositório: `RalphCajazeira/cronicas-de-outro-mundo`.
 - Diretório local principal: `C:\Users\ralph\Desktop\Game_GPT`.
 - Branch de integração: `develop`.
-- `develop` local e remoto no inventário de 2026-07-24: `924c3b08c9db720cc69cdc851e0cc201d6ddaedd`.
+- Baseline de `develop` antes da Fase 2C-B, inventariada em 2026-07-26: `67f84dc93b960b07c0eb657dee5e91a501d103fc`.
 - Projeto técnico no ChatGPT: `Game_GPT`.
 - GPT narrativo de staging: `Crônicas de Outro Mundo — Staging`.
 
@@ -44,11 +44,14 @@ Este arquivo registra o estado técnico confirmado conhecido. Fatos mutáveis de
 - `resolve_beat` com ações comuns, ataque, magia, item, defesa, preparação, movimento e fuga;
 - finalização atômica de encontro sem recompensa antecipada;
 - auditoria HTTP sanitizada e respostas sem UUIDs, hashes, rolls ou snapshots internos.
+- fundação de identidade/autorização interna com `User`, `ExternalIdentity`, membership, controle e auditoria;
+- resource server OAuth fail-closed para `/mcp-auth`, com JWT/JWKS assimétrico e bootstrap autenticado;
+- SPA técnica de login/consentimento de staging, policy genérica de audience por client e Custom Access Token Hook versionado.
 
 ## Staging conhecido
 
 - Render: `cronicas-de-outro-mundo-staging-api`, projeto `Game-GPT`, Virginia, auto-deploy desligado.
-- Supabase ativo: `cronicas-de-outro-mundo-staging-virginia`, região `us-east-1`, dez migrations e sem seed.
+- Supabase ativo: `cronicas-de-outro-mundo-staging-virginia`, região `us-east-1`; o estado de migrations e Auth deve ser confirmado no ambiente antes de rollout.
 - O staging antigo em `sa-east-1` permanece vazio, pausado e desconectado.
 - A co-localização Virginia reduziu materialmente a latência e os gates de readiness, criação, carga, idempotência e encontro passaram.
 - O GPT de staging foi publicado com Instructions, nove arquivos de Knowledge e 20 Actions antes das correções finais de auto-resolução.
@@ -59,7 +62,8 @@ Este arquivo registra o estado técnico confirmado conhecido. Fatos mutáveis de
 - XP e level-up permanecem para a Fase 1M-B.
 - Ouro, drop e claim de loot permanecem para a Fase 1M-C.
 - Não há morte definitiva automática, recompensa antecipada nem checkpoint narrativo completo.
-- Frontend, autenticação pública, CORS/rate limit públicos, comércio, lojas, missões, relações e viagens continuam futuros.
+- Frontend geral, autenticação de produção, CORS/rate limit públicos, comércio, lojas, missões, relações e viagens continuam futuros.
+- A integração OAuth é exclusiva de staging, usa apenas conta sintética e não concede acesso a campanha, Player ou Actor.
 - A política de autonomia e as correções finais de auto-resolução exigem novo gate de deploy e atualização manual do GPT Builder.
 - Não assumir migration, deploy, Action, Instructions ou Knowledge atualizados apenas porque o código está em `develop`.
 

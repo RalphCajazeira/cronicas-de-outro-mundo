@@ -925,12 +925,12 @@ describe('migration and PostgreSQL schema', () => {
     const tables = await prisma.$queryRaw<Array<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>>`
       SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relname IN ('User', 'ExternalIdentity', 'Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'CampaignMembership', 'Actor', 'ActorControl', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'AuditEvent', 'IdempotencyRecord', 'Encounter', 'EncounterParticipant', 'EncounterOperation', 'EncounterRoll', 'EncounterConsequence')
+      WHERE n.nspname = 'public' AND c.relname IN ('User', 'ExternalIdentity', 'OAuthClientResourcePolicy', 'Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'CampaignMembership', 'Actor', 'ActorControl', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'AuditEvent', 'IdempotencyRecord', 'Encounter', 'EncounterParticipant', 'EncounterOperation', 'EncounterRoll', 'EncounterConsequence')
     `;
-    expect(tables).toHaveLength(33);
+    expect(tables).toHaveLength(34);
     expect(tables.every((table) => table.relrowsecurity)).toBe(true);
     expect(tables.every((table) => !table.relforcerowsecurity)).toBe(true);
-    await expect(prisma.$queryRaw<Array<{ tablename: string }>>`SELECT tablename::text FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('User', 'ExternalIdentity', 'Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'CampaignMembership', 'Actor', 'ActorControl', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'AuditEvent', 'IdempotencyRecord', 'Encounter', 'EncounterParticipant', 'EncounterOperation', 'EncounterRoll', 'EncounterConsequence')`).resolves.toHaveLength(0);
+    await expect(prisma.$queryRaw<Array<{ tablename: string }>>`SELECT tablename::text FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('User', 'ExternalIdentity', 'OAuthClientResourcePolicy', 'Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'CampaignMembership', 'Actor', 'ActorControl', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'AuditEvent', 'IdempotencyRecord', 'Encounter', 'EncounterParticipant', 'EncounterOperation', 'EncounterRoll', 'EncounterConsequence')`).resolves.toHaveLength(0);
   });
 
   it('does not grant table privileges to PUBLIC', async () => {
@@ -940,7 +940,7 @@ describe('migration and PostgreSQL schema', () => {
       JOIN pg_namespace n ON n.oid = c.relnamespace
       CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) privilege
       WHERE n.nspname = 'public'
-        AND c.relname IN ('User', 'ExternalIdentity', 'Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'CampaignMembership', 'Actor', 'ActorControl', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'AuditEvent', 'IdempotencyRecord', 'Encounter', 'EncounterParticipant', 'EncounterOperation', 'EncounterRoll', 'EncounterConsequence')
+        AND c.relname IN ('User', 'ExternalIdentity', 'OAuthClientResourcePolicy', 'Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'CampaignMembership', 'Actor', 'ActorControl', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'AuditEvent', 'IdempotencyRecord', 'Encounter', 'EncounterParticipant', 'EncounterOperation', 'EncounterRoll', 'EncounterConsequence')
         AND privilege.grantee = 0
     `;
     expect(rows[0]?.count).toBe(0);
@@ -951,7 +951,7 @@ describe('migration and PostgreSQL schema', () => {
       SELECT grantee, table_name
       FROM information_schema.role_table_grants
       WHERE table_schema = 'public'
-        AND table_name IN ('User', 'ExternalIdentity', 'CampaignMembership', 'ActorControl', 'AuditEvent')
+        AND table_name IN ('User', 'ExternalIdentity', 'OAuthClientResourcePolicy', 'CampaignMembership', 'ActorControl', 'AuditEvent')
         AND grantee IN ('anon', 'authenticated', 'service_role')
     `;
     expect(rows).toHaveLength(0);

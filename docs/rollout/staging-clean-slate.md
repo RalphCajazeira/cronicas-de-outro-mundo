@@ -34,7 +34,7 @@ Com as variáveis do banco de teste protegido:
 npm run test:integration --prefix backend
 ```
 
-O gate aplica as 13 migrations, executa dois ciclos completos de clean-slate e
+O gate aplica todas as migrations commitadas, executa dois ciclos completos de clean-slate e
 `prisma migrate deploy`, e verifica que não restam tabelas, enums, funções nem
 histórico Prisma da aplicação entre os ciclos.
 

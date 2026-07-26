@@ -284,6 +284,17 @@ model ExternalIdentity {
   @@index([userId])
 }
 
+model OAuthClientResourcePolicy {
+  id        String   @id @default(uuid()) @db.Uuid
+  clientId  String   @unique @db.VarChar(512)
+  audience  String   @db.VarChar(2048)
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([enabled])
+}
+
 model Player {
   id          String   @id @default(uuid()) @db.Uuid
   userId      String?  @unique @db.Uuid

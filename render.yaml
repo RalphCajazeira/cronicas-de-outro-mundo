@@ -10,7 +10,7 @@ projects:
             branch: develop
             plan: free
             region: virginia
-            buildCommand: npm ci --prefix backend --include=dev && npm ci --prefix widget --include=dev && npm run prisma:generate && npm run build
+            buildCommand: npm ci --prefix backend --include=dev && npm ci --prefix widget --include=dev && npm ci --prefix oauth-ui --include=dev && npm run prisma:generate && npm run build
             startCommand: npm start
             healthCheckPath: /health/ready
             autoDeployTrigger: "off"
@@ -29,3 +29,31 @@ projects:
                 sync: false
               - key: PUBLIC_BASE_URL
                 sync: false
+              - key: OAUTH_UI_ENABLED
+                value: "true"
+              - key: OAUTH_UI_SUPABASE_URL
+                sync: false
+              - key: OAUTH_UI_SUPABASE_PUBLISHABLE_KEY
+                sync: false
+              - key: OAUTH_UI_ENVIRONMENT
+                value: staging
+              - key: OAUTH_UI_BASE_PATH
+                value: /oauth
+              - key: OAUTH_RESOURCE_SERVER_ENABLED
+                sync: false
+              - key: OAUTH_ISSUER
+                sync: false
+              - key: OAUTH_AUTHORIZATION_SERVER
+                sync: false
+              - key: OAUTH_JWKS_URI
+                sync: false
+              - key: OAUTH_RESOURCE_URI
+                sync: false
+              - key: OAUTH_PROTECTED_MCP_PATH
+                value: /mcp-auth
+              - key: OAUTH_REQUIRED_SCOPES
+                sync: false
+              - key: OAUTH_ALLOWED_CLIENT_IDS
+                sync: false
+              - key: OAUTH_ALLOWED_ALGORITHMS
+                value: ES256
