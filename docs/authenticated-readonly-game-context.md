@@ -167,8 +167,9 @@ persistente deve definir retenção antes de ser ativada.
 O script versionado é:
 
 ```powershell
-npm run staging:oauth:readonly-fixture -- --dry-run
-npm run staging:oauth:readonly-fixture -- --apply
+npm run staging:oauth:readonly-fixture -- --manifest backend/provisioning/staging/authenticated-readonly-fixture.v1.json --dry-run
+npm run staging:oauth:readonly-fixture -- --manifest backend/provisioning/staging/authenticated-readonly-fixture.v1.json --apply
+npm run staging:oauth:readonly-fixture -- --manifest backend/provisioning/staging/authenticated-readonly-fixture.v1.json --postflight
 ```
 
 Ele exige:
@@ -177,7 +178,7 @@ Ele exige:
 - `STAGING_SUPABASE_PROJECT_REF=udqwzvhlwwfnngiipacj`;
 - `DATABASE_URL` na role, database, schema, porta e TLS allowlisted;
 - `OAUTH_ISSUER`;
-- `STAGING_SYNTHETIC_AUTH_SUBJECT`.
+- `STAGING_OAUTH_SYNTHETIC_SUBJECT`.
 
 O User é localizado somente pela tupla exata de `ExternalIdentity`; email não
 participa. O script cria ou reutiliza exatamente:
@@ -191,9 +192,12 @@ participa. O script cria ou reutiliza exatamente:
 
 O ruleset publicado `core-v1.3` é apenas reutilizado; o script falha se ele não
 existir e nunca o cria. Dry-run executa a transação completa e força rollback.
-Reexecução não duplica entidades. Grant revogado ou fixture divergente falha
+Reexecução não duplica entidades. Grant revogado, código sintético usado fora
+do grafo esperado ou fixture divergente falha
 fechado em vez de reativar ou adotar dados. O pós-check exige um único grafo,
-sem encontro, inventário, conteúdo de ator ou GameEvent.
+sem encontro, inventário, conteúdo de ator, conteúdo do World, NPC ou GameEvent.
+O manifesto versionado é estrito e não contém subject, email, IDs, token,
+credencial ou conexão.
 
 Não há seed geral e não há migration na Fase 2D.
 
@@ -201,8 +205,15 @@ Não há seed geral e não há migration na Fase 2D.
 
 Após merge em `develop`, o pipeline deve classificar migrations como `none`,
 executar `migrate deploy` como no-op, implantar o SHA exato e validar version,
-health, readiness, `/mcp` e o resource server OAuth. O provisioning da fixture é
-uma operação explícita posterior ao deploy.
+health, readiness, `/mcp` e o resource server OAuth. Somente um push em
+`develop` cujo intervalo completo adicione ou altere o manifesto aciona, depois
+do release normal, o job protegido no Environment `staging-high-risk`. O job
+aguarda aprovação, repete a prova do SHA live, executa dry-run, apply
+transacional e postflight. Pushes comuns sem manifesto não aguardam esse gate.
+
+O smoke MCP autenticado real continua posterior ao job e usa o fluxo OAuth
+interativo da conta sintética. Access token, refresh token e credencial Auth não
+são armazenados no GitHub Actions.
 
 O App privado `Crônicas de Outro Mundo — OAuth Staging` deve continuar apontando
 para `/mcp-auth`. Apps Local e Staging público, Actions/OpenAPI e a fixture

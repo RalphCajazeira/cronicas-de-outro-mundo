@@ -1,0 +1,14 @@
+{
+  "operationId": "authenticated-readonly-fixture-v1",
+  "environment": "staging",
+  "type": "AUTHENTICATED_READONLY_FIXTURE",
+  "enabled": true,
+  "expectedRecords": {
+    "player": 1,
+    "world": 1,
+    "campaign": 1,
+    "actor": 1,
+    "campaignMembership": 1,
+    "actorControl": 1
+  }
+}

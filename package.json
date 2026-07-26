@@ -31,6 +31,7 @@
     "prisma:seed": "npm run prisma:seed --prefix backend",
     "ci:validate": "npm run prisma:generate && npm run prisma:validate && npm run lint && npm run typecheck && npm run typecheck:widget && npm run typecheck:oauth-ui && npm run test:unit && npm run test:integration && npm run test:widget && npm run test:oauth-ui && npm run build",
     "staging:classify": "npm run staging:classify --prefix backend --",
+    "staging:provisioning:detect": "npm run staging:provisioning:detect --prefix backend --",
     "staging:db:preflight": "npm run staging:db:preflight --prefix backend",
     "staging:db:postflight": "npm run staging:db:postflight --prefix backend",
     "staging:deploy:trigger": "npm run staging:deploy:trigger --prefix backend",
