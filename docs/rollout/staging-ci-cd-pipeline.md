@@ -66,9 +66,58 @@ como artifact. A URL de migration deve usar a role dedicada, porta 5432
 `sslmode=verify-full`. Porta 6543, `pgbouncer=true`, TLS não verificado, outro
 project ref, role, database ou schema falham antes da primeira query.
 
-O Environment `staging-high-risk` existe apenas como gate futuro, restrito a
-`develop` e sem secrets de migration. Nenhum workflow desta fase o referencia;
-portanto, ele não é um bypass para o classificador.
+O Environment `staging-high-risk` é restrito a `develop`, exige Ralph como
+reviewer e só é referenciado pelo job condicional de provisioning posterior ao
+release normal. Ele contém exclusivamente:
+
+Secrets:
+
+- `STAGING_MIGRATION_DATABASE_URL`;
+- `STAGING_SUPABASE_CA_CERT`;
+- `STAGING_OAUTH_SYNTHETIC_SUBJECT`.
+
+Variables:
+
+- `STAGING_BASE_URL`;
+- `STAGING_SUPABASE_PROJECT_REF`;
+- `STAGING_OAUTH_ISSUER`.
+
+Os secrets só ficam disponíveis depois da aprovação do Environment. O
+provisioning não lê email, senha, token, client secret ou refresh token.
+
+## Provisioning sintético protegido
+
+O manifesto estrito e secret-free
+`backend/provisioning/staging/authenticated-readonly-fixture.v1.json` representa
+uma única operação versionada. Em `push` para `develop`, o detector compara todo
+o intervalo `github.event.before..github.sha`. Base zerada usa a árvore vazia;
+base inválida, não ancestral, remoção ou rename do manifesto falha fechado.
+`workflow_dispatch` e `repository_dispatch` nunca habilitam o job protegido.
+
+Quando o manifesto foi adicionado ou modificado e o job `release` passou, o job
+`provision_authenticated_fixture`:
+
+1. aguarda aprovação no `staging-high-risk`;
+2. confirma novamente o SHA, branch, Node, health e readiness live;
+3. confirma o histórico de 14 migrations e o alvo PostgreSQL allowlisted;
+4. executa a mesma entrada em dry-run com rollback;
+5. executa apply em uma transação serializable;
+6. executa postflight read-only.
+
+O script resolve somente a tupla exata `(issuer, subject)`, exige um único User
+ACTIVE e uma única ExternalIdentity no staging sintético, não adota ou atualiza
+Player existente e não faz update, delete ou backfill. Cria ou reutiliza somente
+Player, World, Campaign, Actor, CampaignMembership `PLAYER/ACTIVE` e ActorControl
+`CONTROL` com códigos e nomes sintéticos fixos. Reexecução retorna tudo como
+reutilizado.
+
+Cada fase escreve no `GITHUB_STEP_SUMMARY` somente operationId, SHA, duração e
+contagens por tipo. IDs, subject, email, SQL, conexão e tokens não são impressos
+nem enviados como artifact. A concurrency do workflow serializa releases e
+impede dois provisionamentos simultâneos.
+
+O smoke MCP autenticado direto é executado depois do job com OAuth interativo e
+token somente em memória; não existe credencial Auth ou token no Actions.
 
 ## Classificação de migrations
 

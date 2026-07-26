@@ -28,6 +28,8 @@ jobs:
       head: ${{ steps.classify.outputs.head }}
       risk: ${{ steps.classify.outputs.risk }}
       changed_migrations: ${{ steps.classify.outputs.changed_migrations }}
+      provisioning_manifest_changed: ${{ steps.provisioning.outputs.changed || 'false' }}
+      provisioning_operation_id: ${{ steps.provisioning.outputs.operation_id || '' }}
     services:
       postgres:
         image: postgres:17-alpine
@@ -103,6 +105,19 @@ jobs:
           set -euo pipefail
           echo "High-risk migration classification requires a separate authorized task."
           exit 1
+
+      - name: Detect protected staging provisioning manifest
+        id: provisioning
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          npm run staging:provisioning:detect -- \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA"
 
       - name: Run the canonical validation suite
         shell: bash
@@ -222,3 +237,125 @@ jobs:
         run: |
           set -euo pipefail
           npm run staging:smoke:mcp
+
+  provision_authenticated_fixture:
+    name: Provision protected authenticated staging fixture
+    needs:
+      - validate
+      - release
+    if: >-
+      github.event_name == 'push'
+      && github.ref == 'refs/heads/develop'
+      && needs.validate.result == 'success'
+      && needs.release.result == 'success'
+      && needs.validate.outputs.provisioning_manifest_changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: staging-high-risk
+      url: ${{ vars.STAGING_BASE_URL }}
+    env:
+      STAGING_BASE_URL: ${{ vars.STAGING_BASE_URL }}
+      STAGING_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
+      STAGING_TARGET_SHA: ${{ github.sha }}
+      STAGING_PREVIOUS_SHA: ${{ github.event.before }}
+      STAGING_EXPECTED_BRANCH: develop
+      STAGING_NODE_VERSION: 22.22.0
+      STAGING_DEPLOY_TIMEOUT_MS: 60000
+      PROVISIONING_MANIFEST: backend/provisioning/staging/authenticated-readonly-fixture.v1.json
+    steps:
+      - name: Check out the exact protected provisioning commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install locked backend dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --prefix backend --include=dev
+
+      - name: Prepare the protected staging CA certificate
+        shell: bash
+        env:
+          STAGING_SUPABASE_CA_CERT: ${{ secrets.STAGING_SUPABASE_CA_CERT }}
+        run: |
+          set -euo pipefail
+          test -n "$STAGING_SUPABASE_CA_CERT"
+          umask 077
+          ca_path="$RUNNER_TEMP/supabase-ca.crt"
+          printf '%s\n' "$STAGING_SUPABASE_CA_CERT" > "$ca_path"
+          printf 'NODE_EXTRA_CA_CERTS=%s\n' "$ca_path" >> "$GITHUB_ENV"
+
+      - name: Generate and validate Prisma Client
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_MIGRATION_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          npm run prisma:generate
+          npm run prisma:validate
+
+      - name: Confirm the exact workflow commit is live
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run staging:deploy:poll
+
+      - name: Run sanitized protected database preflight
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_MIGRATION_DATABASE_URL }}
+          STAGING_DATABASE_NAME: postgres
+          STAGING_DATABASE_ROLE: cronicas_staging_app
+          STAGING_DATABASE_SCHEMA: public
+        run: |
+          set -euo pipefail
+          npm run staging:db:postflight
+
+      - name: Dry-run the authenticated read-only fixture
+        shell: bash
+        env:
+          APP_ENV: staging
+          DATABASE_URL: ${{ secrets.STAGING_MIGRATION_DATABASE_URL }}
+          OAUTH_ISSUER: ${{ vars.STAGING_OAUTH_ISSUER }}
+          STAGING_OAUTH_SYNTHETIC_SUBJECT: ${{ secrets.STAGING_OAUTH_SYNTHETIC_SUBJECT }}
+        run: |
+          set -euo pipefail
+          npm run staging:oauth:readonly-fixture -- \
+            --manifest "$PROVISIONING_MANIFEST" \
+            --dry-run
+
+      - name: Apply the authenticated read-only fixture atomically
+        shell: bash
+        env:
+          APP_ENV: staging
+          DATABASE_URL: ${{ secrets.STAGING_MIGRATION_DATABASE_URL }}
+          OAUTH_ISSUER: ${{ vars.STAGING_OAUTH_ISSUER }}
+          STAGING_OAUTH_SYNTHETIC_SUBJECT: ${{ secrets.STAGING_OAUTH_SYNTHETIC_SUBJECT }}
+        run: |
+          set -euo pipefail
+          npm run staging:oauth:readonly-fixture -- \
+            --manifest "$PROVISIONING_MANIFEST" \
+            --apply
+
+      - name: Verify the authenticated read-only fixture postflight
+        shell: bash
+        env:
+          APP_ENV: staging
+          DATABASE_URL: ${{ secrets.STAGING_MIGRATION_DATABASE_URL }}
+          OAUTH_ISSUER: ${{ vars.STAGING_OAUTH_ISSUER }}
+          STAGING_OAUTH_SYNTHETIC_SUBJECT: ${{ secrets.STAGING_OAUTH_SYNTHETIC_SUBJECT }}
+        run: |
+          set -euo pipefail
+          npm run staging:oauth:readonly-fixture -- \
+            --manifest "$PROVISIONING_MANIFEST" \
+            --postflight
