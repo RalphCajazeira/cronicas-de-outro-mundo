@@ -123,7 +123,6 @@ jobs:
       name: staging
       url: ${{ vars.STAGING_BASE_URL }}
     env:
-      NODE_EXTRA_CA_CERTS: ${{ runner.temp }}/supabase-ca.crt
       STAGING_BASE_URL: ${{ vars.STAGING_BASE_URL }}
       STAGING_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
       STAGING_DATABASE_NAME: ${{ vars.STAGING_DATABASE_NAME }}
@@ -163,7 +162,9 @@ jobs:
           set -euo pipefail
           test -n "$STAGING_SUPABASE_CA_CERT"
           umask 077
-          printf '%s\n' "$STAGING_SUPABASE_CA_CERT" > "$NODE_EXTRA_CA_CERTS"
+          ca_path="$RUNNER_TEMP/supabase-ca.crt"
+          printf '%s\n' "$STAGING_SUPABASE_CA_CERT" > "$ca_path"
+          printf 'NODE_EXTRA_CA_CERTS=%s\n' "$ca_path" >> "$GITHUB_ENV"
 
       - name: Generate and validate Prisma Client
         shell: bash
