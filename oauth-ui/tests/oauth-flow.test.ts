@@ -11,7 +11,7 @@ import {
   type OAuthPort,
 } from '../src/oauth-flow.js';
 
-const authorizationId = '7f43ce60-3dca-4ab0-8fe1-33a2ca9e43ba';
+const authorizationId = 'B6m9yKp4sR2tV8wX0z_a-C3dF7gH1jLn';
 const redirectUri = 'https://chatgpt.com/connector/oauth/callback';
 
 function port(overrides: Partial<OAuthPort> = {}): OAuthPort {
@@ -40,12 +40,14 @@ function port(overrides: Partial<OAuthPort> = {}): OAuthPort {
 }
 
 describe('OAuth UI flow', () => {
-  it('uses a tab-scoped storage key and accepts only canonical authorization UUIDs', () => {
+  it('uses a tab-scoped storage key and preserves bounded opaque authorization IDs', () => {
     expect(AUTHORIZATION_STORAGE_KEY).toBe('cronicas.oauth.authorization-id');
     expect(OAUTH_SESSION_STORAGE_KEY).toBe('cronicas.oauth.session');
-    expect(parseAuthorizationId(authorizationId.toUpperCase())).toBe(authorizationId);
+    expect(parseAuthorizationId(authorizationId)).toBe(authorizationId);
+    expect(parseAuthorizationId(authorizationId.toUpperCase())).toBe(authorizationId.toUpperCase());
     expect(parseAuthorizationId('similar-client')).toBeUndefined();
-    expect(parseAuthorizationId('x'.repeat(65))).toBeUndefined();
+    expect(parseAuthorizationId('x'.repeat(129))).toBeUndefined();
+    expect(parseAuthorizationId('opaque authorization id')).toBeUndefined();
   });
 
   it('keeps supported scope strings bounded and rejects malformed scope lists', () => {
@@ -81,6 +83,17 @@ describe('OAuth UI flow', () => {
       kind: 'redirect',
       redirectUrl: `${redirectUri}?code=existing`,
     });
+    await expect(loadConsent(port({
+      getAuthorizationDetails: vi.fn().mockResolvedValue({
+        data: {
+          authorization_id: authorizationId.toLowerCase(),
+          client: { name: '<untrusted-client>' },
+          redirect_uri: redirectUri,
+          scope: 'openid email',
+        },
+        error: null,
+      }),
+    }), authorizationId)).resolves.toEqual({ kind: 'error' });
   });
 
   it.each(['approve', 'deny'] as const)('accepts only the SDK redirect for %s', async (decision) => {

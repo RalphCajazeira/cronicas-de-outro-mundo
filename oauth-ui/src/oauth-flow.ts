@@ -1,6 +1,6 @@
 export const AUTHORIZATION_STORAGE_KEY = 'cronicas.oauth.authorization-id';
 export const OAUTH_SESSION_STORAGE_KEY = 'cronicas.oauth.session';
-const authorizationIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const authorizationIdPattern = /^[A-Za-z0-9_-]{16,128}$/u;
 
 export interface OAuthUser {
   readonly id: string;
@@ -45,8 +45,8 @@ export type ConsentLoadResult =
   | { readonly kind: 'error' };
 
 export function parseAuthorizationId(value: string | null): string | undefined {
-  if (value === null || value.length > 64 || !authorizationIdPattern.test(value)) return undefined;
-  return value.toLowerCase();
+  if (value === null || !authorizationIdPattern.test(value)) return undefined;
+  return value;
 }
 
 export function parseScopes(scope: string | undefined): string[] {
@@ -94,7 +94,7 @@ export async function loadConsent(
   const result = await port.getAuthorizationDetails(authorizationId);
   if (result.error !== null || result.data === null) return { kind: 'error' };
   if ('authorization_id' in result.data) {
-    if (result.data.authorization_id.toLowerCase() !== authorizationId.toLowerCase()) return { kind: 'error' };
+    if (result.data.authorization_id !== authorizationId) return { kind: 'error' };
     return { kind: 'consent', details: result.data };
   }
   if (!isSafeReturnedRedirect(result.data.redirect_url)) return { kind: 'error' };
