@@ -28,6 +28,8 @@ export interface AuthenticatedMcpContext {
   readonly bindingFingerprint: string;
   readonly userId: string;
   readonly userStatus: 'ACTIVE';
+  readonly requestId?: string;
+  readonly traceId?: string;
   readonly recordAuthorizationDecision: (decision: {
     readonly result: 'allowed' | 'denied';
     readonly reasonCode?: string;
@@ -48,6 +50,8 @@ export function readAuthenticatedMcpContext(authInfo: AuthInfo | undefined): Aut
   const bindingFingerprint = context.bindingFingerprint;
   const userId = context.userId;
   const userStatus = context.userStatus;
+  const requestId = context.requestId;
+  const traceId = context.traceId;
   const recordAuthorizationDecision = context.recordAuthorizationDecision;
   if (typeof bindingFingerprint !== 'string'
     || typeof userId !== 'string'
@@ -58,6 +62,8 @@ export function readAuthenticatedMcpContext(authInfo: AuthInfo | undefined): Aut
     bindingFingerprint,
     userId,
     userStatus,
+    ...(typeof requestId === 'string' ? { requestId } : {}),
+    ...(typeof traceId === 'string' ? { traceId } : {}),
     recordAuthorizationDecision: recordAuthorizationDecision as AuthenticatedMcpContext['recordAuthorizationDecision'],
   };
 }
@@ -223,6 +229,12 @@ export function createOAuthResourceServerAuthentication(
           bindingFingerprint: bindingFingerprint(principal.issuer, principal.subject, identity.userId),
           userId: identity.userId,
           userStatus: 'ACTIVE',
+          ...(response.getHeader('x-request-id') === undefined
+            ? {}
+            : { requestId: response.getHeader('x-request-id')!.toString() }),
+          ...(response.getHeader('x-trace-id') === undefined
+            ? {}
+            : { traceId: response.getHeader('x-trace-id')!.toString() }),
           recordAuthorizationDecision: (decision) => {
             updateAuthenticationAudit(response, {
               category: decision.result === 'allowed'

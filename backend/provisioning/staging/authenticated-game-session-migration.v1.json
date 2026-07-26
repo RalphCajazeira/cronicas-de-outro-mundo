@@ -1,0 +1,9 @@
+{
+  "operationId": "authenticated-game-session-continuity-migration-v1",
+  "environment": "staging",
+  "risk": "high",
+  "migrationPath": "backend/prisma/migrations/20260726234500_authenticated_game_session_continuity/migration.sql",
+  "migrationSha256": "9ec486c0d2b20cbd907b7d883f31867991e605dccadf5eef47f880ba58de0583",
+  "authorizedBy": "ralph-task-phase-2e",
+  "enabled": true
+}

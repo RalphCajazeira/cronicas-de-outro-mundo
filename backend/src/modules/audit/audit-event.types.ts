@@ -10,6 +10,7 @@ export interface RecordAuditEventInput {
   readonly externalIdentityId?: string;
   readonly campaignId?: string;
   readonly actorId?: string;
+  readonly gameSessionId?: string;
   readonly requestId?: string;
   readonly traceId?: string;
   readonly decision: AuditDecision;
@@ -25,6 +26,7 @@ export interface PersistedAuditEventInput {
   readonly externalIdentityId: string | null;
   readonly campaignId: string | null;
   readonly actorId: string | null;
+  readonly gameSessionId: string | null;
   readonly requestId: string | null;
   readonly traceId: string | null;
   readonly decision: AuditDecision;

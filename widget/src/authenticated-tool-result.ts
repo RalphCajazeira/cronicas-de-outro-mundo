@@ -1,9 +1,25 @@
+import { z } from 'zod';
 import { authenticatedContextSchema, type AuthenticatedContext } from './authenticated-context.js';
 import { normalizeToolResultEvent } from './tool-result.js';
 import {
   authenticatedCharacterViewSchema,
   type AuthenticatedCharacterView,
 } from './authenticated-character-view.js';
+
+const selectionRefSchema = z.string().regex(/^sel_[A-Za-z0-9_-]{43}$/u);
+export const authenticatedSelectionResultSchema = z.object({
+  status: z.enum(['SUCCESS', 'CONFLICT', 'SAFE_RETRY', 'REJECTED']),
+  previousSessionVersion: z.number().int().min(0),
+  sessionVersion: z.number().int().min(0),
+  selection: z.object({
+    campaignSelectionRef: selectionRefSchema,
+    characterSelectionRef: selectionRefSchema,
+  }).strict().nullable(),
+  canContinue: z.boolean(),
+  recovery: z.enum(['NONE', 'RELOAD_REQUIRED', 'SAFE_RETRY', 'SELECT_AGAIN']),
+  message: z.string().min(1).max(200),
+}).strict();
+export type AuthenticatedSelectionResult = z.infer<typeof authenticatedSelectionResultSchema>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -190,5 +206,15 @@ export function parseAuthenticatedCharacterViewResult(input: unknown): Authentic
     restoreAuthenticatedViewNulls(result.structuredContent),
   );
   if (!parsed.success) throw new Error('A seção autenticada não corresponde ao contrato seguro.');
+  return parsed.data;
+}
+
+export function parseAuthenticatedSelectionResult(input: unknown): AuthenticatedSelectionResult {
+  const result = normalizeToolResultEvent(input);
+  if (result.structuredContent === undefined) {
+    throw new Error('O resultado da seleção não foi recebido.');
+  }
+  const parsed = authenticatedSelectionResultSchema.safeParse(result.structuredContent);
+  if (!parsed.success) throw new Error('O resultado da seleção não corresponde ao contrato seguro.');
   return parsed.data;
 }

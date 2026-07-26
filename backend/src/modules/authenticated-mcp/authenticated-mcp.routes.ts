@@ -8,6 +8,7 @@ import type { AppConfig, OAuthResourceServerConfig } from '../../config/env.js';
 import type { createIdentityService } from '../identity/identity.service.js';
 import type { createAuthenticatedGameContextService } from '../authenticated-game-context/authenticated-game-context.service.js';
 import type { createAuthenticatedCharacterViewService } from '../authenticated-character-view/authenticated-character-view.service.js';
+import type { createAuthenticatedGameSessionService } from '../authenticated-game-session/authenticated-game-session.service.js';
 import type { WidgetAssets } from '../chatgpt-app/resources/widget-assets.js';
 import {
   createOAuthResourceServerAuthentication,
@@ -19,6 +20,7 @@ import {
   GET_AUTHENTICATED_BOOTSTRAP_TOOL,
   LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL,
   LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL,
+  SELECT_AUTHENTICATED_GAME_CONTEXT_TOOL,
 } from './authenticated-mcp.server.js';
 
 interface AuthenticatedMcpSession {
@@ -30,6 +32,7 @@ interface AuthenticatedMcpSession {
 type IdentityService = ReturnType<typeof createIdentityService>;
 type AuthenticatedGameContextService = ReturnType<typeof createAuthenticatedGameContextService>;
 type AuthenticatedCharacterViewService = ReturnType<typeof createAuthenticatedCharacterViewService>;
+type AuthenticatedGameSessionService = ReturnType<typeof createAuthenticatedGameSessionService>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -65,6 +68,9 @@ function auditTool(request: Request, response: Response): void {
   if (params.name === LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL) {
     updateAuthenticationAudit(response, { tool: LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL });
   }
+  if (params.name === SELECT_AUTHENTICATED_GAME_CONTEXT_TOOL) {
+    updateAuthenticationAudit(response, { tool: SELECT_AUTHENTICATED_GAME_CONTEXT_TOOL });
+  }
 }
 
 export function createAuthenticatedMcpRouter(
@@ -74,6 +80,17 @@ export function createAuthenticatedMcpRouter(
   gameContextService: AuthenticatedGameContextService,
   characterViewService: AuthenticatedCharacterViewService,
   widgetAssets: WidgetAssets,
+  gameSessionService: AuthenticatedGameSessionService = {
+    select: (_userId, input) => Promise.resolve({
+      status: 'REJECTED',
+      previousSessionVersion: input.baseSessionVersion,
+      sessionVersion: input.baseSessionVersion,
+      selection: null,
+      canContinue: false,
+      recovery: 'SELECT_AGAIN',
+      message: 'A seleção solicitada não está disponível para esta conta.',
+    }),
+  },
 ) {
   const router = Router();
   const sessions = new Map<string, AuthenticatedMcpSession>();
@@ -109,6 +126,7 @@ export function createAuthenticatedMcpRouter(
           appConfig,
           gameContextService,
           characterViewService,
+          gameSessionService,
           widgetAssets,
         );
         let sessionId: string | undefined;

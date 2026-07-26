@@ -18,13 +18,20 @@ import {
   loadAuthenticatedCharacterViewInputSchema,
 } from '../authenticated-character-view/authenticated-character-view.dto.js';
 import type { createAuthenticatedCharacterViewService } from '../authenticated-character-view/authenticated-character-view.service.js';
+import {
+  authenticatedGameSessionSelectionResultSchema,
+  selectAuthenticatedGameContextInputSchema,
+} from '../authenticated-game-session/authenticated-game-session.dto.js';
+import type { createAuthenticatedGameSessionService } from '../authenticated-game-session/authenticated-game-session.service.js';
 import type { WidgetAssets } from '../chatgpt-app/resources/widget-assets.js';
 import { readAuthenticatedMcpContext } from '../oauth-resource-server/oauth-resource-server.middleware.js';
 
 export const GET_AUTHENTICATED_BOOTSTRAP_TOOL = 'getAuthenticatedBootstrap';
 export const LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL = 'loadAuthenticatedGameContext';
 export const LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL = 'loadAuthenticatedCharacterView';
-export const AUTHENTICATED_HOME_RESOURCE_URI = 'ui://game/authenticated-home/v3.html';
+export const SELECT_AUTHENTICATED_GAME_CONTEXT_TOOL = 'selectAuthenticatedGameContext';
+export const AUTHENTICATED_HOME_RESOURCE_URI = 'ui://game/authenticated-home/v4.html';
+export const LEGACY_AUTHENTICATED_HOME_RESOURCE_URI = 'ui://game/authenticated-home/v3.html';
 
 export const authenticatedBootstrapSchema = z.object({
   authenticated: z.literal(true),
@@ -35,11 +42,13 @@ export const authenticatedBootstrapSchema = z.object({
 
 type AuthenticatedGameContextService = ReturnType<typeof createAuthenticatedGameContextService>;
 type AuthenticatedCharacterViewService = ReturnType<typeof createAuthenticatedCharacterViewService>;
+type AuthenticatedGameSessionService = ReturnType<typeof createAuthenticatedGameSessionService>;
 
 export function createAuthenticatedMcpServer(
   config: Pick<AppConfig, 'APP_ENV' | 'NODE_ENV'>,
   gameContextService: AuthenticatedGameContextService,
   characterViewService: AuthenticatedCharacterViewService,
+  gameSessionService: AuthenticatedGameSessionService,
   widgetAssets: WidgetAssets,
 ): McpServer {
   const server = new McpServer(
@@ -48,7 +57,7 @@ export function createAuthenticatedMcpServer(
       version: '0.1.0',
     },
     {
-      instructions: 'Use only authenticated, read-only tools. Load the authorized game context before showing the authenticated home interface.',
+      instructions: 'Load the authorized game context before showing the authenticated home interface. Selection persistence is available only through the app-only selection tool and never changes mechanical game state.',
     },
   );
 
@@ -80,6 +89,50 @@ export function createAuthenticatedMcpServer(
       return {
         structuredContent: bootstrap,
         content: [{ type: 'text' as const, text: 'Authenticated bootstrap is available.' }],
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    SELECT_AUTHENTICATED_GAME_CONTEXT_TOOL,
+    {
+      title: 'Salvar campanha e personagem',
+      description: 'Persiste somente a campanha e o personagem autorizados escolhidos no widget, com idempotência e versão própria da sessão.',
+      inputSchema: selectAuthenticatedGameContextInputSchema,
+      outputSchema: authenticatedGameSessionSelectionResultSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      _meta: {
+        ui: {
+          resourceUri: AUTHENTICATED_HOME_RESOURCE_URI,
+          visibility: ['app'],
+        },
+      },
+    },
+    async (input, extra) => {
+      const authenticatedContext = readAuthenticatedMcpContext(extra.authInfo);
+      if (authenticatedContext === undefined || authenticatedContext.userStatus !== 'ACTIVE') {
+        throw new Error('Authenticated MCP context is unavailable');
+      }
+      const result = await gameSessionService.select(authenticatedContext.userId, input, {
+        origin: 'widget',
+        ...(authenticatedContext.requestId === undefined ? {} : { requestId: authenticatedContext.requestId }),
+        ...(authenticatedContext.traceId === undefined ? {} : { traceId: authenticatedContext.traceId }),
+      });
+      authenticatedContext.recordAuthorizationDecision({
+        result: result.status === 'SUCCESS' ? 'allowed' : 'denied',
+        reasonCode: `session_selection_${result.status.toLowerCase()}`,
+        resourceFingerprint: input.characterSelectionRef.slice(4, 16),
+      });
+      return {
+        ...(result.status === 'REJECTED' ? { isError: true } : {}),
+        structuredContent: result,
+        content: [{ type: 'text' as const, text: result.message }],
       };
     },
   );
@@ -209,7 +262,7 @@ export function createAuthenticatedMcpServer(
     'Crônicas de Outro Mundo — Personagem autenticado',
     AUTHENTICATED_HOME_RESOURCE_URI,
     {
-      description: 'Interface autenticada v2 somente leitura do jogador e de seu personagem.',
+      description: 'Interface autenticada v4 para seleção persistente e contexto mecânico somente leitura.',
       mimeType: RESOURCE_MIME_TYPE,
       _meta: {
         ui: {
@@ -235,6 +288,32 @@ export function createAuthenticatedMcpServer(
             },
           },
         },
+      }],
+    }),
+  );
+
+  registerAppResource(
+    server,
+    'Crônicas de Outro Mundo — Personagem autenticado v3 (compatibilidade)',
+    LEGACY_AUTHENTICATED_HOME_RESOURCE_URI,
+    {
+      description: 'Versão anterior preservada somente para remontagens em cache.',
+      mimeType: RESOURCE_MIME_TYPE,
+      _meta: {
+        ui: {
+          prefersBorder: true,
+          csp: {
+            connectDomains: [],
+            resourceDomains: [],
+          },
+        },
+      },
+    },
+    async () => ({
+      contents: [{
+        uri: LEGACY_AUTHENTICATED_HOME_RESOURCE_URI,
+        mimeType: RESOURCE_MIME_TYPE,
+        text: await widgetAssets.readAuthenticatedHome(),
       }],
     }),
   );

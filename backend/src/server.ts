@@ -10,6 +10,7 @@ import { encounterService } from './modules/encounters/encounter.service.js';
 import { prismaIdentityRepository } from './modules/identity/identity.repository.js';
 import { prismaAuthenticatedGameContextRepository } from './modules/authenticated-game-context/authenticated-game-context.repository.js';
 import { prismaAuthenticatedCharacterViewRepository } from './modules/authenticated-character-view/authenticated-character-view.repository.js';
+import { prismaAuthenticatedGameSessionRepository } from './modules/authenticated-game-session/authenticated-game-session.repository.js';
 import { disconnectPrisma } from './shared/database/prisma.js';
 
 const config = parseConfig(process.env);
@@ -22,6 +23,7 @@ const app = createApp(config, {
   identityRepository: prismaIdentityRepository,
   authenticatedGameContextRepository: prismaAuthenticatedGameContextRepository,
   authenticatedCharacterViewRepository: prismaAuthenticatedCharacterViewRepository,
+  authenticatedGameSessionRepository: prismaAuthenticatedGameSessionRepository,
 });
 const server = app.listen(config.PORT, config.HOST, () => { console.info(`cronicas-backend listening on port ${config.PORT}`); });
 

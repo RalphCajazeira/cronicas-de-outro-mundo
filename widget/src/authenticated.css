@@ -176,6 +176,22 @@ button:focus-visible { outline: 3px solid #f5cf7a; outline-offset: 2px; }
 .resource-grid dd { margin: 4px 0 0; font-weight: 800; }
 .continuity { margin-top: 18px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.1); }
 .continuity p, .empty-note { margin-bottom: 0; }
+
+.context-switcher,
+.selection-confirmation {
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 14px;
+  background: rgba(10, 14, 24, .45);
+}
+
+.context-switcher summary { cursor: pointer; font-weight: 700; }
+.selection-confirmation { display: grid; gap: 10px; }
+.selection-confirmation > div { display: grid; gap: 4px; }
+.selection-confirmation span { color: var(--muted); font-size: .88rem; }
+.success-note { color: #9ae6b4; margin: 0; }
+.error-note { color: #feb2b2; margin: 0; }
 .error-card { border-color: rgba(220, 99, 72, .45); }
 .loading-state { padding: 36px; color: #e9d6a7; text-align: center; }
 footer { margin-top: 22px; color: #81796f; font-size: .72rem; text-align: center; }

@@ -6,6 +6,7 @@ import type {
   CampaignMembershipRole,
   CampaignMembershipStatus,
   CampaignStatus,
+  GameSessionStatus,
   UserStatus,
 } from '../../generated/prisma/client.js';
 
@@ -64,6 +65,16 @@ export interface AuthenticatedGameAccessRecord {
   } | null;
   readonly campaignMemberships: readonly AuthenticatedCampaignMembershipRecord[];
   readonly actorControls: readonly AuthenticatedActorControlRecord[];
+  readonly gameSessions?: readonly {
+    readonly id: string;
+    readonly userId: string;
+    readonly campaignId: string;
+    readonly actorId: string;
+    readonly status: GameSessionStatus;
+    readonly stateVersion: number;
+    readonly lastActiveAt: Date;
+    readonly closedAt: Date | null;
+  }[];
 }
 
 export interface AuthenticatedGameContextRepository {

@@ -13,6 +13,7 @@ const authorizedCharacterOptionSchema = z.object({
   selectionRef: authorizedSelectionRefSchema,
   displayName: z.string().trim().min(1).max(200),
   level: z.number().int().min(1),
+  accessLabel: z.enum(['Somente consulta', 'Jogável']),
 }).strict();
 
 const authorizedCampaignOptionSchema = z.object({
@@ -20,6 +21,7 @@ const authorizedCampaignOptionSchema = z.object({
   displayName: z.string().trim().min(1).max(200),
   worldName: z.string().trim().min(1).max(200),
   status: z.enum(['draft', 'active', 'paused', 'completed', 'archived']),
+  sessionVersion: z.number().int().min(0),
   characters: z.array(authorizedCharacterOptionSchema).max(100),
 }).strict();
 
@@ -47,11 +49,22 @@ const widgetActiveContextSchema = z.object({
   readOnly: z.literal(true),
 }).strict();
 
+const persistedGameSessionSchema = z.object({
+  status: z.enum(['NONE', 'ACTIVE', 'UNAVAILABLE']),
+  stateVersion: z.number().int().min(0),
+  canContinue: z.boolean(),
+  selection: z.object({
+    campaignSelectionRef: authorizedSelectionRefSchema,
+    characterSelectionRef: authorizedSelectionRefSchema,
+  }).strict().nullable(),
+}).strict();
+
 export const widgetContextSchema = z.object({
   banner: z.string().trim().min(1).max(100),
   connectedPlayer: z.string().trim().min(1).max(200).nullable(),
   campaigns: z.array(authorizedCampaignOptionSchema).max(20),
   activeContext: widgetActiveContextSchema.nullable(),
+  gameSession: persistedGameSessionSchema,
   sessionState: z.enum([
     'NO_PLAYER',
     'NO_CAMPAIGN',
@@ -63,8 +76,10 @@ export const widgetContextSchema = z.object({
   navigation: z.object({
     canSelectCampaign: z.boolean(),
     canSelectCharacter: z.boolean(),
-    canViewContext: z.boolean(),
-    canMutate: z.literal(false),
+      canViewContext: z.boolean(),
+      canMutate: z.literal(false),
+      canPersistSelection: z.boolean(),
+      canContinue: z.boolean(),
   }).strict(),
   cta: z.object({
     kind: z.enum([
@@ -73,6 +88,8 @@ export const widgetContextSchema = z.object({
       'SELECT_CAMPAIGN',
       'SELECT_CHARACTER',
       'VIEW_CONTEXT',
+      'CONFIRM_SELECTION',
+      'CONTINUE',
       'RECONNECT',
     ]),
     label: z.string().trim().min(1).max(100),
@@ -128,10 +145,18 @@ export function authorizationErrorContext(
         canSelectCharacter: false,
         canViewContext: false,
         canMutate: false,
+        canPersistSelection: false,
+        canContinue: false,
       },
       cta: {
         kind: 'RECONNECT',
         label: 'Reconectar com segurança',
+      },
+      gameSession: {
+        status: 'NONE',
+        stateVersion: 0,
+        canContinue: false,
+        selection: null,
       },
     },
     environment: {

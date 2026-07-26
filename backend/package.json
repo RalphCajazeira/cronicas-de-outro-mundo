@@ -26,6 +26,7 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "db:clean-slate": "tsx scripts/clean-slate.ts",
     "staging:classify": "tsx scripts/classify-migrations.ts",
+    "staging:migration:authorize": "tsx scripts/authorize-high-risk-migration.ts",
     "staging:provisioning:detect": "tsx scripts/staging-provisioning-manifest.ts",
     "staging:db:preflight": "tsx scripts/staging-database.ts preflight",
     "staging:db:postflight": "tsx scripts/staging-database.ts postflight",

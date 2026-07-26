@@ -28,6 +28,8 @@ jobs:
       head: ${{ steps.classify.outputs.head }}
       risk: ${{ steps.classify.outputs.risk }}
       changed_migrations: ${{ steps.classify.outputs.changed_migrations }}
+      high_risk_authorized: ${{ steps.high_risk_authorization.outputs.authorized || 'false' }}
+      high_risk_operation_id: ${{ steps.high_risk_authorization.outputs.operation_id || '' }}
       provisioning_manifest_changed: ${{ steps.provisioning.outputs.changed || 'false' }}
       provisioning_operation_id: ${{ steps.provisioning.outputs.operation_id || '' }}
     services:
@@ -99,12 +101,13 @@ jobs:
             --output "$RUNNER_TEMP/migration-classification.json"
 
       - name: Block high-risk migrations
+        id: high_risk_authorization
         if: steps.classify.outputs.risk == 'high'
         shell: bash
         run: |
           set -euo pipefail
-          echo "High-risk migration classification requires a separate authorized task."
-          exit 1
+          npm run staging:migration:authorize -- \
+            --classification "$RUNNER_TEMP/migration-classification.json"
 
       - name: Detect protected staging provisioning manifest
         id: provisioning
@@ -132,7 +135,10 @@ jobs:
     if: >-
       github.ref == 'refs/heads/develop'
       && needs.validate.result == 'success'
-      && needs.validate.outputs.risk != 'high'
+      && (
+        needs.validate.outputs.risk != 'high'
+        || needs.validate.outputs.high_risk_authorized == 'true'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 50
     environment:

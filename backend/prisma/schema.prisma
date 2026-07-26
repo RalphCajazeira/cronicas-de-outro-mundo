@@ -36,6 +36,11 @@ enum AuditDecision {
   DENY
 }
 
+enum GameSessionStatus {
+  ACTIVE
+  CLOSED
+}
+
 enum CampaignStatus {
   DRAFT
   ACTIVE
@@ -262,6 +267,7 @@ model User {
   campaignMemberships        CampaignMembership[] @relation("CampaignMember")
   grantedCampaignMemberships CampaignMembership[] @relation("CampaignMembershipGrantor")
   actorControls              ActorControl[]
+  gameSessions               GameSession[]
   auditEvents                AuditEvent[]
 
   @@index([status])
@@ -376,6 +382,7 @@ model Campaign {
   effectResolutions  EffectResolution[]
   encounters         Encounter[]
   memberships        CampaignMembership[]
+  gameSessions       GameSession[]
   auditEvents        AuditEvent[]
 
   @@unique([worldId, code])
@@ -418,6 +425,7 @@ model Actor {
   targetedEffectResolutions EffectResolution[]    @relation("EffectResolutionTargetActor")
   encounterParticipants     EncounterParticipant[]
   controls                  ActorControl[]
+  gameSessions              GameSession[]
   auditEvents               AuditEvent[]
 
   @@unique([campaignId, code])
@@ -459,6 +467,28 @@ model ActorControl {
   @@index([userId, permission])
 }
 
+model GameSession {
+  id           String            @id @default(uuid()) @db.Uuid
+  userId       String            @db.Uuid
+  campaignId   String            @db.Uuid
+  actorId      String            @db.Uuid
+  status       GameSessionStatus @default(ACTIVE)
+  stateVersion Int               @default(1)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  lastActiveAt DateTime          @default(now())
+  closedAt     DateTime?
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaign     Campaign          @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  actor        Actor             @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  auditEvents  AuditEvent[]
+
+  @@unique([userId, campaignId])
+  @@index([userId, status, lastActiveAt])
+  @@index([campaignId, status])
+  @@index([actorId, status])
+}
+
 model AuditEvent {
   id                 String            @id @default(uuid()) @db.Uuid
   occurredAt         DateTime          @default(now())
@@ -467,6 +497,7 @@ model AuditEvent {
   externalIdentityId String?           @db.Uuid
   campaignId         String?           @db.Uuid
   actorId            String?           @db.Uuid
+  gameSessionId      String?           @db.Uuid
   requestId          String?           @db.VarChar(128)
   traceId            String?           @db.VarChar(128)
   decision           AuditDecision
@@ -478,11 +509,13 @@ model AuditEvent {
   externalIdentity   ExternalIdentity? @relation(fields: [externalIdentityId], references: [id], onDelete: SetNull)
   campaign           Campaign?         @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   actor              Actor?            @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  gameSession        GameSession?      @relation(fields: [gameSessionId], references: [id], onDelete: SetNull)
 
   @@index([userId, occurredAt])
   @@index([externalIdentityId, occurredAt])
   @@index([campaignId, occurredAt])
   @@index([actorId, occurredAt])
+  @@index([gameSessionId, occurredAt])
   @@index([eventType, occurredAt])
   @@index([requestId])
 }

@@ -1,8 +1,10 @@
 import {
   ActorControlPermission,
+  ActorStatus,
   ActorType,
   CampaignMembershipRole,
   CampaignMembershipStatus,
+  GameSessionStatus,
 } from '../../generated/prisma/client.js';
 import { prisma } from '../../shared/database/prisma.js';
 import type { DbClient } from '../../shared/database/game-scope.js';
@@ -79,6 +81,7 @@ export function createPrismaAuthenticatedGameContextRepository(
               actor: {
                 is: {
                   actorType: ActorType.CHARACTER,
+                  status: ActorStatus.ACTIVE,
                 },
               },
             },
@@ -119,6 +122,26 @@ export function createPrismaAuthenticatedGameContextRepository(
               { id: 'asc' },
             ],
             take: maximumActorControlsPlusIntegritySentinel,
+          },
+          gameSessions: {
+            where: {
+              status: GameSessionStatus.ACTIVE,
+            },
+            select: {
+              id: true,
+              userId: true,
+              campaignId: true,
+              actorId: true,
+              status: true,
+              stateVersion: true,
+              lastActiveAt: true,
+              closedAt: true,
+            },
+            orderBy: [
+              { lastActiveAt: 'desc' },
+              { id: 'asc' },
+            ],
+            take: maximumCampaignsPlusIntegritySentinel,
           },
         },
       });

@@ -20,12 +20,12 @@ function shell(context: AuthenticatedContext, content: string): string {
       <header>
         <div class="sigil" aria-hidden="true">✦</div>
         <div>
-          <p class="eyebrow">Portal autenticado · somente leitura</p>
+          <p class="eyebrow">Portal autenticado · contexto seguro</p>
           <h1>Crônicas de Outro Mundo</h1>
         </div>
       </header>
       <main>${content}</main>
-      <footer>Consultas são somente leitura. Ações narrativas seguem para a conversa e não alteram o estado mecânico.</footer>
+      <footer>A seleção salva apenas sua preferência. Consultas são somente leitura e ações narrativas não alteram o estado mecânico.</footer>
     </div>
   `;
 }
@@ -61,7 +61,7 @@ function campaignList(context: AuthenticatedContext): string {
         <span class="status">${escapeHtml(campaign.status)}</span>
       </div>
       <button type="button" data-campaign-selection-ref="${escapeHtml(campaign.selectionRef)}">
-        Ver contexto
+        Selecionar campanha
       </button>
     </article>
   `).join('');
@@ -80,7 +80,7 @@ function characterList(context: AuthenticatedContext): string {
           data-character-selection-ref="${escapeHtml(character.selectionRef)}"
           data-campaign-selection-ref="${escapeHtml(campaign.selectionRef)}">
           <strong>${escapeHtml(character.displayName)}</strong>
-          <span>Nível ${character.level}</span>
+          <span>Nível ${character.level} · ${escapeHtml(character.accessLabel)}</span>
         </button>
       `).join('')}
     </div>
@@ -341,6 +341,8 @@ export interface AuthenticatedRenderState {
   readonly loading: boolean;
   readonly error: string | null;
   readonly selectedDetail: string | null;
+  readonly selectionFeedback?: string | null;
+  readonly selectionRecovery?: 'NONE' | 'RELOAD_REQUIRED' | 'SAFE_RETRY' | 'SELECT_AGAIN';
   readonly narrativeComposer?: {
     readonly draft: string;
     readonly sending: boolean;
@@ -419,6 +421,35 @@ function characterHome(context: AuthenticatedContext, state: AuthenticatedRender
           <button type="button" data-action="retry">Tentar novamente</button>
         </section>
       `;
+  const officialSelection = context.widgetContext.gameSession.selection;
+  const isOfficialSelection = officialSelection?.campaignSelectionRef === active.campaign.selectionRef
+    && officialSelection.characterSelectionRef === active.character.selectionRef;
+  const selectionActions = `
+    <section class="selection-confirmation" aria-live="polite">
+      <div>
+        <p class="chapter">${isOfficialSelection ? 'Seleção persistida' : 'Confirmar seleção'}</p>
+        <strong>${escapeHtml(active.campaign.displayName)} · ${escapeHtml(active.character.displayName)}</strong>
+        <span>${escapeHtml(active.character.accessLabel)} · versão ${active.campaign.sessionVersion}</span>
+      </div>
+      ${isOfficialSelection
+        ? `<button type="button" data-action="continue"
+            ${context.widgetContext.gameSession.canContinue ? '' : 'disabled'}>Continuar</button>`
+        : `<button type="button" data-action="confirm-selection"
+            ${state.loading || !context.widgetContext.navigation.canPersistSelection ? 'disabled' : ''}>
+            Usar esta campanha e personagem
+          </button>`}
+      ${state.selectionFeedback === null || state.selectionFeedback === undefined
+        ? ''
+        : `<p class="${state.selectionRecovery === 'NONE' ? 'success-note' : 'error-note'}">
+            ${escapeHtml(state.selectionFeedback)}
+          </p>`}
+      ${state.selectionRecovery === 'SAFE_RETRY'
+        ? '<button type="button" data-action="retry-selection">Tentar novamente com segurança</button>'
+        : state.selectionRecovery === 'RELOAD_REQUIRED'
+          ? '<button type="button" data-action="reload-context">Recarregar seleção oficial</button>'
+          : ''}
+    </section>
+  `;
   return shell(context, `
     <section class="character-workspace" aria-labelledby="character-title">
       <div class="character-heading">
@@ -426,6 +457,14 @@ function characterHome(context: AuthenticatedContext, state: AuthenticatedRender
         <span>${escapeHtml(active.campaign.worldName)} · ${escapeHtml(active.campaign.displayName)}</span>
         <h2 id="character-title">${escapeHtml(active.character.displayName)}</h2>
       </div>
+      <details class="context-switcher">
+        <summary>Trocar campanha ou personagem</summary>
+        <h3>Campanhas autorizadas</h3>
+        <div class="campaign-grid">${campaignList(context)}</div>
+        <h3>Personagens desta campanha</h3>
+        ${characterList(context)}
+      </details>
+      ${selectionActions}
       ${tabs(state.activeView)}
       ${body}
       ${narrativeComposer(state.narrativeComposer)}
