@@ -78,6 +78,7 @@ interface AuthenticatedHost {
   readonly audits: HttpAuditRecord[];
   readonly endpoint: URL;
   readonly metadataEndpoint: URL;
+  readonly rootMetadataEndpoint: URL;
   readonly resourceUri: string;
   close(): Promise<void>;
   token(subject?: string, scope?: string, clientId?: string | null): Promise<string>;
@@ -121,6 +122,7 @@ async function startHost(
     audits,
     endpoint,
     metadataEndpoint: new URL('/.well-known/oauth-protected-resource/mcp-auth', origin),
+    rootMetadataEndpoint: new URL('/.well-known/oauth-protected-resource', origin),
     resourceUri: endpoint.href,
     close: () => new Promise<void>((resolve, reject) => {
       server.close((error) => {
@@ -185,6 +187,9 @@ describe('authenticated MCP resource server', () => {
         scopes_supported: ['openid'],
         bearer_methods_supported: ['header'],
       });
+      const rootResponse = await fetch(host.rootMetadataEndpoint);
+      expect(rootResponse.status).toBe(200);
+      expect(await rootResponse.json()).toEqual(metadata);
       expect(JSON.stringify(metadata)).not.toMatch(/secret|token|password|private/i);
       const incorrectAuthorizationMetadata = await fetch(new URL('/.well-known/oauth-authorization-server', host.endpoint));
       expect(incorrectAuthorizationMetadata.status).toBe(404);
