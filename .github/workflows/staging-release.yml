@@ -1,0 +1,221 @@
+name: Staging release
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: Full SHA of the last commit included in the prior proven release
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cronicas-staging-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Classify and validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      base: ${{ steps.classify.outputs.base }}
+      head: ${{ steps.classify.outputs.head }}
+      risk: ${{ steps.classify.outputs.risk }}
+      changed_migrations: ${{ steps.classify.outputs.changed_migrations }}
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/game_gpt_dev
+      DIRECT_URL: postgresql://postgres:postgres@127.0.0.1:5432/game_gpt_dev
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/game_gpt_test
+      TEST_DIRECT_URL: postgresql://postgres:postgres@127.0.0.1:5432/game_gpt_test
+      TEST_RPG_API_KEY: staging-validation-key
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            widget/package-lock.json
+
+      - name: Confirm the trusted release context
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$RELEASE_REF" = "refs/heads/develop"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Install locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --prefix backend --include=dev
+          npm ci --prefix widget --include=dev
+
+      - name: Classify changed migrations
+        id: classify
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || inputs.base_sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          npm run staging:classify -- \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --output "$RUNNER_TEMP/migration-classification.json"
+
+      - name: Block high-risk migrations
+        if: steps.classify.outputs.risk == 'high'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "High-risk migration classification requires a separate authorized task."
+          exit 1
+
+      - name: Run the canonical validation suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run ci:validate
+
+  release:
+    name: Migrate and deploy exact staging commit
+    needs:
+      - validate
+    if: >-
+      github.ref == 'refs/heads/develop'
+      && needs.validate.result == 'success'
+      && needs.validate.outputs.risk != 'high'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_BASE_URL }}
+    env:
+      NODE_EXTRA_CA_CERTS: ${{ runner.temp }}/supabase-ca.crt
+      STAGING_BASE_URL: ${{ vars.STAGING_BASE_URL }}
+      STAGING_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
+      STAGING_DATABASE_NAME: ${{ vars.STAGING_DATABASE_NAME }}
+      STAGING_DATABASE_ROLE: ${{ vars.STAGING_DATABASE_ROLE }}
+      STAGING_DATABASE_SCHEMA: ${{ vars.STAGING_DATABASE_SCHEMA }}
+      STAGING_RENDER_SERVICE_ID: ${{ vars.STAGING_RENDER_SERVICE_ID }}
+      STAGING_MCP_RESOURCE_URI: ${{ vars.STAGING_MCP_RESOURCE_URI }}
+      STAGING_TARGET_SHA: ${{ github.sha }}
+      STAGING_PREVIOUS_SHA: ${{ github.event_name == 'push' && github.event.before || inputs.base_sha }}
+      STAGING_EXPECTED_BRANCH: develop
+      STAGING_NODE_VERSION: 22.22.0
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install locked backend dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --prefix backend --include=dev
+
+      - name: Prepare the staging CA certificate
+        shell: bash
+        env:
+          STAGING_SUPABASE_CA_CERT: ${{ secrets.STAGING_SUPABASE_CA_CERT }}
+        run: |
+          set -euo pipefail
+          test -n "$STAGING_SUPABASE_CA_CERT"
+          umask 077
+          printf '%s\n' "$STAGING_SUPABASE_CA_CERT" > "$NODE_EXTRA_CA_CERTS"
+
+      - name: Generate and validate Prisma Client
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_MIGRATION_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          npm run prisma:generate
+          npm run prisma:validate
+
+      - name: Run sanitized database preflight
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_MIGRATION_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          npm run staging:db:preflight
+
+      - name: Apply committed migrations
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_MIGRATION_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          npm run prisma:migrate:deploy
+
+      - name: Verify Prisma migration status
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_MIGRATION_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          npm exec --prefix backend -- prisma migrate status
+          npm run staging:db:postflight
+
+      - name: Trigger the exact Render commit
+        id: render
+        shell: bash
+        env:
+          RENDER_STAGING_DEPLOY_HOOK_URL: ${{ secrets.RENDER_STAGING_DEPLOY_HOOK_URL }}
+        run: |
+          set -euo pipefail
+          npm run staging:deploy:trigger
+
+      - name: Wait for exact commit and health
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run staging:deploy:poll
+
+      - name: Run isolated staging MCP smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run staging:smoke:mcp

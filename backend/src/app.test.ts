@@ -97,11 +97,23 @@ function appWith(
   return createApp(config, {
     actorRepository, contentRepository, gptRepository, readiness, encounterHttpService: emptyEncounterHttpService,
     ...(auditLog === undefined ? {} : { auditLog }),
+    releaseInfo: { status: 'ok', commit: 'test-sha', branch: 'develop', nodeVersion: 'v22.22.0' },
   });
 }
 
 describe('HTTP API', () => {
   it('returns health without authentication', async () => { const response = await request(appWith()).get('/health'); expect(response.status).toBe(200); expect(response.body).toEqual({ status: 'ok' }); });
+  it('returns only sanitized release metadata without authentication', async () => {
+    const response = await request(appWith()).get('/health/version');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      status: 'ok',
+      commit: 'test-sha',
+      branch: 'develop',
+      nodeVersion: 'v22.22.0',
+    });
+    expect(Object.keys(response.body as Record<string, unknown>)).toEqual(['status', 'commit', 'branch', 'nodeVersion']);
+  });
   it('keeps authenticated MCP and its metadata unavailable when OAuth is disabled', async () => {
     const app = appWith();
     await request(app).post('/mcp-auth').send({}).expect(404);

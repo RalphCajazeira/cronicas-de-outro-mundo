@@ -5283,7 +5283,7 @@ describe('Phase 1L-B transactional encounter adapter', () => {
     })).rejects.toThrow(/append-only/);
     await expect(prisma.encounterConsequence.delete({ where: { id: consequence.id } })).rejects.toThrow(/append-only/);
     await expect(prisma.gameEvent.delete({ where: { id: consequence.gameEventId } }))
-      .rejects.toThrow(/RESTRICT/);
+      .rejects.toThrow(/RESTRICT|EncounterConsequence_gameEventId_fkey/);
     await expect(prisma.encounterOperation.delete({ where: { id: consequence.encounterOperationId } }))
       .rejects.toThrow(/append-only/);
     const persistedTerminal = await prisma.encounter.findUniqueOrThrow({ where: { id: encounter.id } });

@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "22.22.0"
+  },
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
@@ -20,7 +23,13 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:seed": "tsx prisma/seed.ts",
-    "db:clean-slate": "tsx scripts/clean-slate.ts"
+    "db:clean-slate": "tsx scripts/clean-slate.ts",
+    "staging:classify": "tsx scripts/classify-migrations.ts",
+    "staging:db:preflight": "tsx scripts/staging-database.ts preflight",
+    "staging:db:postflight": "tsx scripts/staging-database.ts postflight",
+    "staging:deploy:trigger": "tsx scripts/staging-deploy.ts trigger",
+    "staging:deploy:poll": "tsx scripts/staging-deploy.ts poll",
+    "staging:smoke:mcp": "tsx scripts/smoke-staging-mcp.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

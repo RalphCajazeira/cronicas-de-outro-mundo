@@ -7,7 +7,7 @@ Nova plataforma do RPG narrativo **Crônicas de Outro Mundo**. O runtime ativo �
 - Express expõe a API HTTP e Zod valida configuração e entradas.
 - Prisma Client 7 acessa PostgreSQL pelo adapter oficial `@prisma/adapter-pg`; Prisma Migrate é a única autoridade do novo schema.
 - Supabase pode hospedar o PostgreSQL, mas somente o backend recebe credenciais privilegiadas.
-- `x-rpg-key` protege temporariamente `/api/v1`; `/health`, `/health/ready` e `/openapi.json` são públicos e não revelam infraestrutura.
+- `x-rpg-key` protege temporariamente `/api/v1`; `/health`, `/health/ready`, `/health/version` e `/openapi.json` são públicos e não revelam secrets ou infraestrutura privada.
 - O GPT usa a API Node para leitura e persistência; o frontend continua adiado e sempre chamará o backend.
 
 ## Estrutura
@@ -20,6 +20,8 @@ render.yaml               Blueprint nativo Node, sem Docker
 ```
 
 ## Preparação no Windows/PowerShell
+
+Use Node `22.22.0`, fixado em `.node-version` e nos manifests npm.
 
 ```powershell
 npm install
@@ -66,7 +68,9 @@ $env:DATABASE_URL='postgresql://user:password@localhost:5432/placeholder'
 npx --prefix backend prisma migrate diff --from-empty --to-schema backend/prisma/schema.prisma --script
 ```
 
-A migration inicial já está versionada em `backend/prisma/migrations/`. Nenhuma migration ou seed foi aplicado remotamente. O seed de desenvolvimento pode ser executado conscientemente com `npm run prisma:seed --prefix backend` apenas contra um banco seguro configurado.
+As migrations estão versionadas em `backend/prisma/migrations/`. O seed de
+desenvolvimento pode ser executado conscientemente com
+`npm run prisma:seed --prefix backend` apenas contra um banco local seguro.
 
 ### Banco local de desenvolvimento
 
@@ -78,11 +82,19 @@ O contrato oficial ativo é `gpt/openapi.json` e também é servido em `GET /ope
 
 Para configurar o GPT no navegador, siga `gpt/README.md` depois que a API estiver publicada e validada.
 
-## Produção futura: GitHub → Render → Supabase
+## Staging: GitHub → Supabase → Render
 
-`render.yaml` prepara um serviço web Node nativo, build/start reproduzíveis, auto-deploy desligado e health check em `/health/ready`. Antes de sincronizar o Blueprint, escolha a branch de produção e o plano. O `preDeployCommand` aplica `prisma migrate deploy`; como esse recurso exige serviço pago, em plano sem suporte execute conscientemente `npm run prisma:migrate:deploy` como tarefa one-off com `DIRECT_URL` antes do primeiro deploy.
+O pipeline canônico está em
+`docs/rollout/staging-ci-cd-pipeline.md`. Pull requests para `develop` executam
+CI sem secrets. Push/merge em `develop` classifica migrations, valida o código,
+executa `prisma migrate deploy` somente para risco `none/low`, comprova o
+histórico, chama o Deploy Hook do Render com o SHA exato e exige health, readiness
+e smoke MCP. Migrations `high` param antes do banco. O auto-deploy do Render
+permanece desligado.
 
-No Supabase, crie futuramente um usuário PostgreSQL específico para Prisma com senha forte gerada. Use `DATABASE_URL` no runtime (Supavisor Session mode quando apropriado) e `DIRECT_URL` para migrations. Guarde URLs e `RPG_API_KEY` somente como secrets do Render. A migration incremental habilita RLS sem policies para `anon`/`authenticated` e revoga acesso desses papéis condicionalmente, preservando proprietário/migration role. Não desligue a Data API nem altere objetos legados por esse fluxo.
+URLs de migration, certificado e Deploy Hook existem somente no GitHub
+Environment `staging`. Runtime e migration usam a role dedicada de staging; não
+configure `anon`, `authenticated` ou credencial de produção.
 
 O usuário usado em `DIRECT_URL` deve aplicar as migrations e permanecer proprietário das tabelas da plataforma Node; `DATABASE_URL` deve autenticar esse mesmo papel. Como não há `FORCE ROW LEVEL SECURITY`, o proprietário opera intencionalmente sem policies, enquanto papéis não proprietários ficam bloqueados na ausência delas. Não configure o runtime com `anon`, `authenticated` ou outro papel sem propriedade/bypass deliberado.
 
@@ -90,4 +102,7 @@ Prisma Migrate não gera down migration automática. Para rollback de aplicaçã
 
 ## Escopo atual e próximas fases
 
-Existem health/readiness, leituras normalizadas e persistência mínima do GPT. Ainda não existem frontend, autenticação pública, combate avançado, inventário físico, buffs/debuffs, comércio, lojas, viagens, CORS, rate limit ou observabilidade externa. Antes do deploy, ainda é necessário escolher branch/plano/região no Render, criar credencial Prisma no Supabase, definir secrets, revisar backup/rollback e executar a migration remota em janela controlada.
+Existem health/readiness/version, pipeline de staging, leituras normalizadas e
+persistência autoritativa do jogo. Produção, autenticação pública habilitada,
+OAuth ao vivo, frontend geral, comércio, lojas, viagens, CORS, rate limit e
+observabilidade externa continuam fora deste rollout.

@@ -1,6 +1,10 @@
 import express from 'express';
 import type { AppConfig } from './config/env.js';
-import { createHealthRouter, type ReadinessCheck } from './modules/health/health.routes.js';
+import {
+  createHealthRouter,
+  type ReadinessCheck,
+  type ReleaseInfo,
+} from './modules/health/health.routes.js';
 import { createActorsRouter } from './modules/actors/actors.routes.js';
 import type { ActorRepository } from './modules/actors/actors.types.js';
 import { createCharactersRouter } from './modules/characters/characters.routes.js';
@@ -34,6 +38,7 @@ export interface AppDependencies {
   encounterHttpService: EncounterHttpService;
   chatGptAppWidgetAssets?: WidgetAssets;
   identityRepository?: IdentityRepository;
+  releaseInfo?: ReleaseInfo;
 }
 
 export function createApp(config: AppConfig, dependencies: AppDependencies) {
@@ -43,7 +48,7 @@ export function createApp(config: AppConfig, dependencies: AppDependencies) {
   app.use(createRequestAudit(dependencies.auditLog ?? (config.NODE_ENV === 'test' ? undefined : writeHttpAuditLog)));
   app.use(express.json({ limit: '100kb' }));
   const widgetAssets = dependencies.chatGptAppWidgetAssets ?? createFileWidgetAssets();
-  app.use('/health', createHealthRouter(dependencies.readiness));
+  app.use('/health', createHealthRouter(dependencies.readiness, dependencies.releaseInfo));
   app.use('/openapi.json', createOpenApiRouter(config.PUBLIC_BASE_URL ?? `http://localhost:${config.PORT}`));
   app.use('/mcp', createChatGptAppRouter(config, widgetAssets));
   if (config.OAUTH_RESOURCE_SERVER !== undefined) {

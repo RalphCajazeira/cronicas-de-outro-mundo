@@ -3,6 +3,10 @@
 Este procedimento é a limpeza operacional para o staging Virginia descartável.
 Ele não altera migrations, não faz backfill e não substitui `prisma migrate deploy`.
 
+O pipeline descrito em `staging-ci-cd-pipeline.md` é a fonte canônica para
+migrations comuns. Este clean-slate é uma exceção destrutiva e continua exigindo
+task e autorização próprias; ele nunca é chamado pelos workflows.
+
 ## Escopo e proteção
 
 O comando `npm run db:clean-slate --prefix backend` somente aceita:
@@ -35,6 +39,10 @@ O gate aplica as 13 migrations, executa dois ciclos completos de clean-slate e
 histórico Prisma da aplicação entre os ciclos.
 
 ## Staging Virginia
+
+Não use esta seção para aplicar migration comum por rotina. O fluxo abaixo serve
+somente para recuperação clean-slate explicitamente autorizada. Depois da
+recuperação, o pipeline volta a ser a autoridade dos releases normais.
 
 1. Confirme o projeto `cronicas-de-outro-mundo-staging-virginia`, ref
    `udqwzvhlwwfnngiipacj`, região `us-east-1`; não use produção nem o staging

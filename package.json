@@ -1,6 +1,9 @@
 {
   "name": "cronicas-de-outro-mundo",
   "private": true,
+  "engines": {
+    "node": "22.22.0"
+  },
   "scripts": {
     "dev": "npm run dev --prefix backend",
     "start": "npm run start --prefix backend",
@@ -21,6 +24,13 @@
     "prisma:validate": "npm run prisma:validate --prefix backend",
     "prisma:generate": "npm run prisma:generate --prefix backend",
     "prisma:migrate:deploy": "npm run prisma:migrate:deploy --prefix backend",
-    "prisma:seed": "npm run prisma:seed --prefix backend"
+    "prisma:seed": "npm run prisma:seed --prefix backend",
+    "ci:validate": "npm run prisma:generate && npm run prisma:validate && npm run lint && npm run typecheck && npm run typecheck:widget && npm run test:unit && npm run test:integration && npm run test:widget && npm run build",
+    "staging:classify": "npm run staging:classify --prefix backend --",
+    "staging:db:preflight": "npm run staging:db:preflight --prefix backend",
+    "staging:db:postflight": "npm run staging:db:postflight --prefix backend",
+    "staging:deploy:trigger": "npm run staging:deploy:trigger --prefix backend",
+    "staging:deploy:poll": "npm run staging:deploy:poll --prefix backend",
+    "staging:smoke:mcp": "npm run staging:smoke:mcp --prefix backend"
   }
 }

@@ -10,14 +10,15 @@ projects:
             branch: develop
             plan: free
             region: virginia
-            buildCommand: npm ci --prefix backend --include=dev && npm run prisma:generate && npm run build
+            buildCommand: npm ci --prefix backend --include=dev && npm ci --prefix widget --include=dev && npm run prisma:generate && npm run build
             startCommand: npm start
             healthCheckPath: /health/ready
             autoDeployTrigger: "off"
-            maxShutdownDelaySeconds: 30
             envVars:
               - key: NODE_ENV
                 value: production
+              - key: NODE_VERSION
+                value: 22.22.0
               - key: HOST
                 value: 0.0.0.0
               - key: NODE_EXTRA_CA_CERTS

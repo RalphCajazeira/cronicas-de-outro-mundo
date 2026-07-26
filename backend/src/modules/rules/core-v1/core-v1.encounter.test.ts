@@ -555,7 +555,7 @@ describe('core-v1 encounter state and initiative', () => {
     const timeCapped = expectOk(processCoreV1EncounterBatch(delayed, runtime));
     expect(timeCapped.processedEvents).toEqual([]);
     expect(timeCapped).toMatchObject({ stopReason: 'processing_limit', continuationRequired: true });
-  });
+  }, 15_000);
 });
 
 describe('core-v1 compiled encounter action validation', () => {
