@@ -10,22 +10,24 @@ const { Client } = pg;
  */
 export const cleanSlateObjects = {
   tables: [
-    'ActiveEffect', 'Actor', 'ActorAttribute', 'ActorContent', 'ActorDerivedSnapshot',
-    'ActorEquipmentSlot', 'ActorResource', 'Campaign', 'ContentDefinition',
+    'ActiveEffect', 'Actor', 'ActorAttribute', 'ActorContent', 'ActorControl',
+    'ActorDerivedSnapshot', 'ActorEquipmentSlot', 'ActorResource', 'AuditEvent',
+    'Campaign', 'CampaignMembership', 'ContentDefinition',
     'ContentEffectBinding', 'ContentProfileVersion', 'ContentVersion', 'EffectResolution',
     'EffectRoll', 'EffectRulesVersion', 'Encounter', 'EncounterConsequence',
-    'EncounterOperation', 'EncounterParticipant', 'EncounterRoll', 'GameEvent',
+    'EncounterOperation', 'EncounterParticipant', 'EncounterRoll', 'ExternalIdentity', 'GameEvent',
     'IdempotencyRecord', 'InventoryEntry', 'InventoryRulesVersion', 'Player', 'Ruleset',
-    'RulesetVersion', 'World',
+    'RulesetVersion', 'User', 'World',
   ],
   enums: [
     'ActiveEffectDurationType', 'ActiveEffectKind', 'ActorAttributeCode', 'ActorContentState',
-    'ActorEquipmentSlotRef', 'ActorResourceType', 'ActorStatus', 'ActorType', 'CampaignStatus',
-    'ContentEffectBindingKind', 'ContentProfileMode', 'ContentStatus', 'ContentType',
+    'ActorControlPermission', 'ActorEquipmentSlotRef', 'ActorResourceType', 'ActorStatus',
+    'ActorType', 'AuditDecision', 'CampaignMembershipRole', 'CampaignMembershipStatus',
+    'CampaignStatus', 'ContentEffectBindingKind', 'ContentProfileMode', 'ContentStatus', 'ContentType',
     'EffectResolutionOperation', 'EffectRollKind', 'EncounterCompletionCandidate',
     'EncounterEphemeralKind', 'EncounterLifecycleStatus', 'EncounterOperationKind',
     'EncounterOutcome', 'EncounterParticipantBindingKind', 'EncounterRollKind',
-    'EncounterStopReason', 'InventoryEntryKind', 'InventoryInstanceLifecycle',
+    'EncounterStopReason', 'InventoryEntryKind', 'InventoryInstanceLifecycle', 'UserStatus',
   ],
   functions: [
     ['active_effect_validate', ''], ['active_effect_validate_encounter_origin', ''],
@@ -41,7 +43,7 @@ export const cleanSlateObjects = {
     ['phase1j_immutable_record', ''], ['phase1la_immutable_record', ''],
     ['ruleset_version_block_delete', ''], ['ruleset_version_block_update', ''],
   ] as const,
-  // The twelve migrations do not create standalone views, materialized views, procedures,
+  // The thirteen migrations do not create standalone views, materialized views, procedures,
   // domains, composite types, or sequences. Their presence is reported, never guessed away.
   standaloneRelations: [] as string[],
 } as const;

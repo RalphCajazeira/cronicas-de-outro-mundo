@@ -8,9 +8,13 @@ import request from 'supertest';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   ActorContentState,
+  ActorControlPermission,
   ActorEquipmentSlotRef,
   ActorResourceType,
   ActorType,
+  AuditDecision,
+  CampaignMembershipRole,
+  CampaignMembershipStatus,
   CampaignStatus,
   ContentStatus,
   ContentType,
@@ -22,6 +26,7 @@ import {
   InventoryEntryKind,
   InventoryInstanceLifecycle,
   Prisma,
+  UserStatus,
 } from '../../src/generated/prisma/client.js';
 import { createApp } from '../../src/app.js';
 import { parseConfig } from '../../src/config/env.js';
@@ -45,6 +50,12 @@ import {
 } from '../../src/modules/encounters/encounter.types.js';
 import { getOfficialContract } from '../../src/modules/openapi/openapi.routes.js';
 import { lockActorAuthorities } from '../../src/modules/encounters/encounter.repository.js';
+import { createAuditEventService } from '../../src/modules/audit/audit-event.service.js';
+import { prismaAuditEventRepository } from '../../src/modules/audit/audit-event.repository.js';
+import { createAuthorizationService } from '../../src/modules/authorization/authorization.service.js';
+import { prismaAuthorizationRepository } from '../../src/modules/authorization/authorization.repository.js';
+import { createIdentityService } from '../../src/modules/identity/identity.service.js';
+import { prismaIdentityRepository } from '../../src/modules/identity/identity.repository.js';
 import {
   createCoreV1EncounterSnapshotHash,
   parseCoreV1EncounterSnapshot,
@@ -732,6 +743,14 @@ describe('migration and PostgreSQL schema', () => {
     expect(migration[0]?.finished_at).toBeInstanceOf(Date);
   });
 
+  it('records the Phase 2B identity and authorization foundation migration as successfully applied', async () => {
+    const migration = await prisma.$queryRaw<Array<{ finished_at: Date | null }>>`
+      SELECT finished_at FROM "_prisma_migrations"
+      WHERE migration_name = '20260725190000_identity_authorization_foundation' AND rolled_back_at IS NULL
+    `;
+    expect(migration[0]?.finished_at).toBeInstanceOf(Date);
+  });
+
   it('installs the widened actor checks and semantic XP-source protections', async () => {
     const constraints = await prisma.$queryRaw<Array<{ conname: string; definition: string }>>`
       SELECT conname, pg_get_constraintdef(oid) AS definition
@@ -904,12 +923,12 @@ describe('migration and PostgreSQL schema', () => {
     const tables = await prisma.$queryRaw<Array<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>>`
       SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'IdempotencyRecord', 'Encounter', 'EncounterParticipant', 'EncounterOperation', 'EncounterRoll')
+      WHERE n.nspname = 'public' AND c.relname IN ('User', 'ExternalIdentity', 'Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'CampaignMembership', 'Actor', 'ActorControl', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'AuditEvent', 'IdempotencyRecord', 'Encounter', 'EncounterParticipant', 'EncounterOperation', 'EncounterRoll', 'EncounterConsequence')
     `;
-    expect(tables).toHaveLength(27);
+    expect(tables).toHaveLength(33);
     expect(tables.every((table) => table.relrowsecurity)).toBe(true);
     expect(tables.every((table) => !table.relforcerowsecurity)).toBe(true);
-    await expect(prisma.$queryRaw<Array<{ tablename: string }>>`SELECT tablename::text FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'IdempotencyRecord', 'Encounter', 'EncounterParticipant', 'EncounterOperation', 'EncounterRoll')`).resolves.toHaveLength(0);
+    await expect(prisma.$queryRaw<Array<{ tablename: string }>>`SELECT tablename::text FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('User', 'ExternalIdentity', 'Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'CampaignMembership', 'Actor', 'ActorControl', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'AuditEvent', 'IdempotencyRecord', 'Encounter', 'EncounterParticipant', 'EncounterOperation', 'EncounterRoll', 'EncounterConsequence')`).resolves.toHaveLength(0);
   });
 
   it('does not grant table privileges to PUBLIC', async () => {
@@ -919,10 +938,21 @@ describe('migration and PostgreSQL schema', () => {
       JOIN pg_namespace n ON n.oid = c.relnamespace
       CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) privilege
       WHERE n.nspname = 'public'
-        AND c.relname IN ('Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'Actor', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'IdempotencyRecord', 'Encounter', 'EncounterParticipant', 'EncounterOperation', 'EncounterRoll')
+        AND c.relname IN ('User', 'ExternalIdentity', 'Player', 'Ruleset', 'RulesetVersion', 'InventoryRulesVersion', 'EffectRulesVersion', 'World', 'Campaign', 'CampaignMembership', 'Actor', 'ActorControl', 'ActorAttribute', 'ActorResource', 'ActorDerivedSnapshot', 'ContentDefinition', 'ContentProfileVersion', 'ContentVersion', 'ContentEffectBinding', 'ActorContent', 'InventoryEntry', 'ActorEquipmentSlot', 'ActiveEffect', 'EffectResolution', 'EffectRoll', 'GameEvent', 'AuditEvent', 'IdempotencyRecord', 'Encounter', 'EncounterParticipant', 'EncounterOperation', 'EncounterRoll', 'EncounterConsequence')
         AND privilege.grantee = 0
     `;
     expect(rows[0]?.count).toBe(0);
+  });
+
+  it('does not grant the new security tables to Supabase API roles', async () => {
+    const rows = await prisma.$queryRaw<Array<{ grantee: string; table_name: string }>>`
+      SELECT grantee, table_name
+      FROM information_schema.role_table_grants
+      WHERE table_schema = 'public'
+        AND table_name IN ('User', 'ExternalIdentity', 'CampaignMembership', 'ActorControl', 'AuditEvent')
+        AND grantee IN ('anon', 'authenticated', 'service_role')
+    `;
+    expect(rows).toHaveLength(0);
   });
 
   it('removes legacy Actor columns and installs authoritative mechanics constraints', async () => {
@@ -943,9 +973,194 @@ describe('migration and PostgreSQL schema', () => {
   });
 
   it('keeps conditional Supabase revocations compatible when local roles do not exist', async () => {
-    const roles = await prisma.$queryRaw<Array<{ rolname: string }>>`SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated')`;
-    expect(roles.map((role) => role.rolname).every((role) => ['anon', 'authenticated'].includes(role))).toBe(true);
+    const roles = await prisma.$queryRaw<Array<{ rolname: string }>>`SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated', 'service_role')`;
+    expect(roles.map((role) => role.rolname).every((role) => ['anon', 'authenticated', 'service_role'].includes(role))).toBe(true);
     await expect(prisma.player.count()).resolves.toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('Phase 2B identity and authorization foundation', () => {
+  it('persists exact external identity links and enforces campaign and actor grants', async () => {
+    const suffix = randomUUID();
+    const issuer = `https://identity-${suffix}.example.test`;
+    const subject = `subject-${suffix}`;
+    const user = await prisma.user.create({ data: {} });
+    const otherUser = await prisma.user.create({ data: {} });
+    const externalIdentity = await prisma.externalIdentity.create({
+      data: {
+        userId: user.id,
+        issuer,
+        subject,
+        email: 'attribute-only@example.test',
+        emailVerified: true,
+      },
+    });
+    const player = await prisma.player.create({
+      data: {
+        userId: user.id,
+        slug: `identity-player-${suffix}`,
+        displayName: 'Identity Test Player',
+      },
+    });
+
+    await expect(prisma.externalIdentity.create({
+      data: { userId: otherUser.id, issuer, subject },
+    })).rejects.toMatchObject({ code: 'P2002' });
+    await expect(prisma.player.create({
+      data: {
+        userId: user.id,
+        slug: `duplicate-identity-player-${suffix}`,
+        displayName: 'Duplicate Identity Test Player',
+      },
+    })).rejects.toMatchObject({ code: 'P2002' });
+
+    await expect(createIdentityService(prismaIdentityRepository).resolveActiveUser({
+      issuer,
+      subject,
+    })).resolves.toMatchObject({
+      externalIdentityId: externalIdentity.id,
+      userId: user.id,
+      user: { id: user.id, status: UserStatus.ACTIVE },
+    });
+
+    const campaign = await prisma.campaign.findFirstOrThrow({
+      where: { code: seedScope.campaignRef, world: { player: { slug: seedScope.playerRef } } },
+    });
+    const actor = await prisma.actor.findUniqueOrThrow({
+      where: { campaignId_code: { campaignId: campaign.id, code: seedScope.playerRef } },
+    });
+    const membership = await prisma.campaignMembership.create({
+      data: {
+        campaignId: campaign.id,
+        userId: user.id,
+        role: CampaignMembershipRole.PLAYER,
+      },
+    });
+    const actorControl = await prisma.actorControl.create({
+      data: {
+        actorId: actor.id,
+        userId: user.id,
+        permission: ActorControlPermission.CONTROL,
+      },
+    });
+
+    await expect(prisma.campaignMembership.create({
+      data: {
+        campaignId: campaign.id,
+        userId: user.id,
+        role: CampaignMembershipRole.OBSERVER,
+      },
+    })).rejects.toMatchObject({ code: 'P2002' });
+    await expect(prisma.actorControl.create({
+      data: {
+        actorId: actor.id,
+        userId: user.id,
+        permission: ActorControlPermission.VIEW,
+      },
+    })).rejects.toMatchObject({ code: 'P2002' });
+
+    const authorization = createAuthorizationService(prismaAuthorizationRepository);
+    await expect(authorization.requireActorAccess({
+      userId: user.id,
+      campaignId: campaign.id,
+      actorId: actor.id,
+      requiredPermission: ActorControlPermission.CONTROL,
+    })).resolves.toMatchObject({
+      membershipId: membership.id,
+      actorControlId: actorControl.id,
+      role: CampaignMembershipRole.PLAYER,
+    });
+    await expect(authorization.requireActorAccess({
+      userId: otherUser.id,
+      campaignId: campaign.id,
+      actorId: actor.id,
+      requiredPermission: ActorControlPermission.VIEW,
+    })).rejects.toMatchObject({ statusCode: 403, auditCode: 'actor_access_denied' });
+    await expect(authorization.requireActorAccess({
+      userId: user.id,
+      campaignId: 'ffffffff-ffff-ffff-ffff-ffffffffffff',
+      actorId: actor.id,
+      requiredPermission: ActorControlPermission.VIEW,
+    })).rejects.toMatchObject({ statusCode: 403, auditCode: 'actor_access_denied' });
+
+    const auditEvent = await createAuditEventService(prismaAuditEventRepository).record({
+      eventType: 'actor_access',
+      userId: user.id,
+      externalIdentityId: externalIdentity.id,
+      campaignId: campaign.id,
+      actorId: actor.id,
+      decision: AuditDecision.ALLOW,
+      reasonCode: 'actor_control_active',
+      source: 'authorization_service',
+      metadata: {
+        role: CampaignMembershipRole.PLAYER,
+        permission: ActorControlPermission.CONTROL,
+        resourceType: 'actor',
+      },
+    });
+    await expect(prisma.auditEvent.findUniqueOrThrow({ where: { id: auditEvent.id } })).resolves.toMatchObject({
+      userId: user.id,
+      externalIdentityId: externalIdentity.id,
+      campaignId: campaign.id,
+      actorId: actor.id,
+      decision: AuditDecision.ALLOW,
+      metadata: {
+        role: CampaignMembershipRole.PLAYER,
+        permission: ActorControlPermission.CONTROL,
+        resourceType: 'actor',
+      },
+    });
+
+    await prisma.campaignMembership.update({
+      where: { id: membership.id },
+      data: { status: CampaignMembershipStatus.REVOKED, revokedAt: new Date() },
+    });
+    await expect(authorization.requireActorAccess({
+      userId: user.id,
+      campaignId: campaign.id,
+      actorId: actor.id,
+      requiredPermission: ActorControlPermission.VIEW,
+    })).rejects.toMatchObject({ statusCode: 403, auditCode: 'campaign_membership_inactive' });
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { status: UserStatus.SUSPENDED, suspendedAt: new Date() },
+    });
+    await expect(createIdentityService(prismaIdentityRepository).resolveActiveUser({
+      issuer,
+      subject,
+    })).rejects.toMatchObject({ statusCode: 403, code: 'USER_SUSPENDED' });
+    await expect(authorization.requireActorAccess({
+      userId: user.id,
+      campaignId: campaign.id,
+      actorId: actor.id,
+      requiredPermission: ActorControlPermission.VIEW,
+    })).rejects.toMatchObject({ statusCode: 403, auditCode: 'user_not_active' });
+
+    await expect(prisma.player.findUniqueOrThrow({ where: { id: player.id } })).resolves.toMatchObject({
+      userId: user.id,
+    });
+    await expect(prisma.player.findUniqueOrThrow({ where: { slug: seedScope.playerRef } })).resolves.toMatchObject({
+      userId: null,
+    });
+
+    await prisma.user.delete({ where: { id: user.id } });
+    await expect(prisma.auditEvent.findUniqueOrThrow({ where: { id: auditEvent.id } })).resolves.toMatchObject({
+      userId: null,
+      externalIdentityId: null,
+      campaignId: campaign.id,
+      actorId: actor.id,
+    });
+    await expect(prisma.player.findUniqueOrThrow({ where: { id: player.id } })).resolves.toMatchObject({
+      userId: null,
+    });
+    await expect(prisma.actorControl.findUnique({ where: { id: actorControl.id } })).resolves.toBeNull();
+    await expect(prisma.campaignMembership.findUnique({ where: { id: membership.id } })).resolves.toBeNull();
+    await expect(prisma.externalIdentity.findUnique({ where: { id: externalIdentity.id } })).resolves.toBeNull();
+
+    await prisma.auditEvent.delete({ where: { id: auditEvent.id } });
+    await prisma.player.delete({ where: { id: player.id } });
+    await prisma.user.delete({ where: { id: otherUser.id } });
   });
 });
 

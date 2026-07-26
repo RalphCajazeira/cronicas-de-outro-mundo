@@ -8,6 +8,34 @@ datasource db {
   provider = "postgresql"
 }
 
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum CampaignMembershipRole {
+  OWNER
+  GM
+  PLAYER
+  OBSERVER
+}
+
+enum CampaignMembershipStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum ActorControlPermission {
+  VIEW
+  CONTROL
+}
+
+enum AuditDecision {
+  ALLOW
+  DENY
+}
+
 enum CampaignStatus {
   DRAFT
   ACTIVE
@@ -222,12 +250,48 @@ enum EncounterRollKind {
   DETECTION
 }
 
+model User {
+  id                         String               @id @default(uuid()) @db.Uuid
+  status                     UserStatus           @default(ACTIVE)
+  suspendedAt                DateTime?
+  deletedAt                  DateTime?
+  createdAt                  DateTime             @default(now())
+  updatedAt                  DateTime             @updatedAt
+  externalIdentities         ExternalIdentity[]
+  player                     Player?
+  campaignMemberships        CampaignMembership[] @relation("CampaignMember")
+  grantedCampaignMemberships CampaignMembership[] @relation("CampaignMembershipGrantor")
+  actorControls              ActorControl[]
+  auditEvents                AuditEvent[]
+
+  @@index([status])
+}
+
+model ExternalIdentity {
+  id                  String       @id @default(uuid()) @db.Uuid
+  userId              String       @db.Uuid
+  issuer              String       @db.VarChar(512)
+  subject             String       @db.VarChar(512)
+  email               String?      @db.VarChar(320)
+  emailVerified       Boolean?
+  lastAuthenticatedAt DateTime?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  user                User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  auditEvents          AuditEvent[]
+
+  @@unique([issuer, subject])
+  @@index([userId])
+}
+
 model Player {
   id          String   @id @default(uuid()) @db.Uuid
+  userId      String?  @unique @db.Uuid
   slug        String   @unique
   displayName String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   worlds      World[]
 }
 
@@ -300,6 +364,8 @@ model Campaign {
   events             GameEvent[]
   effectResolutions  EffectResolution[]
   encounters         Encounter[]
+  memberships        CampaignMembership[]
+  auditEvents        AuditEvent[]
 
   @@unique([worldId, code])
   @@index([rulesetVersionId])
@@ -339,10 +405,75 @@ model Actor {
   targetedActiveEffects     ActiveEffect[]        @relation("ActiveEffectTargetActor")
   sourcedEffectResolutions  EffectResolution[]    @relation("EffectResolutionSourceActor")
   targetedEffectResolutions EffectResolution[]    @relation("EffectResolutionTargetActor")
-  encounterParticipants    EncounterParticipant[]
+  encounterParticipants     EncounterParticipant[]
+  controls                  ActorControl[]
+  auditEvents               AuditEvent[]
 
   @@unique([campaignId, code])
   @@index([campaignId, actorType, status])
+}
+
+model CampaignMembership {
+  id              String                   @id @default(uuid()) @db.Uuid
+  campaignId      String                   @db.Uuid
+  userId          String                   @db.Uuid
+  role            CampaignMembershipRole
+  status          CampaignMembershipStatus @default(ACTIVE)
+  revokedAt       DateTime?
+  grantedByUserId String?                  @db.Uuid
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+  campaign        Campaign                 @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user            User                     @relation("CampaignMember", fields: [userId], references: [id], onDelete: Cascade)
+  grantedByUser   User?                    @relation("CampaignMembershipGrantor", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([campaignId, userId])
+  @@index([userId, status])
+  @@index([campaignId, role, status])
+  @@index([grantedByUserId])
+}
+
+model ActorControl {
+  id         String                 @id @default(uuid()) @db.Uuid
+  actorId    String                 @db.Uuid
+  userId     String                 @db.Uuid
+  permission ActorControlPermission
+  revokedAt  DateTime?
+  createdAt  DateTime               @default(now())
+  updatedAt  DateTime               @updatedAt
+  actor      Actor                  @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  user       User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([actorId, userId])
+  @@index([userId, permission])
+}
+
+model AuditEvent {
+  id                 String            @id @default(uuid()) @db.Uuid
+  occurredAt         DateTime          @default(now())
+  eventType          String            @db.VarChar(100)
+  userId             String?           @db.Uuid
+  externalIdentityId String?           @db.Uuid
+  campaignId         String?           @db.Uuid
+  actorId            String?           @db.Uuid
+  requestId          String?           @db.VarChar(128)
+  traceId            String?           @db.VarChar(128)
+  decision           AuditDecision
+  reasonCode         String?           @db.VarChar(100)
+  source             String            @db.VarChar(100)
+  metadata           Json              @default("{}")
+  createdAt          DateTime          @default(now())
+  user               User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  externalIdentity   ExternalIdentity? @relation(fields: [externalIdentityId], references: [id], onDelete: SetNull)
+  campaign           Campaign?         @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  actor              Actor?            @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([userId, occurredAt])
+  @@index([externalIdentityId, occurredAt])
+  @@index([campaignId, occurredAt])
+  @@index([actorId, occurredAt])
+  @@index([eventType, occurredAt])
+  @@index([requestId])
 }
 
 model ActorAttribute {
