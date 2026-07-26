@@ -24,6 +24,7 @@
     "prisma:validate": "npm run prisma:validate --prefix backend",
     "prisma:generate": "npm run prisma:generate --prefix backend",
     "prisma:migrate:deploy": "npm run prisma:migrate:deploy --prefix backend",
+    "prisma:migrate:status": "npm run prisma:migrate:status --prefix backend",
     "prisma:seed": "npm run prisma:seed --prefix backend",
     "ci:validate": "npm run prisma:generate && npm run prisma:validate && npm run lint && npm run typecheck && npm run typecheck:widget && npm run test:unit && npm run test:integration && npm run test:widget && npm run build",
     "staging:classify": "npm run staging:classify --prefix backend --",

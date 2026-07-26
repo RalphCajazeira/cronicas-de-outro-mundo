@@ -197,7 +197,7 @@ jobs:
           DATABASE_URL: ${{ secrets.STAGING_MIGRATION_DATABASE_URL }}
         run: |
           set -euo pipefail
-          npm exec --prefix backend -- prisma migrate status
+          npm run prisma:migrate:status
           npm run staging:db:postflight
 
       - name: Trigger the exact Render commit

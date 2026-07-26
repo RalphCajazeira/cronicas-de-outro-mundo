@@ -22,6 +22,7 @@
     "prisma:validate": "prisma validate",
     "prisma:generate": "prisma generate",
     "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:migrate:status": "prisma migrate status",
     "prisma:seed": "tsx prisma/seed.ts",
     "db:clean-slate": "tsx scripts/clean-slate.ts",
     "staging:classify": "tsx scripts/classify-migrations.ts",
