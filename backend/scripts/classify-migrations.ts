@@ -7,6 +7,11 @@ export const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const ZERO_SHA = /^0{40}$/u;
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 const MIGRATION_PATH = /^backend\/prisma\/migrations\/[^/]+\/migration\.sql$/u;
+const REPOSITORY_ROOT = resolve(import.meta.dirname, '../..');
+
+export function resolveRepositoryPath(path: string): string {
+  return resolve(REPOSITORY_ROOT, path);
+}
 
 export type MigrationRisk = 'none' | 'low' | 'high';
 
@@ -199,7 +204,11 @@ export function resolveRequestedBase(base: string): { base: string; fallback: 'n
 }
 
 function git(args: string[]): string {
-  return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  return execFileSync('git', args, {
+    cwd: REPOSITORY_ROOT,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
 }
 
 function verifyCommit(sha: string): void {
@@ -218,12 +227,12 @@ function classifyChangedMigrations(entries: ChangedMigration[]): MigrationClassi
       || entry.status.startsWith('D')
       || entry.status.startsWith('R')
       || entry.status.startsWith('C')
-      || !existsSync(entry.path)
+      || !existsSync(resolveRepositoryPath(entry.path))
     ) {
       reasons.push(`${entry.path}:migration_history_change`);
       continue;
     }
-    const result = classifyMigrationSql(readFileSync(entry.path, 'utf8'));
+    const result = classifyMigrationSql(readFileSync(resolveRepositoryPath(entry.path), 'utf8'));
     reasons.push(...result.reasons.map((reason) => `${entry.path}:${reason}`));
   }
 
@@ -280,7 +289,10 @@ export function classifyGitRange(baseInput: string, headInput: string): Migratio
   verifyCommit(head);
   if (range.fallback === 'none') {
     verifyCommit(range.base);
-    execFileSync('git', ['merge-base', '--is-ancestor', range.base, head], { stdio: 'ignore' });
+    execFileSync('git', ['merge-base', '--is-ancestor', range.base, head], {
+      cwd: REPOSITORY_ROOT,
+      stdio: 'ignore',
+    });
   }
   const nameStatus = git(['diff', '--name-status', '--find-renames', range.base, head, '--', 'backend/prisma/migrations']);
   return classifyChangedMigrations(parseChangedMigrationEntries(nameStatus));

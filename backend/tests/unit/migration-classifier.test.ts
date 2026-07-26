@@ -1,9 +1,11 @@
+import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   EMPTY_TREE_SHA,
   classifyMigrationSql,
   parseChangedMigrationEntries,
   resolveRequestedBase,
+  resolveRepositoryPath,
   stripSqlCommentsAndStrings,
 } from '../../scripts/classify-migrations.js';
 
@@ -83,6 +85,12 @@ describe('staging migration classifier', () => {
 
   it('returns no migration entries for an empty diff', () => {
     expect(parseChangedMigrationEntries('')).toEqual([]);
+  });
+
+  it('resolves repository migration paths independently from the backend npm working directory', () => {
+    expect(existsSync(resolveRepositoryPath(
+      'backend/prisma/migrations/20260726150000_oauth_client_resource_policy/migration.sql',
+    ))).toBe(true);
   });
 
   it('captures added and modified migration files and flags history changes', () => {

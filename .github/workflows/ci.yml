@@ -54,6 +54,7 @@ jobs:
           set -euo pipefail
           npm ci --prefix backend --include=dev
           npm ci --prefix widget --include=dev
+          npm ci --prefix oauth-ui --include=dev
 
       - name: Run the canonical validation suite
         shell: bash

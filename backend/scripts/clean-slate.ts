@@ -16,7 +16,7 @@ export const cleanSlateObjects = {
     'ContentEffectBinding', 'ContentProfileVersion', 'ContentVersion', 'EffectResolution',
     'EffectRoll', 'EffectRulesVersion', 'Encounter', 'EncounterConsequence',
     'EncounterOperation', 'EncounterParticipant', 'EncounterRoll', 'ExternalIdentity', 'GameEvent',
-    'IdempotencyRecord', 'InventoryEntry', 'InventoryRulesVersion', 'Player', 'Ruleset',
+    'IdempotencyRecord', 'InventoryEntry', 'InventoryRulesVersion', 'OAuthClientResourcePolicy', 'Player', 'Ruleset',
     'RulesetVersion', 'User', 'World',
   ],
   enums: [
@@ -33,6 +33,7 @@ export const cleanSlateObjects = {
     ['active_effect_validate', ''], ['active_effect_validate_encounter_origin', ''],
     ['actor_equipment_slot_validate', ''], ['actor_reject_encounter_binding_change', ''],
     ['campaign_guard_ruleset_version_change', ''], ['content_definition_guard_identity_change', ''],
+    ['custom_access_token_hook', 'jsonb'],
     ['content_effect_binding_validate', ''], ['content_profile_version_block_mutation', ''],
     ['content_version_block_mutation', ''], ['effect_resolution_validate', ''],
     ['encounter_consequence_reject_invalid', ''], ['encounter_consequence_validate', 'uuid'],
@@ -43,7 +44,7 @@ export const cleanSlateObjects = {
     ['phase1j_immutable_record', ''], ['phase1la_immutable_record', ''],
     ['ruleset_version_block_delete', ''], ['ruleset_version_block_update', ''],
   ] as const,
-  // The thirteen migrations do not create standalone views, materialized views, procedures,
+  // The committed migrations do not create standalone views, materialized views, procedures,
   // domains, composite types, or sequences. Their presence is reported, never guessed away.
   standaloneRelations: [] as string[],
 } as const;

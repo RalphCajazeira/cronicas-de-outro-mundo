@@ -28,6 +28,11 @@ import { createAuthenticatedMcpRouter } from './modules/authenticated-mcp/authen
 import { createProtectedResourceMetadataRouter } from './modules/oauth-resource-server/protected-resource-metadata.routes.js';
 import { createIdentityService } from './modules/identity/identity.service.js';
 import type { IdentityRepository } from './modules/identity/identity.types.js';
+import { createOAuthUiRouter } from './modules/oauth-ui/oauth-ui.routes.js';
+import {
+  createFileOAuthUiAssets,
+  type OAuthUiAssets,
+} from './modules/oauth-ui/oauth-ui.assets.js';
 
 export interface AppDependencies {
   actorRepository: ActorRepository;
@@ -37,6 +42,7 @@ export interface AppDependencies {
   auditLog?: AuditLogWriter;
   encounterHttpService: EncounterHttpService;
   chatGptAppWidgetAssets?: WidgetAssets;
+  oauthUiAssets?: OAuthUiAssets;
   identityRepository?: IdentityRepository;
   releaseInfo?: ReleaseInfo;
 }
@@ -48,9 +54,13 @@ export function createApp(config: AppConfig, dependencies: AppDependencies) {
   app.use(createRequestAudit(dependencies.auditLog ?? (config.NODE_ENV === 'test' ? undefined : writeHttpAuditLog)));
   app.use(express.json({ limit: '100kb' }));
   const widgetAssets = dependencies.chatGptAppWidgetAssets ?? createFileWidgetAssets();
+  const oauthUiAssets = dependencies.oauthUiAssets ?? createFileOAuthUiAssets();
   app.use('/health', createHealthRouter(dependencies.readiness, dependencies.releaseInfo));
   app.use('/openapi.json', createOpenApiRouter(config.PUBLIC_BASE_URL ?? `http://localhost:${config.PORT}`));
   app.use('/mcp', createChatGptAppRouter(config, widgetAssets));
+  if (config.OAUTH_UI !== undefined) {
+    app.use(config.OAUTH_UI.basePath, createOAuthUiRouter(config.OAUTH_UI, oauthUiAssets));
+  }
   if (config.OAUTH_RESOURCE_SERVER !== undefined) {
     if (dependencies.identityRepository === undefined) {
       throw new Error('OAuth identity repository is unavailable');

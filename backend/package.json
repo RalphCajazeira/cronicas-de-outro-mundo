@@ -30,7 +30,9 @@
     "staging:db:postflight": "tsx scripts/staging-database.ts postflight",
     "staging:deploy:trigger": "tsx scripts/staging-deploy.ts trigger",
     "staging:deploy:poll": "tsx scripts/staging-deploy.ts poll",
-    "staging:smoke:mcp": "tsx scripts/smoke-staging-mcp.ts"
+    "staging:smoke:mcp": "tsx scripts/smoke-staging-mcp.ts",
+    "staging:oauth:policy": "tsx scripts/upsert-oauth-client-policy.ts",
+    "staging:oauth:identity": "tsx scripts/provision-synthetic-identity.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

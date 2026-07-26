@@ -35,6 +35,37 @@ describe('application configuration', () => {
     expect(() => parseConfig({ ...validEnvironment, CHATGPT_APP_PROOF_MODE: 'yes' })).toThrow('Invalid application configuration');
   });
 
+  it('enables the staging OAuth UI only with reviewed public configuration', () => {
+    expect(parseConfig(validEnvironment).OAUTH_UI).toBeUndefined();
+    expect(parseConfig({
+      ...validEnvironment,
+      OAUTH_UI_ENABLED: 'true',
+      OAUTH_UI_SUPABASE_URL: 'https://project-ref.supabase.co',
+      OAUTH_UI_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_public-test-key',
+    }).OAUTH_UI).toEqual({
+      supabaseUrl: 'https://project-ref.supabase.co',
+      supabasePublishableKey: 'sb_publishable_public-test-key',
+      environment: 'staging',
+      basePath: '/oauth',
+    });
+  });
+
+  it.each([
+    { OAUTH_UI_SUPABASE_URL: undefined },
+    { OAUTH_UI_SUPABASE_URL: 'http://project-ref.supabase.co' },
+    { OAUTH_UI_SUPABASE_URL: 'https://evil.example' },
+    { OAUTH_UI_SUPABASE_PUBLISHABLE_KEY: 'service-role-secret' },
+    { OAUTH_UI_BASE_PATH: '/other' },
+  ])('rejects incomplete or unsafe OAuth UI configuration: %o', (override) => {
+    expect(() => parseConfig({
+      ...validEnvironment,
+      OAUTH_UI_ENABLED: 'true',
+      OAUTH_UI_SUPABASE_URL: 'https://project-ref.supabase.co',
+      OAUTH_UI_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_public-test-key',
+      ...override,
+    })).toThrow('Invalid application configuration');
+  });
+
   it('keeps the OAuth resource server disabled unless a complete explicit configuration is present', () => {
     expect(parseConfig(validEnvironment).OAUTH_RESOURCE_SERVER).toBeUndefined();
     expect(() => parseConfig({ ...validEnvironment, OAUTH_RESOURCE_SERVER_ENABLED: 'true' }))

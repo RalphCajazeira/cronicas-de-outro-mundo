@@ -14,6 +14,8 @@ Nova plataforma do RPG narrativo **Crônicas de Outro Mundo**. O runtime ativo �
 
 ```text
 backend/                  API, Prisma, seed e testes
+oauth-ui/                 login e consentimento OAuth de staging
+widget/                   ChatGPT App widget público
 gpt/                      OpenAPI, instruções e Knowledge ativos
 docs/ai/                  contexto, arquitetura e decisões ativas
 render.yaml               Blueprint nativo Node, sem Docker
@@ -26,6 +28,7 @@ Use Node `22.22.0`, fixado em `.node-version` e nos manifests npm.
 ```powershell
 npm install
 npm install --prefix backend
+npm install --prefix oauth-ui
 Copy-Item backend/.env.example backend/.env
 ```
 
@@ -46,6 +49,8 @@ npm run test:all          # suíte rápida + integração
 npm run prisma:validate
 npm run lint
 npm run typecheck
+npm run typecheck:oauth-ui
+npm run test:oauth-ui
 npm run build
 ```
 
@@ -104,5 +109,9 @@ Prisma Migrate não gera down migration automática. Para rollback de aplicaçã
 
 Existem health/readiness/version, pipeline de staging, leituras normalizadas e
 persistência autoritativa do jogo. Produção, autenticação pública habilitada,
-OAuth ao vivo, frontend geral, comércio, lojas, viagens, CORS, rate limit e
+frontend geral, comércio, lojas, viagens, CORS, rate limit e
 observabilidade externa continuam fora deste rollout.
+
+A integração OAuth 2.1 de staging é isolada do frontend geral e está documentada
+em `docs/oauth-staging-integration.md`. OAuth de produção e DCR permanecem fora
+do escopo.

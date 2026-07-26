@@ -1,12 +1,12 @@
 # Roadmap — Game-GPT / Crônicas de Outro Mundo
 
-Atualizado em: 2026-07-24
+Atualizado em: 2026-07-26
 
 Este roadmap registra as próximas frentes conhecidas após a integração das correções finais da resolução automática. Nenhuma fase é considerada implantada ou publicada apenas por estar integrada em `develop`.
 
 ## Baseline
 
-- `develop`: `924c3b08c9db720cc69cdc851e0cc201d6ddaedd`.
+- Baseline anterior à Fase 2C-B: `67f84dc93b960b07c0eb657dee5e91a501d103fc`.
 - Fundação integrada: Fases 1A–1L-C, 1M-A e resolução de encontros por beat.
 - Próximo gate: revisar e implantar no staging as correções posteriores à baseline intermediária de auto-resolução e só então atualizar o GPT Builder.
 
@@ -64,8 +64,8 @@ Escopo previsto:
 - tempo, clima, localização e viagem;
 - vendedores, lojas e economia;
 - treinamento e progressão de habilidades;
-- frontend ou ChatGPT App para ficha, inventário, mapa, missões e atores;
-- autenticação pública, autorização por usuário, CORS, rate limit e observabilidade externa;
+- frontend geral ou expansão do ChatGPT App para ficha, inventário, mapa, missões e atores;
+- autenticação de produção, CORS, rate limit e observabilidade externa;
 - consolidação editorial contínua do Knowledge narrativo.
 
 ## Regras de sequência
