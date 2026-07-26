@@ -11,6 +11,7 @@ const supportedOAuthScopes = ['openid', 'email', 'profile', 'phone'] as const;
 
 const rawEnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  APP_ENV: z.enum(['local', 'test', 'staging', 'production']).default('local'),
   HOST: z.string().trim().min(1).default('0.0.0.0'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   DATABASE_URL: z.string().url(),
@@ -41,6 +42,9 @@ const rawEnvSchema = z.object({
     context.addIssue({ code: 'custom', path: ['PUBLIC_BASE_URL'], message: 'Required in production' });
   }
   if (value.OAUTH_UI_ENABLED) {
+    if (value.APP_ENV !== 'staging') {
+      context.addIssue({ code: 'custom', path: ['APP_ENV'], message: 'OAuth UI is restricted to the explicit staging product environment' });
+    }
     if (value.OAUTH_UI_SUPABASE_URL === undefined) {
       context.addIssue({ code: 'custom', path: ['OAUTH_UI_SUPABASE_URL'], message: 'Required when OAuth UI is enabled' });
     } else {
@@ -197,6 +201,7 @@ export interface OAuthUiConfig {
 const envSchema = rawEnvSchema.transform((value) => {
   const base = {
     NODE_ENV: value.NODE_ENV,
+    APP_ENV: value.APP_ENV,
     HOST: value.HOST,
     PORT: value.PORT,
     DATABASE_URL: value.DATABASE_URL,
@@ -241,6 +246,7 @@ const envSchema = rawEnvSchema.transform((value) => {
 
 export interface AppConfig {
   readonly NODE_ENV: 'development' | 'test' | 'production';
+  readonly APP_ENV: 'local' | 'test' | 'staging' | 'production';
   readonly HOST: string;
   readonly PORT: number;
   readonly DATABASE_URL: string;
@@ -253,6 +259,10 @@ export interface AppConfig {
 }
 
 export function parseConfig(environment: NodeJS.ProcessEnv): AppConfig {
+  if (environment.NODE_ENV === 'production'
+    && (environment.APP_ENV === undefined || environment.APP_ENV.trim().length === 0)) {
+    throw new Error('Invalid application configuration');
+  }
   const result = envSchema.safeParse(environment);
   if (!result.success) throw new Error('Invalid application configuration');
   return result.data;

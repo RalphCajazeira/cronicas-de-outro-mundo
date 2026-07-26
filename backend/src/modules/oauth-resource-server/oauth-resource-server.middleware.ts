@@ -26,7 +26,13 @@ import {
 
 export interface AuthenticatedMcpContext {
   readonly bindingFingerprint: string;
+  readonly userId: string;
   readonly userStatus: 'ACTIVE';
+  readonly recordAuthorizationDecision: (decision: {
+    readonly result: 'allowed' | 'denied';
+    readonly reasonCode?: string;
+    readonly resourceFingerprint?: string;
+  }) => void;
 }
 
 type IdentityService = ReturnType<typeof createIdentityService>;
@@ -40,9 +46,20 @@ export function readAuthenticatedMcpContext(authInfo: AuthInfo | undefined): Aut
   const context = authInfo?.extra?.authenticatedMcp;
   if (!isRecord(context)) return undefined;
   const bindingFingerprint = context.bindingFingerprint;
+  const userId = context.userId;
   const userStatus = context.userStatus;
-  if (typeof bindingFingerprint !== 'string' || userStatus !== 'ACTIVE') return undefined;
-  return { bindingFingerprint, userStatus };
+  const recordAuthorizationDecision = context.recordAuthorizationDecision;
+  if (typeof bindingFingerprint !== 'string'
+    || typeof userId !== 'string'
+    || userId.length === 0
+    || userStatus !== 'ACTIVE'
+    || typeof recordAuthorizationDecision !== 'function') return undefined;
+  return {
+    bindingFingerprint,
+    userId,
+    userStatus,
+    recordAuthorizationDecision: recordAuthorizationDecision as AuthenticatedMcpContext['recordAuthorizationDecision'],
+  };
 }
 
 function subjectFingerprint(issuer: string, subject: string): string {
@@ -66,6 +83,15 @@ function bindingFingerprint(issuer: string, subject: string, userId: string): st
     .update('\0')
     .update(userId)
     .digest('hex');
+}
+
+function userFingerprint(userId: string): string {
+  return createHash('sha256')
+    .update('authenticated-user-audit:v1')
+    .update('\0')
+    .update(userId)
+    .digest('hex')
+    .slice(0, 12);
 }
 
 function hasSingleStrictBearerHeader(request: Request): boolean {
@@ -195,7 +221,20 @@ export function createOAuthResourceServerAuthentication(
       void identityService.resolveActiveUser(principal).then((identity) => {
         const authenticatedMcp: AuthenticatedMcpContext = {
           bindingFingerprint: bindingFingerprint(principal.issuer, principal.subject, identity.userId),
+          userId: identity.userId,
           userStatus: 'ACTIVE',
+          recordAuthorizationDecision: (decision) => {
+            updateAuthenticationAudit(response, {
+              category: decision.result === 'allowed'
+                ? 'game_context_allowed'
+                : 'game_context_denied',
+              result: decision.result,
+              ...(decision.reasonCode === undefined ? {} : { reasonCode: decision.reasonCode }),
+              ...(decision.resourceFingerprint === undefined
+                ? {}
+                : { resourceFingerprint: decision.resourceFingerprint }),
+            });
+          },
         };
         request.auth = {
           token: '',
@@ -208,6 +247,7 @@ export function createOAuthResourceServerAuthentication(
           category: 'authenticated',
           issuerDisposition: 'allowed',
           result: 'allowed',
+          userFingerprint: userFingerprint(identity.userId),
         });
         next();
       }).catch((error: unknown) => {

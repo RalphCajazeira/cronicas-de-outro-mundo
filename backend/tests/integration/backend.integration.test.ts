@@ -57,6 +57,9 @@ import { prismaAuthorizationRepository } from '../../src/modules/authorization/a
 import { createIdentityService } from '../../src/modules/identity/identity.service.js';
 import { prismaIdentityRepository } from '../../src/modules/identity/identity.repository.js';
 import {
+  prismaAuthenticatedGameContextRepository,
+} from '../../src/modules/authenticated-game-context/authenticated-game-context.repository.js';
+import {
   createCoreV1EncounterSnapshotHash,
   parseCoreV1EncounterSnapshot,
   serializeCoreV1EncounterState,
@@ -99,6 +102,7 @@ const dependencies = {
   readiness: prismaReadinessCheck,
   encounterHttpService: createEncounterHttpService(encounterService),
   identityRepository: prismaIdentityRepository,
+  authenticatedGameContextRepository: prismaAuthenticatedGameContextRepository,
 };
 const app = createApp(config, dependencies);
 const server = app.listen(0);
@@ -9527,6 +9531,7 @@ describe('Phase 2C-A authenticated MCP foundation', () => {
       const oauthConfig = parseConfig({
         ...process.env,
         NODE_ENV: 'test',
+        APP_ENV: 'test',
         OAUTH_RESOURCE_SERVER_ENABLED: 'true',
         OAUTH_ISSUER: oauthIssuer.issuer,
         OAUTH_AUTHORIZATION_SERVER: oauthIssuer.issuer,
@@ -9587,6 +9592,7 @@ describe('Phase 2C-A authenticated MCP foundation', () => {
         authenticated: true,
         userStatus: 'ACTIVE',
         environment: 'test',
+        runtimeMode: 'test',
       });
       expect(JSON.stringify(result)).not.toMatch(/issuer|subject|email|userId|campaign|player|actor|token|claim/i);
       await expect(prisma.externalIdentity.findUniqueOrThrow({ where: { id: externalIdentity.id } }))
@@ -9600,6 +9606,217 @@ describe('Phase 2C-A authenticated MCP foundation', () => {
     } finally {
       await prisma.externalIdentity.deleteMany({ where: { id: externalIdentity.id } });
       await prisma.user.deleteMany({ where: { id: user.id } });
+      await oauthIssuer.close();
+    }
+  });
+
+  it('loads only memberships and characters authorized for the authenticated User across sessions', async () => {
+    const oauthIssuer = await startOAuthTestIssuer();
+    const suffix = randomUUID();
+    const resourceUri = 'http://127.0.0.1:3000/mcp-auth';
+    const rulesetVersion = await ensureCurrentCoreRulesetVersion(prisma);
+    const createdPlayerIds: string[] = [];
+    const createdUserIds: string[] = [];
+
+    async function createAuthorizedGraph(label: 'a' | 'b') {
+      const subject = `oauth-context-${label}-${suffix}`;
+      const user = await prisma.user.create({
+        data: {
+          externalIdentities: {
+            create: {
+              issuer: oauthIssuer.issuer,
+              subject,
+              email: `oauth-context-${label}-${suffix}@cronicas.example.test`,
+            },
+          },
+        },
+      });
+      const player = await prisma.player.create({
+        data: {
+          userId: user.id,
+          slug: `oauth-context-${label}-${suffix}`,
+          displayName: `Synthetic Player ${label.toUpperCase()}`,
+        },
+      });
+      const world = await prisma.world.create({
+        data: {
+          playerId: player.id,
+          defaultRulesetVersionId: rulesetVersion.id,
+          code: `oauth-world-${label}-${suffix}`,
+          name: `Synthetic World ${label.toUpperCase()}`,
+        },
+      });
+      const campaign = await prisma.campaign.create({
+        data: {
+          worldId: world.id,
+          rulesetVersionId: rulesetVersion.id,
+          code: `oauth-campaign-${label}-${suffix}`,
+          name: `Synthetic Campaign ${label.toUpperCase()}`,
+          status: CampaignStatus.ACTIVE,
+        },
+      });
+      const actor = await prisma.actor.create({
+        data: {
+          campaignId: campaign.id,
+          code: `oauth-character-${label}-${suffix}`,
+          name: `Synthetic Character ${label.toUpperCase()}`,
+          actorType: ActorType.CHARACTER,
+        },
+      });
+      await prisma.campaignMembership.create({
+        data: {
+          campaignId: campaign.id,
+          userId: user.id,
+          role: label === 'a' ? CampaignMembershipRole.PLAYER : CampaignMembershipRole.OBSERVER,
+        },
+      });
+      await prisma.actorControl.create({
+        data: {
+          actorId: actor.id,
+          userId: user.id,
+          permission: label === 'a'
+            ? ActorControlPermission.CONTROL
+            : ActorControlPermission.VIEW,
+        },
+      });
+      createdPlayerIds.push(player.id);
+      createdUserIds.push(user.id);
+      return { subject };
+    }
+
+    const firstGraph = await createAuthorizedGraph('a');
+    const secondGraph = await createAuthorizedGraph('b');
+    try {
+      const oauthConfig = parseConfig({
+        ...process.env,
+        NODE_ENV: 'test',
+        APP_ENV: 'test',
+        OAUTH_RESOURCE_SERVER_ENABLED: 'true',
+        OAUTH_ISSUER: oauthIssuer.issuer,
+        OAUTH_AUTHORIZATION_SERVER: oauthIssuer.issuer,
+        OAUTH_JWKS_URI: oauthIssuer.jwksUri,
+        OAUTH_RESOURCE_URI: resourceUri,
+        OAUTH_PROTECTED_MCP_PATH: '/mcp-auth',
+        OAUTH_REQUIRED_SCOPES: 'openid',
+        OAUTH_ALLOWED_ALGORITHMS: 'ES256',
+        OAUTH_JWKS_TIMEOUT_MS: '500',
+        OAUTH_JWKS_COOLDOWN_MS: '0',
+      });
+      const oauthApi = request(createApp(oauthConfig, dependencies));
+
+      async function initialize(subject: string) {
+        const token = await oauthIssuer.sign({
+          audience: resourceUri,
+          scope: 'openid',
+          subject,
+        });
+        const initialized = await oauthApi.post('/mcp-auth')
+          .set('authorization', `Bearer ${token}`)
+          .set('accept', 'application/json, text/event-stream')
+          .send({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {
+              protocolVersion: '2025-06-18',
+              capabilities: {},
+              clientInfo: { name: 'integration-context-client', version: '0.1.0' },
+            },
+          });
+        expect(initialized.status).toBe(200);
+        return {
+          token,
+          sessionId: String(initialized.headers['mcp-session-id']),
+        };
+      }
+
+      async function loadContext(
+        session: { token: string; sessionId: string },
+        argumentsValue: Record<string, string> = {},
+      ) {
+        const response = await oauthApi.post('/mcp-auth')
+          .set('authorization', `Bearer ${session.token}`)
+          .set('mcp-session-id', session.sessionId)
+          .set('accept', 'application/json, text/event-stream')
+          .send({
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'tools/call',
+            params: {
+              name: 'loadAuthenticatedGameContext',
+              arguments: argumentsValue,
+            },
+          });
+        expect(response.status).toBe(200);
+        const result = bodyRecord(response).result as Record<string, unknown>;
+        return result.structuredContent as Record<string, unknown>;
+      }
+
+      const countsBefore = await Promise.all([
+        prisma.user.count(),
+        prisma.player.count(),
+        prisma.campaign.count(),
+        prisma.actor.count(),
+        prisma.campaignMembership.count(),
+        prisma.actorControl.count(),
+        prisma.auditEvent.count(),
+      ]);
+      const firstSession = await initialize(firstGraph.subject);
+      const secondSessionForSameUser = await initialize(firstGraph.subject);
+      const otherUserSession = await initialize(secondGraph.subject);
+      const firstContext = await loadContext(firstSession);
+      const remountedContext = await loadContext(secondSessionForSameUser);
+      const otherContext = await loadContext(otherUserSession);
+
+      expect(firstContext).toMatchObject({
+        authState: 'AUTHENTICATED',
+        player: { displayName: 'Synthetic Player A' },
+        narrativeContext: {
+          campaignName: 'Synthetic Campaign A',
+          characterName: 'Synthetic Character A',
+        },
+      });
+      expect(remountedContext).toEqual(firstContext);
+      expect(otherContext).toMatchObject({
+        player: { displayName: 'Synthetic Player B' },
+        narrativeContext: {
+          campaignName: 'Synthetic Campaign B',
+          characterName: 'Synthetic Character B',
+        },
+      });
+      const firstSerialized = JSON.stringify(firstContext);
+      expect(firstSerialized).not.toMatch(/Synthetic (Player|World|Campaign|Character) B/u);
+      expect(firstSerialized).not.toMatch(/userId|campaignId|actorId|email|subject|metadata|MASTER_ONLY/i);
+
+      const otherCampaignRef = (
+        (otherContext.widgetContext as Record<string, unknown>).campaigns as Array<Record<string, unknown>>
+      )[0]?.selectionRef;
+      expect(typeof otherCampaignRef).toBe('string');
+      const denied = await loadContext(firstSession, {
+        campaignSelectionRef: String(otherCampaignRef),
+      });
+      expect(denied).toMatchObject({
+        authState: 'AUTHORIZATION_ERROR',
+        player: null,
+        narrativeContext: null,
+        widgetContext: {
+          campaigns: [],
+          sessionState: 'AUTHORIZATION_ERROR',
+        },
+      });
+      expect(JSON.stringify(denied)).not.toMatch(/Synthetic (Player|World|Campaign|Character) B/u);
+      await expect(Promise.all([
+        prisma.user.count(),
+        prisma.player.count(),
+        prisma.campaign.count(),
+        prisma.actor.count(),
+        prisma.campaignMembership.count(),
+        prisma.actorControl.count(),
+        prisma.auditEvent.count(),
+      ])).resolves.toEqual(countsBefore);
+    } finally {
+      await prisma.player.deleteMany({ where: { id: { in: createdPlayerIds } } });
+      await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
       await oauthIssuer.close();
     }
   });

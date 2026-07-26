@@ -22,6 +22,7 @@ import type { WidgetAssets } from './resources/widget-assets.js';
 
 const widgetAssets: WidgetAssets = {
   readHome: () => Promise.resolve('<!doctype html><title>Crônicas widget</title>'),
+  readAuthenticatedHome: () => Promise.resolve('<!doctype html><title>Crônicas authenticated widget</title>'),
   readPreview: () => Promise.resolve('<!doctype html><title>Crônicas preview</title>'),
 };
 

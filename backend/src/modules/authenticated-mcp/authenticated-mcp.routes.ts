@@ -6,6 +6,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { AppConfig, OAuthResourceServerConfig } from '../../config/env.js';
 import type { createIdentityService } from '../identity/identity.service.js';
+import type { createAuthenticatedGameContextService } from '../authenticated-game-context/authenticated-game-context.service.js';
+import type { WidgetAssets } from '../chatgpt-app/resources/widget-assets.js';
 import {
   createOAuthResourceServerAuthentication,
   readAuthenticatedMcpContext,
@@ -14,6 +16,7 @@ import { updateAuthenticationAudit } from '../../shared/http/request-audit.js';
 import {
   createAuthenticatedMcpServer,
   GET_AUTHENTICATED_BOOTSTRAP_TOOL,
+  LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL,
 } from './authenticated-mcp.server.js';
 
 interface AuthenticatedMcpSession {
@@ -23,6 +26,7 @@ interface AuthenticatedMcpSession {
 }
 
 type IdentityService = ReturnType<typeof createIdentityService>;
+type AuthenticatedGameContextService = ReturnType<typeof createAuthenticatedGameContextService>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -52,12 +56,17 @@ function auditTool(request: Request, response: Response): void {
   if (params.name === GET_AUTHENTICATED_BOOTSTRAP_TOOL) {
     updateAuthenticationAudit(response, { tool: GET_AUTHENTICATED_BOOTSTRAP_TOOL });
   }
+  if (params.name === LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL) {
+    updateAuthenticationAudit(response, { tool: LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL });
+  }
 }
 
 export function createAuthenticatedMcpRouter(
-  environment: AppConfig['NODE_ENV'],
+  appConfig: Pick<AppConfig, 'APP_ENV' | 'NODE_ENV'>,
   config: OAuthResourceServerConfig,
   identityService: IdentityService,
+  gameContextService: AuthenticatedGameContextService,
+  widgetAssets: WidgetAssets,
 ) {
   const router = Router();
   const sessions = new Map<string, AuthenticatedMcpSession>();
@@ -89,7 +98,7 @@ export function createAuthenticatedMcpRouter(
       if (session === undefined
         && request.header('mcp-session-id') === undefined
         && isInitializeRequest(request.body)) {
-        const server = createAuthenticatedMcpServer(environment);
+        const server = createAuthenticatedMcpServer(appConfig, gameContextService, widgetAssets);
         let sessionId: string | undefined;
         let sessionCleanedUp = false;
         const transport = new StreamableHTTPServerTransport({

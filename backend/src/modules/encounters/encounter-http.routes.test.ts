@@ -7,7 +7,7 @@ import type { HttpAuditRecord } from '../../shared/http/request-audit.js';
 import type { EncounterPublicDto } from './encounter-http.dto.js';
 import type { EncounterHttpService } from './encounter-http.service.js';
 
-const config: AppConfig = { NODE_ENV: 'test', HOST: '0.0.0.0', PORT: 3000, DATABASE_URL: 'postgresql://test:test@localhost:5432/test', DIRECT_URL: 'postgresql://test:test@localhost:5432/test', RPG_API_KEY: 'test-key', CHATGPT_APP_PROOF_MODE: false };
+const config: AppConfig = { NODE_ENV: 'test', APP_ENV: 'test', HOST: '0.0.0.0', PORT: 3000, DATABASE_URL: 'postgresql://test:test@localhost:5432/test', DIRECT_URL: 'postgresql://test:test@localhost:5432/test', RPG_API_KEY: 'test-key', CHATGPT_APP_PROOF_MODE: false };
 const scope = { playerRef: 'player', worldRef: 'world', campaignRef: 'campaign', encounterRef: 'encounter' };
 const result: EncounterPublicDto = {
   result: 'encounter_loaded', operation: 'load', encounterRef: 'encounter', lifecycleStatus: 'awaiting_intent', stateVersion: 1,

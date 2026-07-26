@@ -5,7 +5,15 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { UserStatus } from '../../generated/prisma/client.js';
+import {
+  ActorControlPermission,
+  ActorStatus,
+  ActorType,
+  CampaignMembershipRole,
+  CampaignMembershipStatus,
+  CampaignStatus,
+  UserStatus,
+} from '../../generated/prisma/client.js';
 import type { ExternalIdentityRecord, IdentityRepository } from '../identity/identity.types.js';
 import { createIdentityService } from '../identity/identity.service.js';
 import { createProtectedResourceMetadataRouter } from '../oauth-resource-server/protected-resource-metadata.routes.js';
@@ -17,6 +25,10 @@ import { createRequestAudit, type HttpAuditRecord } from '../../shared/http/requ
 import { createHealthRouter } from '../health/health.routes.js';
 import { createChatGptAppRouter } from '../chatgpt-app/mcp/chatgpt-app.routes.js';
 import type { WidgetAssets } from '../chatgpt-app/resources/widget-assets.js';
+import type {
+  AuthenticatedGameContextRepository,
+} from '../authenticated-game-context/authenticated-game-context.types.js';
+import { createAuthenticatedGameContextService } from '../authenticated-game-context/authenticated-game-context.service.js';
 import {
   startOAuthTestIssuer,
   symmetricToken,
@@ -24,12 +36,16 @@ import {
 } from '../../../tests/support/oauth-test-issuer.js';
 import { createAuthenticatedMcpRouter } from './authenticated-mcp.routes.js';
 import {
+  AUTHENTICATED_HOME_RESOURCE_URI,
   authenticatedBootstrapSchema,
   GET_AUTHENTICATED_BOOTSTRAP_TOOL,
+  LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL,
 } from './authenticated-mcp.server.js';
+import { authenticatedGameContextSchema } from '../authenticated-game-context/authenticated-game-context.dto.js';
 
 const widgetAssets: WidgetAssets = {
   readHome: () => Promise.resolve('<!doctype html><title>Public fixture</title>'),
+  readAuthenticatedHome: () => Promise.resolve('<!doctype html><title>Authenticated home</title>'),
   readPreview: () => Promise.resolve('<!doctype html><title>Public preview</title>'),
 };
 
@@ -52,12 +68,15 @@ function identity(
   status: UserStatus = UserStatus.ACTIVE,
   overrides: Partial<ExternalIdentityRecord['user']> = {},
 ): ExternalIdentityRecord {
+  const internalUserId = subject === 'second-subject'
+    ? '00000000-0000-4000-8000-000000000002'
+    : '00000000-0000-4000-8000-000000000001';
   return {
     id: `external-${subject}`,
     issuer: oauthIssuer.issuer,
     subject,
     user: {
-      id: `user-${subject}`,
+      id: internalUserId,
       status,
       suspendedAt: status === UserStatus.SUSPENDED ? new Date('2026-01-01T00:00:00.000Z') : null,
       deletedAt: status === UserStatus.DELETED ? new Date('2026-01-01T00:00:00.000Z') : null,
@@ -74,6 +93,50 @@ function repository(records: readonly ExternalIdentityRecord[]): IdentityReposit
   };
 }
 
+function gameAccessRepository(): AuthenticatedGameContextRepository {
+  return {
+    findGameAccessByUserId: (requestedUserId) => Promise.resolve({
+      id: requestedUserId,
+      status: UserStatus.ACTIVE,
+      suspendedAt: null,
+      deletedAt: null,
+      player: {
+        id: 'player-synthetic',
+        displayName: 'OAuth Staging Tester',
+      },
+      campaignMemberships: [{
+        campaignId: 'campaign-synthetic',
+        userId: requestedUserId,
+        role: CampaignMembershipRole.PLAYER,
+        status: CampaignMembershipStatus.ACTIVE,
+        revokedAt: null,
+        campaign: {
+          id: 'campaign-synthetic',
+          name: 'OAuth Readonly Test',
+          status: CampaignStatus.ACTIVE,
+          world: { name: 'OAuth Test World' },
+        },
+      }],
+      actorControls: [{
+        actorId: 'actor-synthetic',
+        userId: requestedUserId,
+        permission: ActorControlPermission.CONTROL,
+        revokedAt: null,
+        actor: {
+          id: 'actor-synthetic',
+          campaignId: 'campaign-synthetic',
+          name: 'Test Adventurer',
+          level: 1,
+          actorType: ActorType.CHARACTER,
+          status: ActorStatus.ACTIVE,
+          resources: [],
+          derivedSnapshot: null,
+        },
+      }],
+    }),
+  };
+}
+
 interface AuthenticatedHost {
   readonly audits: HttpAuditRecord[];
   readonly endpoint: URL;
@@ -87,6 +150,9 @@ interface AuthenticatedHost {
 async function startHost(
   records: readonly ExternalIdentityRecord[],
   configOverrides: Partial<OAuthResourceServerConfig> = {},
+  gameContextRepository: AuthenticatedGameContextRepository = {
+    findGameAccessByUserId: () => Promise.resolve(null),
+  },
 ): Promise<AuthenticatedHost> {
   const app = express();
   const audits: HttpAuditRecord[] = [];
@@ -113,9 +179,14 @@ async function startHost(
     });
   });
   app.use('/mcp-auth', createAuthenticatedMcpRouter(
-    'test',
+    { APP_ENV: 'test', NODE_ENV: 'test' },
     config,
     identityService,
+    createAuthenticatedGameContextService(gameContextRepository, {
+      APP_ENV: 'test',
+      NODE_ENV: 'test',
+    }),
+    widgetAssets,
   ));
 
   return {
@@ -444,7 +515,7 @@ describe('authenticated MCP resource server', () => {
     const { client, transport } = await connectClient(host, await host.token());
     try {
       const tools = await client.listTools();
-      expect(tools.tools).toHaveLength(1);
+      expect(tools.tools).toHaveLength(2);
       expect(tools.tools[0]).toMatchObject({
         name: GET_AUTHENTICATED_BOOTSTRAP_TOOL,
         annotations: {
@@ -462,6 +533,7 @@ describe('authenticated MCP resource server', () => {
         authenticated: true,
         userStatus: 'ACTIVE',
         environment: 'test',
+        runtimeMode: 'test',
       });
       const serialized = JSON.stringify(result);
       expect(serialized).not.toMatch(/issuer|subject|email|userId|player|campaign|actor|narrative|claim|token/i);
@@ -473,6 +545,122 @@ describe('authenticated MCP resource server', () => {
       });
       expect(audit?.requestId).toMatch(/^[0-9a-f-]{36}$/u);
       expect(audit?.traceId).toMatch(/^[0-9a-f-]{36}$/u);
+    } finally {
+      await transport.terminateSession();
+      await client.close();
+      await host.close();
+    }
+  });
+
+  it('loads only the authorized read-only projection and serves its separate widget resource', async () => {
+    const host = await startHost(
+      [identity('active-subject')],
+      {},
+      gameAccessRepository(),
+    );
+    const { client, transport } = await connectClient(host, await host.token());
+    try {
+      const tools = await client.listTools();
+      expect(tools.tools.find((tool) => tool.name === LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL))
+        .toMatchObject({
+          annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+          _meta: {
+            ui: {
+              resourceUri: AUTHENTICATED_HOME_RESOURCE_URI,
+            },
+          },
+        });
+      const resources = await client.listResources();
+      expect(resources.resources).toContainEqual(expect.objectContaining({
+        uri: AUTHENTICATED_HOME_RESOURCE_URI,
+      }));
+      const resource = await client.readResource({ uri: AUTHENTICATED_HOME_RESOURCE_URI });
+      expect(resource.contents[0]).toMatchObject({
+        uri: AUTHENTICATED_HOME_RESOURCE_URI,
+        text: '<!doctype html><title>Authenticated home</title>',
+      });
+
+      const result = CallToolResultSchema.parse(await client.callTool({
+        name: LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL,
+        arguments: {},
+      }));
+      const context = authenticatedGameContextSchema.parse(result.structuredContent);
+      expect(context).toMatchObject({
+        authState: 'AUTHENTICATED',
+        player: { displayName: 'OAuth Staging Tester' },
+        narrativeContext: {
+          campaignName: 'OAuth Readonly Test',
+          characterName: 'Test Adventurer',
+        },
+        widgetContext: {
+          banner: 'TEST — CONTEXTO AUTENTICADO',
+          sessionState: 'READ_ONLY_READY',
+          navigation: { canMutate: false },
+        },
+        environment: {
+          appEnvironment: 'test',
+          runtimeMode: 'test',
+          syntheticAccount: false,
+        },
+      });
+      expect(result.content).toEqual([{
+        type: 'text',
+        text: 'Contexto autenticado somente leitura carregado para a conta de teste.',
+      }]);
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toMatch(/userId|issuer|subject|email|token|claim|metadata|MASTER_ONLY|secret|inventory/i);
+      expect(host.audits.at(-1)?.authentication).toMatchObject({
+        category: 'game_context_allowed',
+        result: 'allowed',
+        reasonCode: 'context_loaded',
+        tool: LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL,
+      });
+    } finally {
+      await transport.terminateSession();
+      await client.close();
+      await host.close();
+    }
+  });
+
+  it('returns a generic authorization state for a foreign opaque selection and rejects raw IDs', async () => {
+    const host = await startHost(
+      [identity('active-subject')],
+      {},
+      gameAccessRepository(),
+    );
+    const { client, transport } = await connectClient(host, await host.token());
+    try {
+      const denied = CallToolResultSchema.parse(await client.callTool({
+        name: LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL,
+        arguments: { campaignSelectionRef: `sel_${'x'.repeat(43)}` },
+      }));
+      expect(authenticatedGameContextSchema.parse(denied.structuredContent)).toMatchObject({
+        authState: 'AUTHORIZATION_ERROR',
+        player: null,
+        narrativeContext: null,
+        widgetContext: {
+          campaigns: [],
+          sessionState: 'AUTHORIZATION_ERROR',
+        },
+      });
+      expect(JSON.stringify(denied)).not.toMatch(/campaign-synthetic|actor-synthetic|owner|membership/i);
+      expect(host.audits.at(-1)?.authentication).toMatchObject({
+        category: 'game_context_denied',
+        result: 'denied',
+        reasonCode: 'resource_unavailable',
+      });
+
+      const rawId = CallToolResultSchema.parse(await client.callTool({
+        name: LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL,
+        arguments: { campaignSelectionRef: '7b43ce60-3dca-4ab0-8fe1-33a2ca9e43ba' },
+      }));
+      expect(rawId.isError).toBe(true);
+      expect(JSON.stringify(rawId)).not.toContain('campaign-synthetic');
     } finally {
       await transport.terminateSession();
       await client.close();
@@ -567,7 +755,7 @@ describe('authenticated MCP resource server', () => {
       expect(suspended.status).toBe(403);
 
       records[0] = identity('active-subject');
-      expect((await client.listTools()).tools).toHaveLength(1);
+      expect((await client.listTools()).tools).toHaveLength(2);
     } finally {
       await transport.terminateSession();
       await client.close();

@@ -14,9 +14,14 @@ ChatGPT
   → ExternalIdentity(issuer, subject)
   → User ACTIVE
   → getAuthenticatedBootstrap
+  → loadAuthenticatedGameContext
 ```
 
 O endpoint público `/mcp` continua separado. O backend não recebe, persiste nem encaminha refresh token, authorization code ou credenciais da conta sintética.
+
+A Fase 2D adiciona somente leitura real por Player, CampaignMembership e
+ActorControl, com widget próprio. O contrato, fixture e proteção contra IDOR
+estão em `authenticated-readonly-game-context.md`.
 
 ## SPA OAuth
 

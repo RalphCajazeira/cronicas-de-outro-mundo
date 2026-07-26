@@ -143,12 +143,15 @@ passa quando:
 Se um commit diferente do anterior esperado ficar live, o rollout para. O
 endpoint de versão retorna somente `status`, `commit`, `branch` e `nodeVersion`.
 
-O smoke usa o cliente oficial MCP para initialize, `tools/list`,
+O smoke público usa o cliente oficial MCP para initialize, `tools/list`,
 `resources/list`, `resources/read`, fixture connect/load e encerramento da
 sessão por `DELETE`. Em seguida, abre uma segunda sessão e comprova que ela volta
-a `DISCONNECTED`. Ele confirma `/mcp-auth` e metadata OAuth em 404. A fixture é
-pública, isolada em memória, não cria identidade, não persiste e não consulta
-dado narrativo real.
+a `DISCONNECTED`. Quando o resource server OAuth está habilitado, ele confirma
+o challenge e os documentos de metadata sem usar token; quando desabilitado,
+confirma 404. A fixture é pública, isolada em memória, não cria identidade, não
+persiste e não consulta dado narrativo real. O smoke real da
+`loadAuthenticatedGameContext` ocorre separadamente, depois do provisioning,
+com a conta sintética e o App OAuth privado.
 
 ## Disparo manual
 

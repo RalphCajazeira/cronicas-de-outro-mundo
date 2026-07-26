@@ -3,6 +3,7 @@ import { parseConfig } from './env.js';
 
 const validEnvironment = {
   NODE_ENV: 'test',
+  APP_ENV: 'test',
   PORT: '3100',
   DATABASE_URL: 'postgresql://user:secret@localhost:5432/game_gpt_test',
   RPG_API_KEY: 'secret-test-key',
@@ -10,7 +11,13 @@ const validEnvironment = {
 
 describe('application configuration', () => {
   it('parses a valid configuration', () => {
-    expect(parseConfig(validEnvironment)).toMatchObject({ NODE_ENV: 'test', HOST: '0.0.0.0', PORT: 3100, RPG_API_KEY: 'secret-test-key' });
+    expect(parseConfig(validEnvironment)).toMatchObject({
+      NODE_ENV: 'test',
+      APP_ENV: 'test',
+      HOST: '0.0.0.0',
+      PORT: 3100,
+      RPG_API_KEY: 'secret-test-key',
+    });
   });
 
   it('rejects a missing required variable', () => {
@@ -25,8 +32,17 @@ describe('application configuration', () => {
   });
 
   it('requires a public HTTPS base URL in production', () => {
-    expect(() => parseConfig({ ...validEnvironment, NODE_ENV: 'production' })).toThrow('Invalid application configuration');
-    expect(parseConfig({ ...validEnvironment, NODE_ENV: 'production', PUBLIC_BASE_URL: 'https://rpg.example.com' }).PUBLIC_BASE_URL).toBe('https://rpg.example.com');
+    expect(() => parseConfig({
+      ...validEnvironment,
+      NODE_ENV: 'production',
+      APP_ENV: undefined,
+    })).toThrow('Invalid application configuration');
+    expect(parseConfig({
+      ...validEnvironment,
+      NODE_ENV: 'production',
+      APP_ENV: 'production',
+      PUBLIC_BASE_URL: 'https://rpg.example.com',
+    }).PUBLIC_BASE_URL).toBe('https://rpg.example.com');
   });
 
   it('keeps the ChatGPT fixture proof mode disabled unless explicitly enabled', () => {
@@ -39,6 +55,7 @@ describe('application configuration', () => {
     expect(parseConfig(validEnvironment).OAUTH_UI).toBeUndefined();
     expect(parseConfig({
       ...validEnvironment,
+      APP_ENV: 'staging',
       OAUTH_UI_ENABLED: 'true',
       OAUTH_UI_SUPABASE_URL: 'https://project-ref.supabase.co',
       OAUTH_UI_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_public-test-key',
@@ -59,6 +76,7 @@ describe('application configuration', () => {
   ])('rejects incomplete or unsafe OAuth UI configuration: %o', (override) => {
     expect(() => parseConfig({
       ...validEnvironment,
+      APP_ENV: 'staging',
       OAUTH_UI_ENABLED: 'true',
       OAUTH_UI_SUPABASE_URL: 'https://project-ref.supabase.co',
       OAUTH_UI_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_public-test-key',
@@ -100,6 +118,7 @@ describe('application configuration', () => {
     expect(parseConfig({
       ...validEnvironment,
       NODE_ENV: 'production',
+      APP_ENV: 'staging',
       PUBLIC_BASE_URL: 'https://cronicas-de-outro-mundo-staging-api.onrender.com',
       OAUTH_RESOURCE_SERVER_ENABLED: 'true',
       OAUTH_ISSUER: 'https://project-ref.supabase.co/auth/v1',
@@ -145,6 +164,7 @@ describe('application configuration', () => {
     expect(() => parseConfig({
       ...validEnvironment,
       NODE_ENV: 'production',
+      APP_ENV: 'staging',
       PUBLIC_BASE_URL: 'https://api.example.test',
       OAUTH_RESOURCE_SERVER_ENABLED: 'true',
       OAUTH_ISSUER: new URL('/auth/v1', jwksUri).href,

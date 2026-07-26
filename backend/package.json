@@ -32,7 +32,8 @@
     "staging:deploy:poll": "tsx scripts/staging-deploy.ts poll",
     "staging:smoke:mcp": "tsx scripts/smoke-staging-mcp.ts",
     "staging:oauth:policy": "tsx scripts/upsert-oauth-client-policy.ts",
-    "staging:oauth:identity": "tsx scripts/provision-synthetic-identity.ts"
+    "staging:oauth:identity": "tsx scripts/provision-synthetic-identity.ts",
+    "staging:oauth:readonly-fixture": "tsx scripts/provision-authenticated-readonly-fixture.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

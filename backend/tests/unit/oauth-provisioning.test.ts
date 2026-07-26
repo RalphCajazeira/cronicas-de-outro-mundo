@@ -4,6 +4,10 @@ import {
   validateOAuthClientPolicyInput,
 } from '../../scripts/upsert-oauth-client-policy.js';
 import { validateSyntheticIdentityInput } from '../../scripts/provision-synthetic-identity.js';
+import {
+  AUTHENTICATED_FIXTURE_PROJECT_REF,
+  validateAuthenticatedFixtureProvisioningEnvironment,
+} from '../../scripts/provision-authenticated-readonly-fixture.js';
 
 describe('OAuth staging provisioning guards', () => {
   it('requires one explicit dry-run or apply mode', () => {
@@ -53,5 +57,29 @@ describe('OAuth staging provisioning guards', () => {
       '7f43ce60-3dca-4ab0-8fe1-33a2ca9e43ba',
       'real-person@example.com',
     )).toThrow();
+  });
+
+  it('restricts the authenticated fixture to the explicit staging environment and project', () => {
+    const connectionString = `postgresql://cronicas_staging_app.${AUTHENTICATED_FIXTURE_PROJECT_REF}:secret@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=verify-full`;
+    expect(() => validateAuthenticatedFixtureProvisioningEnvironment({
+      appEnvironment: 'staging',
+      projectRef: AUTHENTICATED_FIXTURE_PROJECT_REF,
+      connectionString,
+    })).not.toThrow();
+    expect(() => validateAuthenticatedFixtureProvisioningEnvironment({
+      appEnvironment: 'production',
+      projectRef: AUTHENTICATED_FIXTURE_PROJECT_REF,
+      connectionString,
+    })).toThrow();
+    expect(() => validateAuthenticatedFixtureProvisioningEnvironment({
+      appEnvironment: 'staging',
+      projectRef: 'another-project-ref',
+      connectionString,
+    })).toThrow();
+    expect(() => validateAuthenticatedFixtureProvisioningEnvironment({
+      appEnvironment: 'staging',
+      projectRef: AUTHENTICATED_FIXTURE_PROJECT_REF,
+      connectionString: 'postgresql://postgres:secret@example.com:5432/postgres?sslmode=verify-full',
+    })).toThrow();
   });
 });
