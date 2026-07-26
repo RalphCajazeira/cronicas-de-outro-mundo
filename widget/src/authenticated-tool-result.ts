@@ -9,7 +9,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function restoreHostOmittedNulls(input: unknown): unknown {
+function restoreMissingNulls(
+  input: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> {
+  return keys.reduce<Record<string, unknown>>(
+    (restored, key) => key in restored ? restored : { ...restored, [key]: null },
+    input,
+  );
+}
+
+function restoreNullableResources(input: unknown): unknown {
+  if (!Array.isArray(input)) return input;
+  return input.map((resource) => isRecord(resource)
+    ? restoreMissingNulls(resource, ['maximum'])
+    : resource);
+}
+
+function restoreAuthenticatedContextNulls(input: unknown): unknown {
   if (!isRecord(input) || !isRecord(input.widgetContext)) return input;
   const authState = input.authState;
   const sessionState = input.widgetContext.sessionState;
@@ -26,16 +43,128 @@ function restoreHostOmittedNulls(input: unknown): unknown {
     && !('activeContext' in input.widgetContext);
   const restoreConnectedPlayer = (sessionState === 'NO_PLAYER' || sessionState === 'AUTHORIZATION_ERROR')
     && !('connectedPlayer' in input.widgetContext);
+  const narrativeContext = isRecord(input.narrativeContext)
+    ? {
+        ...restoreMissingNulls(input.narrativeContext, [
+          'characterName',
+          'publicLocation',
+          'pendingDecision',
+        ]),
+        criticalResources: restoreNullableResources(input.narrativeContext.criticalResources),
+      }
+    : input.narrativeContext;
+  const activeContext = isRecord(input.widgetContext.activeContext)
+    ? {
+        ...restoreMissingNulls(input.widgetContext.activeContext, ['character']),
+        resources: restoreNullableResources(input.widgetContext.activeContext.resources),
+      }
+    : input.widgetContext.activeContext;
   return {
     ...input,
     ...(restorePlayer ? { player: null } : {}),
-    ...(restoreNarrative ? { narrativeContext: null } : {}),
+    ...(restoreNarrative ? { narrativeContext: null } : { narrativeContext }),
     widgetContext: {
       ...input.widgetContext,
-      ...(restoreActive ? { activeContext: null } : {}),
+      ...(restoreActive ? { activeContext: null } : { activeContext }),
       ...(restoreConnectedPlayer ? { connectedPlayer: null } : {}),
     },
   };
+}
+
+function restoreIdentityNulls(input: unknown): unknown {
+  return isRecord(input)
+    ? restoreMissingNulls(input, ['species', 'className', 'role', 'description'])
+    : input;
+}
+
+function restoreActionNulls(input: unknown): unknown {
+  return isRecord(input) ? restoreMissingNulls(input, ['actionProfile']) : input;
+}
+
+function restorePageNulls(input: unknown): unknown {
+  return isRecord(input) ? restoreMissingNulls(input, ['nextCursor']) : input;
+}
+
+function restoreAuthenticatedViewNulls(input: unknown): unknown {
+  if (!isRecord(input) || !isRecord(input.data)) return input;
+  const data = input.data;
+
+  if (input.view === 'SUMMARY') {
+    return { ...input, data: { ...data, identity: restoreIdentityNulls(data.identity) } };
+  }
+  if (input.view === 'SHEET') {
+    return {
+      ...input,
+      data: {
+        ...data,
+        identity: restoreIdentityNulls(data.identity),
+        activeStatusEffects: Array.isArray(data.activeStatusEffects)
+          ? data.activeStatusEffects.map((effect) => isRecord(effect)
+            ? restoreMissingNulls(effect, ['description'])
+            : effect)
+          : data.activeStatusEffects,
+      },
+    };
+  }
+  if (input.view === 'INVENTORY') {
+    return {
+      ...input,
+      data: {
+        ...data,
+        items: Array.isArray(data.items)
+          ? data.items.map((item) => isRecord(item)
+            ? restoreMissingNulls(item, ['description'])
+            : item)
+          : data.items,
+        page: restorePageNulls(data.page),
+      },
+    };
+  }
+  if (input.view === 'EQUIPMENT') {
+    return {
+      ...input,
+      data: {
+        ...data,
+        slots: Array.isArray(data.slots)
+          ? data.slots.map((slot) => {
+              if (!isRecord(slot)) return slot;
+              const restoredSlot = restoreMissingNulls(slot, ['item']);
+              if (!isRecord(restoredSlot.item)) return restoredSlot;
+              const restoredItem = restoreMissingNulls(restoredSlot.item, [
+                'description',
+                'action',
+              ]);
+              return {
+                ...restoredSlot,
+                item: {
+                  ...restoredItem,
+                  action: restoreActionNulls(restoredItem.action),
+                },
+              };
+            })
+          : data.slots,
+      },
+    };
+  }
+  if (input.view === 'ABILITIES') {
+    return {
+      ...input,
+      data: {
+        ...data,
+        abilities: Array.isArray(data.abilities)
+          ? data.abilities.map((ability) => {
+              if (!isRecord(ability)) return ability;
+              return {
+                ...restoreMissingNulls(ability, ['description']),
+                action: restoreActionNulls(ability.action),
+              };
+            })
+          : data.abilities,
+        page: restorePageNulls(data.page),
+      },
+    };
+  }
+  return input;
 }
 
 export function parseAuthenticatedToolResult(input: unknown): AuthenticatedContext {
@@ -45,7 +174,7 @@ export function parseAuthenticatedToolResult(input: unknown): AuthenticatedConte
     throw new Error('O contexto autenticado estruturado não foi recebido.');
   }
   const parsed = authenticatedContextSchema.safeParse(
-    restoreHostOmittedNulls(result.structuredContent),
+    restoreAuthenticatedContextNulls(result.structuredContent),
   );
   if (!parsed.success) throw new Error('O contexto autenticado não corresponde ao contrato seguro.');
   return parsed.data;
@@ -57,7 +186,9 @@ export function parseAuthenticatedCharacterViewResult(input: unknown): Authentic
   if (result.structuredContent === undefined) {
     throw new Error('A seção autenticada estruturada não foi recebida.');
   }
-  const parsed = authenticatedCharacterViewSchema.safeParse(result.structuredContent);
+  const parsed = authenticatedCharacterViewSchema.safeParse(
+    restoreAuthenticatedViewNulls(result.structuredContent),
+  );
   if (!parsed.success) throw new Error('A seção autenticada não corresponde ao contrato seguro.');
   return parsed.data;
 }

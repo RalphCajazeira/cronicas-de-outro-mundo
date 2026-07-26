@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { AuthenticatedContext } from '../src/authenticated-context.js';
 import type { AuthenticatedCharacterView } from '../src/authenticated-character-view.js';
 import { renderAuthenticatedContext } from '../src/authenticated-render.js';
-import { parseAuthenticatedCharacterViewResult } from '../src/authenticated-tool-result.js';
+import {
+  parseAuthenticatedCharacterViewResult,
+  parseAuthenticatedToolResult,
+} from '../src/authenticated-tool-result.js';
 
 const campaignSelectionRef = `sel_${'a'.repeat(43)}`;
 const characterSelectionRef = `sel_${'b'.repeat(43)}`;
@@ -123,20 +126,47 @@ const inventory: AuthenticatedCharacterView = {
   },
 };
 
-function toolResult(view: AuthenticatedCharacterView) {
+function toolResult(structuredContent: unknown) {
   return {
     content: [{ type: 'text' as const, text: 'Seção segura' }],
-    structuredContent: view,
+    structuredContent,
   };
 }
 
 describe('authenticated character widget v2', () => {
+  it('restores nullable context fields omitted by the ChatGPT host before strict parsing', () => {
+    const narrativeContext = context.narrativeContext!;
+    const {
+      publicLocation: _publicLocation,
+      pendingDecision: _pendingDecision,
+      ...hostNarrativeContext
+    } = narrativeContext;
+    const hostContext = {
+      ...context,
+      narrativeContext: hostNarrativeContext,
+    };
+
+    expect(parseAuthenticatedToolResult(toolResult(hostContext))).toEqual(context);
+  });
+
   it('parses the strict view contract and rejects extra privileged fields', () => {
     expect(parseAuthenticatedCharacterViewResult(toolResult(summary))).toEqual(summary);
     expect(() => parseAuthenticatedCharacterViewResult(toolResult({
       ...summary,
       MASTER_ONLY: 'secret',
     } as AuthenticatedCharacterView))).toThrow(/contrato seguro/u);
+  });
+
+  it('restores nullable view fields omitted by the ChatGPT host without relaxing the schema', () => {
+    const { role: _role, ...hostIdentity } = summary.data.identity;
+    const hostSummary = {
+      ...summary,
+      data: {
+        ...summary.data,
+        identity: hostIdentity,
+      },
+    };
+    expect(parseAuthenticatedCharacterViewResult(toolResult(hostSummary))).toEqual(summary);
   });
 
   it('renders all lazy tabs and the authorized summary without mutation controls', () => {
