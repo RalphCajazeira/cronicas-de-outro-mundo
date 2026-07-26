@@ -14,6 +14,7 @@ export function createProtectedResourceMetadataRouter(config: OAuthResourceServe
     scopes_supported: [...config.requiredScopes],
     bearer_methods_supported: ['header'],
   });
+  router.use('/.well-known/oauth-protected-resource', metadataHandler(metadata));
   router.use(metadataUrl.pathname, metadataHandler(metadata));
   return router;
 }

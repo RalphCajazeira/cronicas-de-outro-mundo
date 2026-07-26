@@ -117,6 +117,7 @@ describe('HTTP API', () => {
   it('keeps authenticated MCP and its metadata unavailable when OAuth is disabled', async () => {
     const app = appWith();
     await request(app).post('/mcp-auth').send({}).expect(404);
+    await request(app).get('/.well-known/oauth-protected-resource').expect(404);
     await request(app).get('/.well-known/oauth-protected-resource/mcp-auth').expect(404);
   });
   it('returns safe readiness states without authentication', async () => {
