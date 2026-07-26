@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   callCompatibilityTool,
+  connectWithTimeout,
   readCompatibilityToolOutput,
   readToolResultNotification,
   sendCompatibilityMessage,
@@ -49,6 +50,25 @@ describe('ChatGPT host compatibility bridge', () => {
       structuredContent,
     });
     expect(readCompatibilityToolOutput({})).toBeUndefined();
+  });
+
+  it('prefers the complete MCP result preserved in ChatGPT response metadata', () => {
+    const result = {
+      content: [{ type: 'text', text: 'Resumo seguro' }],
+      structuredContent: { authState: 'AUTHENTICATED' },
+    };
+    expect(readCompatibilityToolOutput({
+      openai: {
+        toolOutput: { authState: 'OUTDATED' },
+        toolResponseMetadata: { mcp_tool_result: result },
+      },
+    })).toBe(result);
+  });
+
+  it('bounds a host connection that never completes', async () => {
+    await expect(connectWithTimeout(new Promise(() => undefined), 1))
+      .rejects.toThrow(/timed out/u);
+    await expect(connectWithTimeout(Promise.resolve(), 10)).resolves.toBeUndefined();
   });
 
   it('delegates lazy tool calls without changing their name or arguments', async () => {

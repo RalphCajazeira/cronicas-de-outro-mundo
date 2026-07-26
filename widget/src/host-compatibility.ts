@@ -1,5 +1,6 @@
 export interface HostCompatibilityApi {
   toolOutput?: unknown;
+  toolResponseMetadata?: unknown;
   callTool?: (
     name: string,
     argumentsValue: Record<string, string>,
@@ -37,6 +38,24 @@ function isToolResultNotification(value: unknown): value is JsonRpcNotification 
     && 'params' in value;
 }
 
+export async function connectWithTimeout(
+  connection: Promise<unknown>,
+  timeoutMs = 3_000,
+): Promise<void> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(
+      () => reject(new Error('The host connection timed out.')),
+      timeoutMs,
+    );
+  });
+  try {
+    await Promise.race([connection, timeout]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
 export function readToolResultNotification(
   event: Pick<MessageEvent<unknown>, 'data' | 'source'>,
   expectedSource: MessageEventSource | null,
@@ -48,6 +67,10 @@ export function readToolResultNotification(
 export function readCompatibilityToolOutput(
   host: HostCompatibilityWindow,
 ): unknown | undefined {
+  const metadata = host.openai?.toolResponseMetadata;
+  if (isRecord(metadata) && isRecord(metadata.mcp_tool_result)) {
+    return metadata.mcp_tool_result;
+  }
   const output = host.openai?.toolOutput;
   if (output === undefined) return undefined;
   return {
