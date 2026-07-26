@@ -14,6 +14,7 @@ import {
 } from './authenticated-tool-result.js';
 import {
   callCompatibilityTool,
+  connectWithTimeout,
   readCompatibilityToolOutput,
   readToolResultNotification,
   sendCompatibilityMessage,
@@ -374,7 +375,7 @@ window.addEventListener('pagehide', () => {
 }, { once: true });
 
 root.innerHTML = '<div class="loading-state" role="status">Carregando contexto autorizado…</div>';
-void app.connect().catch(() => {
+void connectWithTimeout(app.connect()).catch(() => {
   compatibilityBridgeActive = true;
   const initialResult = bufferedHostResult ?? readCompatibilityToolOutput(window);
   bufferedHostResult = undefined;
