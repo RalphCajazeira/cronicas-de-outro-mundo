@@ -49,6 +49,8 @@ export const AUTHENTICATED_FIXTURE_ISSUER =
 const expectedDatabase = 'postgres';
 const expectedRole = 'cronicas_staging_app';
 const expectedSchema = 'public';
+const provisioningTransactionMaxWaitMs = 10_000;
+const provisioningTransactionTimeoutMs = 60_000;
 const repositoryRoot = resolve(import.meta.dirname, '../..');
 const manifestPath = resolve(repositoryRoot, AUTHENTICATED_FIXTURE_MANIFEST_PATH);
 const subjectPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -1087,7 +1089,11 @@ export async function runAuthenticatedFixtureProvisioning(
         postflight,
         isolationVerified: true,
       };
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }, {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      maxWait: provisioningTransactionMaxWaitMs,
+      timeout: provisioningTransactionTimeoutMs,
+    });
   }
 
   try {
@@ -1095,7 +1101,11 @@ export async function runAuthenticatedFixtureProvisioning(
       const result = await provisionFixture(transaction, input);
       if (input.mode === 'dry-run') throw new DryRunRollback(result);
       return result;
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }, {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      maxWait: provisioningTransactionMaxWaitMs,
+      timeout: provisioningTransactionTimeoutMs,
+    });
   } catch (error) {
     if (error instanceof DryRunRollback) return error.result;
     throw error;

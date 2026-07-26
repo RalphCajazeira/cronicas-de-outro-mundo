@@ -12,6 +12,7 @@ const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 const REPOSITORY_ROOT = resolve(import.meta.dirname, '../..');
 const manifestSchema = z.object({
   operationId: z.literal('authenticated-readonly-fixture-v1'),
+  executionRevision: z.literal(2),
   environment: z.literal('staging'),
   type: z.literal('AUTHENTICATED_READONLY_FIXTURE'),
   enabled: z.literal(true),
