@@ -302,6 +302,39 @@ describe('authenticated read-only widget', () => {
     expect(html).not.toMatch(/MASTER_ONLY|secret|uuid/i);
   });
 
+  it('offers only transport retry, and reloads official blocked, rejected, or conflict results', () => {
+    const renderState = {
+      activeView: 'SUMMARY' as const,
+      view: null,
+      loading: false,
+      error: null,
+      selectedDetail: null,
+    };
+    const transportFailure = renderAuthenticatedContext(context(), {
+      ...renderState,
+      observation: {
+        focus: 'a porta antiga',
+        feedback: 'Não foi possível registrar agora.',
+        recovery: 'SAFE_RETRY',
+      },
+    });
+    expect(transportFailure).toContain('data-action="retry-observation"');
+
+    for (const status of ['BLOCKED', 'REJECTED', 'CONFLICT'] as const) {
+      const officialResult = renderAuthenticatedContext(context(), {
+        ...renderState,
+        observation: {
+          focus: 'a porta antiga',
+          feedback: `Resultado ${status}`,
+          recovery: 'RELOAD_REQUIRED',
+        },
+      });
+      expect(officialResult).toContain('data-action="reload-observation"');
+      expect(officialResult).not.toContain('data-action="retry-observation"');
+      expect(officialResult).toContain('value="a porta antiga"');
+    }
+  });
+
   it('strictly parses stable selection results and rejects privileged additions', () => {
     const result = {
       status: 'SUCCESS',

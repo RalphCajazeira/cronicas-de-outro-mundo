@@ -146,9 +146,7 @@ function applyResult(input: unknown): void {
       const result = parseAuthenticatedObservationResult(input);
       loading = false;
       observationFeedback = result.action.summary;
-      observationRecovery = result.action.status === 'CONFLICT'
-        ? 'RELOAD_REQUIRED'
-        : result.action.status === 'RESOLVED' ? 'NONE' : 'SAFE_RETRY';
+      observationRecovery = result.action.status === 'RESOLVED' ? 'NONE' : 'RELOAD_REQUIRED';
       if (result.action.status === 'RESOLVED') {
         lastObservationArguments = null;
         observationFocus = '';
@@ -179,7 +177,7 @@ function applyResult(input: unknown): void {
         loadContext({});
         return;
       }
-      if (result.action.status !== 'BLOCKED') lastObservationArguments = null;
+      lastObservationArguments = null;
       render();
       return;
     }

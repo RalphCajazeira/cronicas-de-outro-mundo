@@ -146,12 +146,16 @@ export function createPrismaAuthenticatedGameContextRepository(
         },
       });
     },
-    findLatestObservation(campaignId, actorId) {
+    findLatestObservation(gameSessionId, campaignId, actorId) {
       return client.gameEvent.findFirst({
         where: {
           campaignId,
           actorId,
           eventType: 'AUTHENTICATED_OBSERVATION',
+          payload: {
+            path: ['gameSessionId'],
+            equals: gameSessionId,
+          },
         },
         select: {
           payload: true,
