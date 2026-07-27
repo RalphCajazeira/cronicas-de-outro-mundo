@@ -250,3 +250,29 @@ Até nova autorização:
 - produção não recebe deploy;
 - dados reais não entram em fixtures;
 - toda validação nova usa staging e identidades sintéticas.
+
+## D-016 — Game UI React compartilhada e host web local
+
+**Status:** aprovada
+
+Decisão:
+
+```text
+GameApp React única
+→ Vite web local para desenvolvimento/HMR
+→ overlay MV3 no Shadow DOM
+→ page.html da extensão
+```
+
+Os componentes não chamam `chrome.*`; diferenças de host vivem em adapters de
+plataforma. O host web não é produto publicado e usa apenas fixture sintética
+local, sem backend, OAuth ou dados reais.
+
+## D-017 — Rollout automático de staging fail-closed
+
+**Status:** aprovada
+
+Para mudanças de backend autorizadas em `develop`, o CI/CD aplica migrations,
+faz deploy do SHA exato somente após CI verde e executa health, readiness e
+smokes. Falhas fecham o fluxo. Mudanças exclusivas de extensão não alteram
+`backend/` nem `render.yaml` e, portanto, não disparam esse rollout.

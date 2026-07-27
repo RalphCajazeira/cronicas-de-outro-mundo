@@ -9,7 +9,8 @@ Backend → regras, identidade, autorização e persistência autoritativas
 Widget → fallback leve e diagnóstico
 ```
 
-O shell da extensão é uma superfície nova e isolada em `extension/`. Ele não
+O shell da extensão é uma superfície nova e isolada em `extension/`. A UI vive
+uma única vez em `GameApp` React e é montada pelos três hosts. Ela não
 reutiliza código do `widget/`, pois aquele pacote é acoplado ao App SDK do
 ChatGPT. Ambos podem compartilhar no futuro apenas contratos públicos e
 projeções autorizadas pelo backend, quando existir uma necessidade real.
@@ -17,8 +18,12 @@ projeções autorizadas pelo backend, quando existir uma necessidade real.
 ## Contextos e comunicação
 
 ```text
-content script (host ChatGPT)
-  ├─ Shadow DOM → launcher + overlay
+GameApp React compartilhada
+  ├─ host web local (Vite + HMR)
+  ├─ content script (host ChatGPT) → Shadow DOM → launcher + overlay
+  └─ page.html → página própria
+
+content script e page
   └─ mensagens tipadas ↔ service worker
 
 service worker
@@ -38,8 +43,9 @@ desse canal e não há listener de `postMessage`.
 
 O content script é estático, executa no mundo isolado padrão e monta um único
 host `#cronicas-extension-root` com Shadow DOM. Seus estilos vivem dentro da
-raiz e não há CSS global injetado. O script não consulta transcript, composer,
-cookies, storage da página, tokens, rede ou APIs internas.
+raiz e não há CSS global injetado. Ele apenas cria host, ShadowRoot e root para
+montar React; não contém regras visuais. O script não consulta transcript,
+composer, cookies, storage da página, tokens, rede ou APIs internas.
 
 | Controle | Configuração |
 | --- | --- |
@@ -80,6 +86,17 @@ o usuário exclusivamente da identidade verificada pelo backend e respeitar
 `GameSession`, seleção autorizada e projeções read-only já documentadas.
 
 ## Ambientes
+
+O host web local Vite é o ambiente principal de desenvolvimento rápido. Ele
+monta a mesma `GameApp` sem APIs Chrome e persiste somente preferências visuais
+em armazenamento local do navegador. Não é produto publicado, não usa backend,
+OAuth, CORS remoto, segredo ou dados reais. `npm run dev:web --prefix
+extension` oferece HMR; `build:web` produz somente `extension/dist-web/`.
+
+`PlatformAdapter` mantém chamadas Chrome dentro da camada de plataforma: o
+adapter web não depende da extensão, e o adapter da extensão reutiliza as
+mensagens e preferências visuais existentes. A página própria omite controles
+sem ação válida.
 
 Nesta fundação o pacote é deliberadamente igual nos ambientes locais, staging
 e produção futura: não há URL de backend, segredo ou configuração privada no

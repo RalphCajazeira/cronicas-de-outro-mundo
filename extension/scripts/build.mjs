@@ -27,7 +27,7 @@ async function buildAll(watch) {
   const entries = [
     { entryPoints: [source('background', 'service-worker.ts')], outfile: path.join(dist, 'background', 'service-worker.js'), format: 'esm' },
     { entryPoints: [source('content', 'content-script.ts')], outfile: path.join(dist, 'content', 'content-script.js'), format: 'iife' },
-    { entryPoints: [source('pages', 'page.ts')], outfile: path.join(dist, 'page.js'), format: 'esm' },
+    { entryPoints: [source('entries', 'page.tsx')], outfile: path.join(dist, 'page.js'), format: 'esm' },
   ];
   if (!watch) {
     await Promise.all(entries.map((entry) => build({ ...options, ...entry })));

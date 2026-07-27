@@ -72,6 +72,7 @@ Actions/OpenAPI no GPT
 | Widget como frontend principal | `DEPRECATED` | decisão arquitetural de 2026-07-27 | Mantido como fallback, bootstrap e diagnóstico. |
 | Fundação da extensão MV3 | `MANUALLY_VALIDATED` | PR #81; PR #82; PR #84; suíte de extensão | Shell local validado manualmente em etapa anterior; este ajuste corrige apenas suíte de validação do Render. |
 | Botão flutuante + overlay + página própria | `INTEGRATED` | pacote `extension/` + testes + validação de regressão | Overlay manualmente validado em rodadas anteriores. Página própria coberta automaticamente por testes; validação manual nesta sessão não executada no navegador. |
+| Game UI React compartilhada + host Vite local | `IMPLEMENTED_LOCAL` | `extension/src/app`, adapters e builds web/MV3 | Mesmo componente atende web, overlay e página própria com fixture local; aguarda PR, CI e checkpoint manual da extensão descompactada. |
 | OAuth próprio da extensão | `NOT_STARTED` | — | Próxima fase após validação/hotfix da fundação. |
 | Leitura real do backend pela extensão | `NOT_STARTED` | — | Reutilizar projeções e autorização existentes. |
 | Atualização automática da extensão | `NOT_STARTED` | — | Começar por recarga após mutação/polling; evoluir para SSE ou WebSocket. |
@@ -127,7 +128,7 @@ Não reutilizar Ralph, Kael, Elarion ou campanhas reais como fixture da extensã
 
 ## 8. Pendências imediatas
 
-1. concluir o hotfix de revisão da fundação da extensão [concluído nesta task];
+1. revisar, integrar e validar a migração React/Web da extensão;
 2. carregar `extension/dist` manualmente no Chromium;
 3. validar botão, overlay, teclado, página própria e console;
 4. implementar OAuth próprio da extensão;
