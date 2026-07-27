@@ -60,6 +60,32 @@ Fora de escopo:
 - realtime;
 - ação real.
 
+### EXT-2A — UI React compartilhada e host web local
+
+**Estado:** `IMPLEMENTED_LOCAL`
+
+Objetivo:
+
+- usar uma única `GameApp` React em web local, overlay e página própria;
+- desenvolver pelo host Vite com HMR;
+- manter fixture local e a fundação MV3 sem OAuth ou backend;
+- isolar APIs Chrome em adapters de plataforma.
+
+Critérios:
+
+- web local sem APIs Chrome;
+- overlay no Shadow DOM com root React único e cleanup;
+- página própria sem controles inertes;
+- testes React, build web e build MV3 verdes;
+- checkpoint manual de `extension/dist` no Chromium após integração.
+
+Fora de escopo:
+
+- OAuth;
+- backend;
+- leitura ou ações reais;
+- publicação web.
+
 ### EXT-2 — OAuth próprio da extensão
 
 **Estado:** `NOT_STARTED`
