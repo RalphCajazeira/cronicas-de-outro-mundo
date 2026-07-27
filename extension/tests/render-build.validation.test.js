@@ -47,8 +47,12 @@ describe('render build validation', () => {
 
   it('rejects unknown workspace install when referenced by build', async () => {
     await expect(() => validateRenderBuildConfiguration({
-      rootPackage: { ...baseScripts, build: 'npm run build:widget && npm run build:backend-missing' },
+      rootPackage: {
+        ...baseScripts,
+        build: 'npm run build:widget && npm run build:widget-extra',
+        'build:widget-extra': 'npm run build --prefix extension-extra',
+      },
       renderYaml: 'buildCommand: npm ci --prefix backend --include=dev && npm ci --prefix widget --include=dev && npm ci --prefix oauth-ui --include=dev && npm ci --prefix extension --include=dev && npm run build',
-    })).rejects.toThrow('Root build references missing script build:backend-missing.');
+    })).rejects.toThrow('must install extension-extra');
   });
 });
