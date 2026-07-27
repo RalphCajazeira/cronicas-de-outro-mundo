@@ -38,6 +38,15 @@ function isToolResultNotification(value: unknown): value is JsonRpcNotification 
     && 'params' in value;
 }
 
+export function createInitialContextRefreshGate(): () => boolean {
+  let pending = true;
+  return () => {
+    if (!pending) return false;
+    pending = false;
+    return true;
+  };
+}
+
 export async function connectWithTimeout(
   connection: Promise<unknown>,
   timeoutMs = 3_000,
