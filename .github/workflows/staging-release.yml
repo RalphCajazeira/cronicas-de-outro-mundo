@@ -32,6 +32,7 @@ jobs:
       high_risk_operation_id: ${{ steps.high_risk_authorization.outputs.operation_id || '' }}
       provisioning_manifest_changed: ${{ steps.provisioning.outputs.changed || 'false' }}
       provisioning_operation_id: ${{ steps.provisioning.outputs.operation_id || '' }}
+      backend_changed: ${{ steps.backend_surface.outputs.changed || 'false' }}
     services:
       postgres:
         image: postgres:17-alpine
@@ -68,6 +69,7 @@ jobs:
           cache-dependency-path: |
             backend/package-lock.json
             widget/package-lock.json
+            extension/package-lock.json
 
       - name: Confirm the trusted release context
         shell: bash
@@ -86,6 +88,21 @@ jobs:
           npm ci --prefix backend --include=dev
           npm ci --prefix widget --include=dev
           npm ci --prefix oauth-ui --include=dev
+          npm ci --prefix extension --include=dev
+
+      - name: Detect deployable backend changes
+        id: backend_surface
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || inputs.base_sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- backend render.yaml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Classify changed migrations
         id: classify
@@ -135,6 +152,7 @@ jobs:
     if: >-
       github.ref == 'refs/heads/develop'
       && needs.validate.result == 'success'
+      && needs.validate.outputs.backend_changed == 'true'
       && (
         needs.validate.outputs.risk != 'high'
         || needs.validate.outputs.high_risk_authorized == 'true'
