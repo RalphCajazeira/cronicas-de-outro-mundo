@@ -571,6 +571,7 @@ export const prismaAuthenticatedGameSessionRepository: AuthenticatedGameSessionR
             eventType: observationEventType,
             title: 'Observação dos arredores',
             payload: json({
+              gameSessionId: latestSession.id,
               action: {
                 type: 'OBSERVE',
                 focus: input.focus ?? null,

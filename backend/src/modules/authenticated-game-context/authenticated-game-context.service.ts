@@ -29,6 +29,7 @@ const maximumCampaigns = 20;
 const maximumActorControls = 100;
 
 const observationEventPayloadSchema = z.object({
+  gameSessionId: z.string().uuid(),
   action: z.object({
     type: z.literal('OBSERVE'),
     focus: z.string().trim().min(1).max(300).nullable(),
@@ -223,6 +224,7 @@ export function createAuthenticatedGameContextService(
               characterSelectionRef: latestSessionControl.selectionRef,
             },
             lastAction: publicLastObservation(await repository.findLatestObservation?.(
+              latestSession.id,
               latestSession.campaignId,
               latestSession.actorId,
             ) ?? null),

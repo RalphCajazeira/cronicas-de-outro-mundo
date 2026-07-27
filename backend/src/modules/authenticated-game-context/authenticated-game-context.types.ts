@@ -79,7 +79,7 @@ export interface AuthenticatedGameAccessRecord {
 
 export interface AuthenticatedGameContextRepository {
   findGameAccessByUserId(userId: string): Promise<AuthenticatedGameAccessRecord | null>;
-  findLatestObservation?(campaignId: string, actorId: string): Promise<{
+  findLatestObservation?(gameSessionId: string, campaignId: string, actorId: string): Promise<{
     readonly payload: unknown;
     readonly createdAt: Date;
   } | null>;

@@ -338,6 +338,135 @@ describe.sequential('authenticated game session persistence', () => {
     expect(JSON.stringify(restored)).not.toMatch(/MASTER_ONLY|GameEvent|campaignId|actorId|idempotency/i);
   });
 
+  it('isolates the persisted last action by the authenticated GameSession', async () => {
+    await prisma.campaignMembership.create({
+      data: {
+        campaignId: ids.campaignA,
+        userId: ids.userB,
+        role: CampaignMembershipRole.PLAYER,
+        status: CampaignMembershipStatus.ACTIVE,
+      },
+    });
+    await prisma.actorControl.create({
+      data: {
+        actorId: ids.actorA2,
+        userId: ids.userB,
+        permission: ActorControlPermission.CONTROL,
+      },
+    });
+
+    try {
+      await prismaAuthenticatedGameSessionRepository.select(ids.userA, input(ids.actorA2), audit);
+      const userAObservation = await gameSessionService.observe(ids.userA, {
+        focus: 'a porta observada por A',
+        idempotencyKey: randomUUID(),
+        baseSessionVersion: 1,
+      }, audit);
+      expect(userAObservation.action.status).toBe('RESOLVED');
+
+      const userBSelection = await prismaAuthenticatedGameSessionRepository.select(ids.userB, {
+        ...refs(ids.userB, ids.campaignA, ids.actorA2),
+        idempotencyKey: randomUUID(),
+        baseSessionVersion: 0,
+      }, audit);
+      expect(userBSelection).toMatchObject({ status: 'SUCCESS', sessionVersion: 1 });
+
+      const userBBeforeObservation = await contextService.load(ids.userB, {});
+      expect(userBBeforeObservation.widgetContext.gameSession.lastAction).toBeNull();
+
+      const userBObservation = await gameSessionService.observe(ids.userB, {
+        focus: 'a janela observada por B',
+        idempotencyKey: randomUUID(),
+        baseSessionVersion: 1,
+      }, audit);
+      expect(userBObservation.action.status).toBe('RESOLVED');
+
+      const userAContext = await contextService.load(ids.userA, {});
+      const userBContext = await contextService.load(ids.userB, {});
+      expect(userAContext.widgetContext.gameSession.lastAction).toMatchObject({
+        focus: 'a porta observada por A',
+      });
+      expect(userBContext.widgetContext.gameSession.lastAction).toMatchObject({
+        focus: 'a janela observada por B',
+      });
+
+      const events = await prisma.gameEvent.findMany({
+        where: {
+          campaignId: ids.campaignA,
+          actorId: ids.actorA2,
+          eventType: 'AUTHENTICATED_OBSERVATION',
+        },
+        select: { payload: true },
+      });
+      expect(events).toHaveLength(2);
+      expect(events.every(({ payload }) => (
+        typeof payload === 'object'
+          && payload !== null
+          && 'gameSessionId' in payload
+      ))).toBe(true);
+      expect(JSON.stringify(userBContext)).not.toContain('gameSessionId');
+    } finally {
+      await prisma.actorControl.delete({
+        where: { actorId_userId: { actorId: ids.actorA2, userId: ids.userB } },
+      });
+      await prisma.campaignMembership.delete({
+        where: { campaignId_userId: { campaignId: ids.campaignA, userId: ids.userB } },
+      });
+    }
+  });
+
+  it('does not reuse an observation from another active session of the same user', async () => {
+    await prisma.campaignMembership.create({
+      data: {
+        campaignId: ids.campaignB,
+        userId: ids.userA,
+        role: CampaignMembershipRole.PLAYER,
+        status: CampaignMembershipStatus.ACTIVE,
+      },
+    });
+    await prisma.actorControl.create({
+      data: {
+        actorId: ids.actorB,
+        userId: ids.userA,
+        permission: ActorControlPermission.CONTROL,
+      },
+    });
+
+    try {
+      await prismaAuthenticatedGameSessionRepository.select(ids.userA, input(ids.actorA2), audit);
+      await gameSessionService.observe(ids.userA, {
+        focus: 'sessão A',
+        idempotencyKey: randomUUID(),
+        baseSessionVersion: 1,
+      }, audit);
+      const switched = await prismaAuthenticatedGameSessionRepository.select(ids.userA, {
+        ...refs(ids.userA, ids.campaignB, ids.actorB),
+        idempotencyKey: randomUUID(),
+        baseSessionVersion: 0,
+      }, audit);
+      expect(switched).toMatchObject({ status: 'SUCCESS', sessionVersion: 1 });
+
+      const campaignBContext = await contextService.load(ids.userA, {});
+      expect(campaignBContext.widgetContext.gameSession.lastAction).toBeNull();
+
+      const switchedBack = await prismaAuthenticatedGameSessionRepository.select(ids.userA, {
+        ...refs(ids.userA, ids.campaignA, ids.actorA2),
+        idempotencyKey: randomUUID(),
+        baseSessionVersion: 2,
+      }, audit);
+      expect(switchedBack).toMatchObject({ status: 'SUCCESS', sessionVersion: 3 });
+      const campaignAContext = await contextService.load(ids.userA, {});
+      expect(campaignAContext.widgetContext.gameSession.lastAction).toMatchObject({ focus: 'sessão A' });
+    } finally {
+      await prisma.actorControl.delete({
+        where: { actorId_userId: { actorId: ids.actorB, userId: ids.userA } },
+      });
+      await prisma.campaignMembership.delete({
+        where: { campaignId_userId: { campaignId: ids.campaignB, userId: ids.userA } },
+      });
+    }
+  });
+
   it('normalizes focus, rejects long input, fails closed for revoked access, and serializes competing observations', async () => {
     await prismaAuthenticatedGameSessionRepository.select(ids.userA, input(ids.actorA2), audit);
     const focused = await gameSessionService.observe(ids.userA, {
