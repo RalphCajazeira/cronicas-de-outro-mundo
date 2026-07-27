@@ -48,6 +48,7 @@ import { projectActorReadiness } from '../actors/actor-readiness.service.js';
 import { EncounterError } from '../encounters/encounter.errors.js';
 import { findEncounterRecord, validateLoadedEncounter } from '../encounters/encounter-state-loader.js';
 import { observeOperationStage } from '../../shared/observability/operation-observability.js';
+import { projectPublicGameEvent, projectPublicGameEventResponse } from './gpt-event-public-projection.js';
 
 const actorSelect = {
   id: true, code: true, name: true, actorType: true, species: true, className: true, role: true,
@@ -239,7 +240,13 @@ async function loadGameState(client: DbClient, input: LoadGameInput) {
     mainActors: actors.filter((actor) => actor.id !== protagonist?.id).map((actor) => actorProjections.get(actor.id)?.dto ?? {}),
     linkedContent: links.map((link) => ({ actorRef: link.actor.code, ...actorContentDto(link) })),
     activeEncounter,
-    recentEvents: events.map((event) => ({ actorRef: event.actor?.code ?? null, eventType: event.eventType, title: event.title, payload: event.payload, createdAt: event.createdAt.toISOString() })),
+    recentEvents: events.map((event) => projectPublicGameEvent({
+      actorRef: event.actor?.code ?? null,
+      eventType: event.eventType,
+      title: event.title,
+      payload: event.payload,
+      createdAt: event.createdAt,
+    })),
   };
 }
 
@@ -774,7 +781,7 @@ export const prismaGptRepository: GptRepository = {
   },
 
   async createEvent(input: CreateEventInput) {
-    return executeIdempotent(input.idempotencyKey, 'events.create', input, async (transaction) => {
+    const result = await executeIdempotent(input.idempotencyKey, 'events.create', input, async (transaction) => {
       const { campaign } = await resolveScope(transaction, input);
       const actor = input.actorRef === undefined ? null : await findActor(transaction, campaign.id, input.actorRef);
       const event = await transaction.gameEvent.create({
@@ -785,6 +792,7 @@ export const prismaGptRepository: GptRepository = {
       });
       return { campaignRef: campaign.code, actorRef: actor?.code ?? null, eventType: event.eventType, title: event.title, payload: event.payload, createdAt: event.createdAt.toISOString() };
     });
+    return projectPublicGameEventResponse(result);
   },
 
   async resolveActorEffect(input: ResolveActorEffectInput) {
