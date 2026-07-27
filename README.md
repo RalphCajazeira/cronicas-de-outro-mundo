@@ -16,6 +16,7 @@ Nova plataforma do RPG narrativo **Crônicas de Outro Mundo**. O runtime ativo �
 backend/                  API, Prisma, seed e testes
 oauth-ui/                 login e consentimento OAuth de staging
 widget/                   ChatGPT App widget público
+extension/                extensão Chrome Manifest V3 (shell visual local)
 gpt/                      OpenAPI, instruções e Knowledge ativos
 docs/ai/                  contexto, arquitetura e decisões ativas
 render.yaml               Blueprint nativo Node, sem Docker

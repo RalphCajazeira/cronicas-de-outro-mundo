@@ -1,6 +1,8 @@
 node_modules/
 dist/
 coverage/
+extension/dist/
+extension/cronicas-extension-local.zip
 backend/src/generated/prisma/
 backend/.secrets/
 .env
