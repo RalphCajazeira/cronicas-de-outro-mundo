@@ -16,6 +16,7 @@ import {
 import {
   callCompatibilityTool,
   connectWithTimeout,
+  createInitialContextRefreshGate,
   readCompatibilityToolOutput,
   readToolResultNotification,
   sendCompatibilityMessage,
@@ -58,6 +59,7 @@ let narrativeError: string | null = null;
 let selectionFeedback: string | null = null;
 let selectionRecovery: 'NONE' | 'RELOAD_REQUIRED' | 'SAFE_RETRY' | 'SELECT_AGAIN' = 'NONE';
 let lastSelectionArguments: Record<string, unknown> | null = null;
+const shouldRefreshInitialContext = createInitialContextRefreshGate();
 
 function render(): void {
   if (context === null) return;
@@ -169,6 +171,10 @@ function applyResult(input: unknown): void {
     loading = false;
     errorMessage = null;
     render();
+    if (shouldRefreshInitialContext()) {
+      loadContext({});
+      return;
+    }
     if (nextCharacterRef !== null && views.SUMMARY === undefined) loadView('SUMMARY');
   } catch {
     if (context === null) {

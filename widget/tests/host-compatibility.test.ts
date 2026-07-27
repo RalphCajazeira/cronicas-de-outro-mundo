@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   callCompatibilityTool,
   connectWithTimeout,
+  createInitialContextRefreshGate,
   readCompatibilityToolOutput,
   readToolResultNotification,
   sendCompatibilityMessage,
@@ -69,6 +70,13 @@ describe('ChatGPT host compatibility bridge', () => {
     await expect(connectWithTimeout(new Promise(() => undefined), 1))
       .rejects.toThrow(/timed out/u);
     await expect(connectWithTimeout(Promise.resolve(), 10)).resolves.toBeUndefined();
+  });
+
+  it('requests one backend refresh after a historical widget result is mounted', () => {
+    const shouldRefresh = createInitialContextRefreshGate();
+    expect(shouldRefresh()).toBe(true);
+    expect(shouldRefresh()).toBe(false);
+    expect(shouldRefresh()).toBe(false);
   });
 
   it('delegates lazy tool calls without changing their name or arguments', async () => {
