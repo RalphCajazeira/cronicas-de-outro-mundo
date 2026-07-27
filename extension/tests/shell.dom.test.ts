@@ -36,6 +36,33 @@ describe('content shell DOM', () => {
     expect(host?.shadowRoot?.querySelector('style')).not.toBeNull();
   });
 
+  it('traps Tab boundaries using ShadowRoot.activeElement and releases after Escape', async () => {
+    installChromeMock();
+    await mountContentShell();
+    const shadowRoot = document.getElementById('cronicas-extension-root')?.shadowRoot;
+    expect(shadowRoot).not.toBeNull();
+    const launcher = shadowRoot?.querySelector<HTMLButtonElement>('.chronicles-launcher');
+    launcher?.click();
+    const overlay = shadowRoot?.querySelector<HTMLElement>('.chronicles-overlay');
+    const controls = [...(overlay?.querySelectorAll<HTMLElement>('button') ?? [])];
+    const first = controls[0];
+    const last = controls.at(-1);
+    expect(first).toBeDefined();
+    expect(last).toBeDefined();
+    last?.focus();
+    expect(shadowRoot?.activeElement).toBe(last);
+    last?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, composed: true }));
+    expect(shadowRoot?.activeElement).toBe(first);
+    first?.focus();
+    first?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, composed: true }));
+    expect(shadowRoot?.activeElement).toBe(last);
+    last?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true }));
+    expect(overlay?.hidden).toBe(true);
+    expect(shadowRoot?.activeElement).toBe(launcher);
+    shadowRoot?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, composed: true }));
+    expect(overlay?.hidden).toBe(true);
+  });
+
   it('opens, minimizes, closes with Escape, and restores focus to the launcher', () => {
     const root = document.createElement('div');
     document.body.append(root);
@@ -68,10 +95,20 @@ describe('content shell DOM', () => {
       root, mode: 'page', preferences: { ...DEFAULT_PREFERENCES, activeTab: 'abilities' }, onPreferencesChange: vi.fn(), onModeChange: vi.fn(), onOpenPage: vi.fn(),
     });
     expect(root.querySelector('.chronicles-launcher')).toBeNull();
+    expect(root.querySelectorAll('.chronicles-action')).toHaveLength(0);
     expect(root.textContent).toContain('Modo de demonstração local');
     expect(root.textContent).toContain('Luz Velada');
     root.querySelector<HTMLButtonElement>('[data-tab="inventory"]')?.click();
     expect(root.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Inventário');
     expect(root.textContent).toContain('Poção de Bruma');
+  });
+
+  it('keeps overlay controls available while omitting them from the page shell', () => {
+    const root = document.createElement('div');
+    document.body.append(root);
+    createAppShell({
+      root, mode: 'content', preferences: DEFAULT_PREFERENCES, onPreferencesChange: vi.fn(), onModeChange: vi.fn(), onOpenPage: vi.fn(),
+    });
+    expect(root.querySelectorAll('.chronicles-action')).toHaveLength(3);
   });
 });

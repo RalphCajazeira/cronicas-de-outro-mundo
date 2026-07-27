@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "validate:manifest": "node scripts/validate-manifest.mjs",
+    "validate:render-build": "node scripts/validate-render-build.mjs",
     "package:local": "npm run build && powershell -NoProfile -Command \"Compress-Archive -Path dist\\* -DestinationPath cronicas-extension-local.zip -Force\""
   },
   "devDependencies": {

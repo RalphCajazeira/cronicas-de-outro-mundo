@@ -99,6 +99,11 @@ function focusable(root: HTMLElement): HTMLElement[] {
     .filter((node) => !node.closest('[hidden]'));
 }
 
+function activeElementFor(root: ShadowRoot | HTMLElement): Element | null {
+  if (root instanceof ShadowRoot) return root.activeElement;
+  return root.ownerDocument?.activeElement ?? document.activeElement;
+}
+
 export function createAppShell(options: ShellOptions): ShellController {
   const style = document.createElement('style');
   style.textContent = shellCss;
@@ -130,8 +135,12 @@ export function createAppShell(options: ShellOptions): ShellController {
   minimize.type = 'button'; minimize.textContent = 'Minimizar';
   const close = element('button', 'chronicles-action');
   close.type = 'button'; close.textContent = 'Fechar';
-  actions.append(newTab, minimize, close);
-  header.append(brand, actions);
+  if (options.mode === 'content') {
+    actions.append(newTab, minimize, close);
+    header.append(brand, actions);
+  } else {
+    header.append(brand);
+  }
   const tabs = element('div', 'chronicles-tabs');
   tabs.setAttribute('role', 'tablist');
   const content = element('main', 'chronicles-content');
@@ -196,8 +205,9 @@ export function createAppShell(options: ShellOptions): ShellController {
     const nodes = focusable(overlay);
     const first = nodes[0]; const last = nodes.at(-1);
     if (first === undefined || last === undefined) return;
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-    if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    const activeElement = activeElementFor(options.root);
+    if (event.shiftKey && activeElement === first) { event.preventDefault(); last.focus(); }
+    if (!event.shiftKey && activeElement === last) { event.preventDefault(); first.focus(); }
   };
   document.addEventListener('keydown', onKeyDown);
   return {
