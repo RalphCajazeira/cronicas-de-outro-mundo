@@ -35,7 +35,7 @@ import { createActorMechanicalState, recomputeActorDerivedSnapshot } from '../..
 import type { ActorRepository } from '../../src/modules/actors/actors.types.js';
 import { prismaContentRepository } from '../../src/modules/content/content.repository.js';
 import { publishContentVersion } from '../../src/modules/content/content-publication.service.js';
-import { prismaGptRepository } from '../../src/modules/gpt/gpt.repository.js';
+import { calculateGptRequestHash, prismaGptRepository } from '../../src/modules/gpt/gpt.repository.js';
 import { loadGameSchema, startGameSchema } from '../../src/modules/gpt/gpt.schemas.js';
 import { canonicalize, jsonByteSize } from '../../src/modules/gpt/gpt.start-game.js';
 import { prismaReadinessCheck } from '../../src/modules/health/health.repository.js';
@@ -6512,6 +6512,81 @@ describe('GPT v1 persistence with real transactions', () => {
     expect(Array.isArray(body.recentEvents)).toBe(true);
     if (Array.isArray(body.recentEvents)) expect(body.recentEvents.length).toBeLessThanOrEqual(20);
     expect(JSON.stringify(response.body)).not.toMatch(/"id"|campaignId|worldId|actorId/);
+  });
+
+  it('sanitizes authenticated observation events across loadGame and createEvent, including legacy replays', async () => {
+    const campaign = await prisma.campaign.findFirstOrThrow({ where: { code: seedScope.campaignRef, world: { code: seedScope.worldRef } } });
+    const actor = await prisma.actor.findFirstOrThrow({ where: { campaignId: campaign.id, code: seedScope.playerRef } });
+    const sessionId = randomUUID();
+    const rawPayload = {
+      gameSessionId: sessionId,
+      action: { type: 'OBSERVE', focus: 'a trilha', summary: 'Nada novo foi confirmado.' },
+      idempotencyKey: 'private-observation-key',
+      MASTER_ONLY: 'private',
+    };
+    const persisted = await prisma.gameEvent.create({
+      data: {
+        campaignId: campaign.id, actorId: actor.id, eventType: 'AUTHENTICATED_OBSERVATION',
+        title: 'Observação dos arredores', payload: rawPayload,
+      },
+    });
+    const eventKey = 'integration-public-observation-event-001';
+    const eventBody = {
+      ...seedScope, actorRef: seedScope.playerRef, eventType: 'scene-observation',
+      title: 'Observação dos arredores', payload: rawPayload, idempotencyKey: eventKey,
+    };
+    const legacyReplayKey = 'integration-public-observation-legacy-replay-001';
+    const legacyReplayBody = { ...eventBody, idempotencyKey: legacyReplayKey };
+    const legacyCreatedAt = new Date('2026-07-27T00:00:00.000Z').toISOString();
+    await prisma.idempotencyRecord.create({
+      data: {
+        key: legacyReplayKey,
+        operation: 'events.create',
+        requestHash: calculateGptRequestHash(legacyReplayBody),
+        response: {
+          campaignRef: seedScope.campaignRef, actorRef: seedScope.playerRef,
+          eventType: 'AUTHENTICATED_OBSERVATION', title: 'Observação dos arredores', payload: rawPayload, createdAt: legacyCreatedAt,
+        },
+      },
+    });
+    try {
+      const loaded = await post('/api/v1/game/load', {});
+      expect(loaded.status).toBe(200);
+      const loadedBody = loaded.body as { recentEvents?: unknown };
+      const recentEvents = Array.isArray(loadedBody.recentEvents)
+        ? loadedBody.recentEvents as Array<Record<string, unknown>>
+        : [];
+      const recentObservation = recentEvents.find(
+        (event) => event.eventType === 'AUTHENTICATED_OBSERVATION' && event.title === 'Observação dos arredores',
+      );
+      expect(recentObservation).toMatchObject({
+        actorRef: seedScope.playerRef,
+        payload: { type: 'OBSERVE', focus: 'a trilha', summary: 'Nada novo foi confirmado.' },
+      });
+      expect(JSON.stringify(recentObservation)).not.toMatch(/gameSessionId|userId|playerId|campaignId|actorId|idempotencyKey|MASTER_ONLY/);
+
+      const created = await api.post('/api/v1/events').set('x-rpg-key', config.RPG_API_KEY).send(eventBody);
+      const replay = await api.post('/api/v1/events').set('x-rpg-key', config.RPG_API_KEY).send(eventBody);
+      const legacyReplay = await api.post('/api/v1/events').set('x-rpg-key', config.RPG_API_KEY).send(legacyReplayBody);
+      for (const response of [created, replay, legacyReplay]) {
+        expect(response.status, JSON.stringify(response.body)).toBe(200);
+        const responseBody = response.body as Record<string, unknown>;
+        expect(responseBody).toMatchObject({ campaignRef: seedScope.campaignRef, actorRef: seedScope.playerRef });
+        expect(typeof responseBody.createdAt).toBe('string');
+        expect(JSON.stringify(responseBody)).not.toMatch(/gameSessionId|userId|playerId|campaignId|actorId|idempotencyKey|MASTER_ONLY/);
+      }
+      expect(created.body).toMatchObject({ eventType: 'scene-observation', payload: {} });
+      expect(replay.body).toEqual(created.body);
+      expect(legacyReplay.body).toMatchObject({
+        eventType: 'AUTHENTICATED_OBSERVATION',
+        payload: { type: 'OBSERVE', focus: 'a trilha', summary: 'Nada novo foi confirmado.' },
+      });
+      await expect(prisma.gameEvent.count({ where: { idempotencyKey: eventKey } })).resolves.toBe(1);
+      expect(JSON.stringify(legacyReplay.body as unknown)).not.toContain(sessionId);
+    } finally {
+      await prisma.idempotencyRecord.deleteMany({ where: { key: { in: [eventKey, legacyReplayKey] } } });
+      await prisma.gameEvent.delete({ where: { id: persisted.id } });
+    }
   });
 
   it('starts a complete new scope idempotently and refuses incompatible reuse', async () => {
