@@ -94,9 +94,27 @@ function buildPanel(tab: ShellTab): HTMLElement {
   return panel;
 }
 
+function isHiddenElement(element: HTMLElement): boolean {
+  if (element.hidden || element.getAttribute('hidden') !== null) return true;
+  if (element.hasAttribute('disabled')) return true;
+  const { visibility, display } = getComputedStyle(element);
+  if (visibility === 'hidden' || visibility === 'collapse' || display === 'none') return true;
+  return false;
+}
+
+function isKeyboardFocusable(node: HTMLElement): boolean {
+  if (!('tabIndex' in node)) return false;
+  if (node.tabIndex < 0) return false;
+  if (node instanceof HTMLAnchorElement && node.getAttribute('href') === null) return false;
+  if (node instanceof HTMLInputElement || node instanceof HTMLSelectElement || node instanceof HTMLTextAreaElement || node instanceof HTMLButtonElement) {
+    if (node.disabled) return false;
+  }
+  return !isHiddenElement(node);
+}
+
 function focusable(root: HTMLElement): HTMLElement[] {
-  return [...root.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
-    .filter((node) => !node.closest('[hidden]'));
+  return [...root.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]')]
+    .filter(isKeyboardFocusable);
 }
 
 function activeElementFor(root: ShadowRoot | HTMLElement): Element | null {
