@@ -60,6 +60,7 @@ const context: AuthenticatedContext = {
       stateVersion: 1,
       canContinue: true,
       selection: { campaignSelectionRef, characterSelectionRef },
+      lastAction: null,
     },
     sessionState: 'READ_ONLY_READY',
     navigation: {

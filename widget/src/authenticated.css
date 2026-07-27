@@ -313,6 +313,43 @@ footer { margin-top: 22px; color: #81796f; font-size: .72rem; text-align: center
 
 .load-more { width: 100%; background: rgba(157, 87, 46, .25); }
 
+.observation-actions {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+  padding: 18px;
+  border: 1px solid rgba(215, 169, 86, .36);
+  border-radius: 16px;
+  background: rgba(157, 87, 46, .12);
+}
+
+.observation-actions h3 { font-size: 1.12rem; }
+.observation-actions p { margin: 5px 0 0; font-size: .84rem; }
+.observation-actions form { display: grid; gap: 7px; }
+.observation-actions label { color: #d8bd87; font-size: .76rem; font-weight: 750; }
+.observation-actions input {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid rgba(222, 193, 134, .28);
+  border-radius: 11px;
+  background: rgba(10, 9, 14, .72);
+  color: #f7f0dc;
+  font: inherit;
+}
+.observation-actions input:focus-visible { outline: 3px solid #f5cf7a; outline-offset: 2px; }
+.session-version { color: #d8bd87; font-size: .76rem; }
+.official-action-result {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid rgba(154, 230, 180, .3);
+  border-radius: 12px;
+  background: rgba(63, 112, 82, .14);
+}
+.official-action-result span { color: #c9c1b4; font-size: .8rem; }
+
 .narrative-composer {
   display: grid;
   gap: 14px;

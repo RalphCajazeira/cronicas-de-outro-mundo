@@ -12,9 +12,11 @@ import {
 import type { AppConfig } from '../../config/env.js';
 import {
   authenticatedGameContextSchema,
+  observedActionReferenceSchema,
   type AuthenticatedGameContextDto,
   type LoadAuthenticatedGameContextInput,
 } from './authenticated-game-context.dto.js';
+import { z } from 'zod';
 import { AuthenticatedGameContextAccessError } from './authenticated-game-context.errors.js';
 import type {
   AuthenticatedActorControlRecord,
@@ -25,6 +27,28 @@ import { authenticatedSelectionRef } from './authenticated-selection-ref.js';
 
 const maximumCampaigns = 20;
 const maximumActorControls = 100;
+
+const observationEventPayloadSchema = z.object({
+  action: z.object({
+    type: z.literal('OBSERVE'),
+    focus: z.string().trim().min(1).max(300).nullable(),
+    summary: z.string().trim().min(1).max(500),
+  }).strict(),
+}).strict();
+
+function publicLastObservation(
+  record: { readonly payload: unknown; readonly createdAt: Date } | null,
+) {
+  if (record === null) return null;
+  const parsed = observationEventPayloadSchema.safeParse(record.payload);
+  if (!parsed.success) return null;
+  return observedActionReferenceSchema.parse({
+    ...parsed.data.action,
+    status: 'RESOLVED',
+    occurredAt: record.createdAt.toISOString(),
+    discoveredFacts: [],
+  });
+}
 
 function normalizedCampaignStatus(status: AuthenticatedCampaignMembershipRecord['campaign']['status']) {
   return status.toLowerCase() as 'draft' | 'active' | 'paused' | 'completed' | 'archived';
@@ -99,6 +123,7 @@ export function createAuthenticatedGameContextService(
               stateVersion: 0,
               canContinue: false,
               selection: null,
+              lastAction: null,
             },
             sessionState: 'NO_PLAYER',
             navigation: {
@@ -186,6 +211,7 @@ export function createAuthenticatedGameContextService(
           stateVersion: 0,
           canContinue: false,
           selection: null,
+          lastAction: null,
         }
         : latestSessionUsable
           ? {
@@ -196,12 +222,17 @@ export function createAuthenticatedGameContextService(
               campaignSelectionRef: latestSessionMembership.selectionRef,
               characterSelectionRef: latestSessionControl.selectionRef,
             },
+            lastAction: publicLastObservation(await repository.findLatestObservation?.(
+              latestSession.campaignId,
+              latestSession.actorId,
+            ) ?? null),
           }
           : {
             status: 'UNAVAILABLE' as const,
             stateVersion: latestSession.stateVersion,
             canContinue: false,
             selection: null,
+            lastAction: null,
           };
 
       const campaignOptions = memberships.map((membership) => ({
@@ -312,6 +343,10 @@ export function createAuthenticatedGameContextService(
       const canPersistSelection = selectedMembership !== undefined
         && selectedControl !== undefined
         && selectedMembership.record.campaign.status !== CampaignStatus.ARCHIVED;
+      const canMutate = gameSession.canContinue
+        && selectedControl?.record.permission === ActorControlPermission.CONTROL
+        && gameSession.selection?.campaignSelectionRef === selectedMembership?.selectionRef
+        && gameSession.selection?.characterSelectionRef === selectedControl?.selectionRef;
       const hasPreviewSelection = input.campaignSelectionRef !== undefined
         && input.characterSelectionRef !== undefined
         && canPersistSelection;
@@ -348,7 +383,7 @@ export function createAuthenticatedGameContextService(
             canSelectCampaign: campaignOptions.length > 1,
             canSelectCharacter: selectedControls.length > 1,
             canViewContext: activeContext !== null,
-            canMutate: false,
+            canMutate,
             canPersistSelection,
             canContinue: gameSession.canContinue,
           },

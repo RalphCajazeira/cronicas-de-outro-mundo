@@ -15,6 +15,7 @@ import { authenticatedSelectionRef } from '../../src/modules/authenticated-game-
 import { createAuthenticatedGameContextService } from '../../src/modules/authenticated-game-context/authenticated-game-context.service.js';
 import { prismaAuthenticatedGameContextRepository } from '../../src/modules/authenticated-game-context/authenticated-game-context.repository.js';
 import { prismaAuthenticatedGameSessionRepository } from '../../src/modules/authenticated-game-session/authenticated-game-session.repository.js';
+import { createAuthenticatedGameSessionService } from '../../src/modules/authenticated-game-session/authenticated-game-session.service.js';
 
 const ids = {
   userA: randomUUID(),
@@ -35,6 +36,7 @@ const contextService = createAuthenticatedGameContextService(
   prismaAuthenticatedGameContextRepository,
   { APP_ENV: 'test', NODE_ENV: 'test' },
 );
+const gameSessionService = createAuthenticatedGameSessionService(prismaAuthenticatedGameSessionRepository);
 
 function refs(userId: string, campaignId: string, actorId: string) {
   return {
@@ -57,9 +59,10 @@ function input(
 
 async function cleanup(): Promise<void> {
   await prisma.auditEvent.deleteMany({ where: { userId: { in: [ids.userA, ids.userB] } } });
+  await prisma.gameEvent.deleteMany({ where: { campaignId: { in: [ids.campaignA, ids.campaignB] } } });
   await prisma.gameSession.deleteMany({ where: { userId: { in: [ids.userA, ids.userB] } } });
   await prisma.idempotencyRecord.deleteMany({
-    where: { operation: 'selectAuthenticatedGameContext:v1' },
+    where: { operation: { in: ['selectAuthenticatedGameContext:v1', 'performAuthenticatedObservation:v1'] } },
   });
 }
 
@@ -180,6 +183,10 @@ describe.sequential('authenticated game session persistence', () => {
       where: { userId: ids.userA },
       data: { revokedAt: null },
     });
+    await prisma.campaignMembership.updateMany({
+      where: { userId: ids.userA },
+      data: { status: CampaignMembershipStatus.ACTIVE, revokedAt: null },
+    });
   });
 
   afterAll(async () => {
@@ -289,5 +296,104 @@ describe.sequential('authenticated game session persistence', () => {
       closedAt: null,
       actorId: ids.actorA1,
     });
+  });
+
+  it('persists one honest observation, replays it exactly, increments once, and restores the public last action', async () => {
+    await prismaAuthenticatedGameSessionRepository.select(ids.userA, input(ids.actorA2), audit);
+    const request = {
+      idempotencyKey: randomUUID(),
+      baseSessionVersion: 1,
+    };
+    const first = await gameSessionService.observe(ids.userA, request, audit);
+    const replay = await gameSessionService.observe(ids.userA, request, audit);
+    const conflictingPayload = await gameSessionService.observe(ids.userA, {
+      ...request,
+      focus: 'a janela',
+    }, audit);
+    expect(first).toEqual(replay);
+    expect(first).toMatchObject({
+      action: { type: 'OBSERVE', status: 'RESOLVED', focus: null },
+      continuity: { sessionVersion: 2, canContinue: true },
+      discoveredFacts: [],
+    });
+    expect(conflictingPayload).toMatchObject({
+      action: { status: 'CONFLICT' },
+      continuity: { sessionVersion: 2, canContinue: false },
+    });
+    expect(await prisma.gameEvent.count({
+      where: { campaignId: ids.campaignA, actorId: ids.actorA2, eventType: 'AUTHENTICATED_OBSERVATION' },
+    })).toBe(1);
+    expect(await prisma.auditEvent.count({
+      where: { userId: ids.userA, eventType: 'AUTHENTICATED_GAME_ACTION', reasonCode: 'observation_recorded' },
+    })).toBe(1);
+    expect(await prisma.gameSession.findUnique({
+      where: { userId_campaignId: { userId: ids.userA, campaignId: ids.campaignA } },
+      select: { stateVersion: true },
+    })).toEqual({ stateVersion: 2 });
+    const restored = await contextService.load(ids.userA, {});
+    expect(restored.widgetContext.gameSession).toMatchObject({
+      stateVersion: 2,
+      lastAction: { type: 'OBSERVE', status: 'RESOLVED', focus: null, discoveredFacts: [] },
+    });
+    expect(JSON.stringify(restored)).not.toMatch(/MASTER_ONLY|GameEvent|campaignId|actorId|idempotency/i);
+  });
+
+  it('normalizes focus, rejects long input, fails closed for revoked access, and serializes competing observations', async () => {
+    await prismaAuthenticatedGameSessionRepository.select(ids.userA, input(ids.actorA2), audit);
+    const focused = await gameSessionService.observe(ids.userA, {
+      focus: '  a porta antiga  ',
+      idempotencyKey: randomUUID(),
+      baseSessionVersion: 1,
+    }, audit);
+    expect(focused.action.focus).toBe('a porta antiga');
+    await expect(gameSessionService.observe(ids.userA, {
+      focus: 'x'.repeat(301),
+      idempotencyKey: randomUUID(),
+      baseSessionVersion: 2,
+    }, audit)).rejects.toThrow();
+    await prisma.actorControl.update({
+      where: { actorId_userId: { actorId: ids.actorA2, userId: ids.userA } },
+      data: { revokedAt: new Date() },
+    });
+    const revoked = await gameSessionService.observe(ids.userA, {
+      idempotencyKey: randomUUID(),
+      baseSessionVersion: 2,
+    }, audit);
+    expect(revoked.action.status).toBe('REJECTED');
+
+    await prisma.actorControl.update({
+      where: { actorId_userId: { actorId: ids.actorA2, userId: ids.userA } },
+      data: { revokedAt: null },
+    });
+    const [left, right] = await Promise.all([
+      gameSessionService.observe(ids.userA, { idempotencyKey: randomUUID(), baseSessionVersion: 2 }, audit),
+      gameSessionService.observe(ids.userA, { idempotencyKey: randomUUID(), baseSessionVersion: 2 }, audit),
+    ]);
+    expect([left.action.status, right.action.status]).toContain('RESOLVED');
+    expect([left.action.status, right.action.status]).toContain('CONFLICT');
+    expect(await prisma.gameEvent.count({
+      where: { campaignId: ids.campaignA, actorId: ids.actorA2, eventType: 'AUTHENTICATED_OBSERVATION' },
+    })).toBe(2);
+
+    await prisma.user.update({
+      where: { id: ids.userA },
+      data: { status: UserStatus.SUSPENDED, suspendedAt: new Date() },
+    });
+    expect((await gameSessionService.observe(ids.userA, {
+      idempotencyKey: randomUUID(),
+      baseSessionVersion: 3,
+    }, audit)).action.status).toBe('REJECTED');
+    await prisma.user.update({
+      where: { id: ids.userA },
+      data: { status: UserStatus.ACTIVE, suspendedAt: null },
+    });
+    await prisma.campaignMembership.update({
+      where: { campaignId_userId: { campaignId: ids.campaignA, userId: ids.userA } },
+      data: { status: CampaignMembershipStatus.REVOKED, revokedAt: new Date() },
+    });
+    expect((await gameSessionService.observe(ids.userA, {
+      idempotencyKey: randomUUID(),
+      baseSessionVersion: 3,
+    }, audit)).action.status).toBe('REJECTED');
   });
 });

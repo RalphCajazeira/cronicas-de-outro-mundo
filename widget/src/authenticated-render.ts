@@ -348,6 +348,11 @@ export interface AuthenticatedRenderState {
     readonly sending: boolean;
     readonly error: string | null;
   };
+  readonly observation?: {
+    readonly focus: string;
+    readonly feedback: string | null;
+    readonly recovery: 'NONE' | 'SAFE_RETRY' | 'RELOAD_REQUIRED';
+  };
 }
 
 const quickNarrativeChoices = [
@@ -386,6 +391,50 @@ function narrativeComposer(state: AuthenticatedRenderState['narrativeComposer'])
           </button>
         </div>
       </form>
+    </section>
+  `;
+}
+
+function observationActions(
+  context: AuthenticatedContext,
+  renderState: AuthenticatedRenderState,
+): string {
+  const session = context.widgetContext.gameSession;
+  const lastAction = session.lastAction;
+  const canObserve = context.widgetContext.navigation.canMutate
+    && session.status === 'ACTIVE'
+    && session.canContinue;
+  const focus = renderState.observation?.focus ?? '';
+  const feedback = renderState.observation?.feedback ?? null;
+  const recovery = renderState.observation?.recovery ?? 'NONE';
+  return `
+    <section class="observation-actions" aria-labelledby="observation-title">
+      <div>
+        <p class="chapter">Ações</p>
+        <h3 id="observation-title">Observar os arredores</h3>
+        <p>Registra uma única ação oficial. O resultado mecânico é confirmado pelo backend antes da narração.</p>
+      </div>
+      <form data-action="observation-form">
+        <label for="observation-focus">Onde deseja concentrar sua atenção?</label>
+        <input id="observation-focus" name="observation-focus" type="text" maxlength="300"
+          value="${escapeHtml(focus)}" placeholder="Opcional" ${canObserve && !renderState.loading ? '' : 'disabled'}>
+        <div class="composer-actions">
+          <span class="composer-status" aria-live="polite">${feedback === null ? '' : escapeHtml(feedback)}</span>
+          <button type="submit" data-action="observe" ${canObserve && !renderState.loading && recovery !== 'RELOAD_REQUIRED' ? '' : 'disabled'}>
+            Observar os arredores
+          </button>
+        </div>
+      </form>
+      ${recovery === 'SAFE_RETRY' ? '<button type="button" data-action="retry-observation">Tentar novamente com segurança</button>' : ''}
+      ${recovery === 'RELOAD_REQUIRED' ? '<button type="button" data-action="reload-observation">Recarregar contexto oficial</button>' : ''}
+      <p class="session-version">Versão atual da sessão: ${session.stateVersion}</p>
+      ${lastAction === null ? '' : `
+        <article class="official-action-result" aria-live="polite">
+          <p class="chapter">Última ação persistida</p>
+          <strong>${escapeHtml(lastAction.summary)}</strong>
+          <span>${lastAction.focus === null ? 'Sem foco específico.' : `Foco: ${escapeHtml(lastAction.focus)}`}</span>
+        </article>
+      `}
     </section>
   `;
 }
@@ -465,6 +514,7 @@ function characterHome(context: AuthenticatedContext, state: AuthenticatedRender
         ${characterList(context)}
       </details>
       ${selectionActions}
+      ${observationActions(context, state)}
       ${tabs(state.activeView)}
       ${body}
       ${narrativeComposer(state.narrativeComposer)}

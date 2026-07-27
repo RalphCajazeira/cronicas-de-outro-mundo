@@ -10,6 +10,7 @@ import {
 } from './authenticated-render.js';
 import {
   parseAuthenticatedCharacterViewResult,
+  parseAuthenticatedObservationResult,
   parseAuthenticatedSelectionResult,
   parseAuthenticatedToolResult,
 } from './authenticated-tool-result.js';
@@ -29,7 +30,7 @@ if (root === null) throw new Error('Authenticated widget root not found');
 const app = new App(
   {
     name: 'Crônicas de Outro Mundo — Personagem autenticado',
-    version: '0.2.0',
+    version: '0.3.0',
   },
   {},
   { autoResize: true, strict: true },
@@ -59,6 +60,11 @@ let narrativeError: string | null = null;
 let selectionFeedback: string | null = null;
 let selectionRecovery: 'NONE' | 'RELOAD_REQUIRED' | 'SAFE_RETRY' | 'SELECT_AGAIN' = 'NONE';
 let lastSelectionArguments: Record<string, unknown> | null = null;
+let observationFocus = '';
+let observationFeedback: string | null = null;
+let observationRecovery: 'NONE' | 'SAFE_RETRY' | 'RELOAD_REQUIRED' = 'NONE';
+let lastObservationArguments: Record<string, unknown> | null = null;
+let lastNarratedObservation: string | null = null;
 const shouldRefreshInitialContext = createInitialContextRefreshGate();
 
 function render(): void {
@@ -76,6 +82,11 @@ function render(): void {
     },
     selectionFeedback,
     selectionRecovery,
+    observation: {
+      focus: observationFocus,
+      feedback: observationFeedback,
+      recovery: observationRecovery,
+    },
   });
 }
 
@@ -127,6 +138,51 @@ function applyResult(input: unknown): void {
       && 'status' in structured
       && 'sessionVersion' in structured
       && 'recovery' in structured;
+    const isObservationResult = typeof structured === 'object'
+      && structured !== null
+      && 'action' in structured
+      && 'continuity' in structured;
+    if (isObservationResult) {
+      const result = parseAuthenticatedObservationResult(input);
+      loading = false;
+      observationFeedback = result.action.summary;
+      observationRecovery = result.action.status === 'CONFLICT'
+        ? 'RELOAD_REQUIRED'
+        : result.action.status === 'RESOLVED' ? 'NONE' : 'SAFE_RETRY';
+      if (result.action.status === 'RESOLVED') {
+        lastObservationArguments = null;
+        observationFocus = '';
+        if (context !== null) {
+          context = {
+            ...context,
+            widgetContext: {
+              ...context.widgetContext,
+              gameSession: {
+                ...context.widgetContext.gameSession,
+                stateVersion: result.continuity.sessionVersion,
+                canContinue: result.continuity.canContinue,
+                lastAction: {
+                  ...result.action,
+                  status: 'RESOLVED',
+                  discoveredFacts: result.discoveredFacts,
+                },
+              },
+            },
+          };
+        }
+        const narrationKey = `${result.action.occurredAt}:${result.continuity.sessionVersion}`;
+        if (lastNarratedObservation !== narrationKey) {
+          lastNarratedObservation = narrationKey;
+          void sendObservationNarration(result.action.summary, result.discoveredFacts);
+        }
+        render();
+        loadContext({});
+        return;
+      }
+      if (result.action.status !== 'BLOCKED') lastObservationArguments = null;
+      render();
+      return;
+    }
     if (isSelectionResult) {
       const result = parseAuthenticatedSelectionResult(input);
       loading = false;
@@ -185,6 +241,23 @@ function applyResult(input: unknown): void {
     }
     loading = false;
     errorMessage = 'Não foi possível carregar esta seção. Nenhum dado do jogo foi alterado.';
+    render();
+  }
+}
+
+async function sendObservationNarration(summary: string, discoveredFacts: readonly string[]): Promise<void> {
+  const facts = discoveredFacts.length === 0
+    ? 'Nenhuma descoberta adicional foi confirmada.'
+    : discoveredFacts.map((fact) => `- ${fact}`).join('\n');
+  try {
+    await sendNarrativeMessage([
+      'A ação Observar os arredores já foi resolvida e persistida pelo backend.',
+      `Resultado oficial: ${summary}`,
+      `Fatos oficiais:\n${facts}`,
+      'Narre somente esse resultado confirmado. Não altere o resultado mecânico e não invente efeitos, segredos, rolagens ou consequências adicionais.',
+    ].join('\n\n'));
+  } catch {
+    observationFeedback = 'A ação foi registrada, mas a narração não pôde ser enviada. Você pode continuar pela conversa.';
     render();
   }
 }
@@ -292,6 +365,39 @@ function retrySelection(): void {
   });
 }
 
+function observe(): void {
+  if (context?.widgetContext.navigation.canMutate !== true || loading) return;
+  const argumentsValue = {
+    focus: observationFocus.trim() === '' ? undefined : observationFocus.trim(),
+    idempotencyKey: crypto.randomUUID(),
+    baseSessionVersion: context.widgetContext.gameSession.stateVersion,
+  };
+  lastObservationArguments = argumentsValue;
+  observationFeedback = null;
+  observationRecovery = 'NONE';
+  loading = true;
+  render();
+  void callHostTool('performAuthenticatedObservation', argumentsValue).then(applyResult).catch(() => {
+    loading = false;
+    observationFeedback = 'Não foi possível registrar agora. Repita com a mesma chave de segurança.';
+    observationRecovery = 'SAFE_RETRY';
+    render();
+  });
+}
+
+function retryObservation(): void {
+  if (lastObservationArguments === null || loading) return;
+  loading = true;
+  observationFeedback = null;
+  render();
+  void callHostTool('performAuthenticatedObservation', lastObservationArguments).then(applyResult).catch(() => {
+    loading = false;
+    observationFeedback = 'A nova tentativa segura não pôde ser concluída.';
+    observationRecovery = 'SAFE_RETRY';
+    render();
+  });
+}
+
 function loadView(view: AuthenticatedViewName, cursor?: string): void {
   const refs = selectedRefs();
   if (refs === null) return;
@@ -353,6 +459,20 @@ function handleClick(event: Event): void {
     retrySelection();
     return;
   }
+  if (target.dataset.action === 'retry-observation') {
+    retryObservation();
+    return;
+  }
+  if (target.dataset.action === 'reload-observation') {
+    lastObservationArguments = null;
+    observationRecovery = 'NONE';
+    loadContext({});
+    return;
+  }
+  if (target.dataset.action === 'observe') {
+    observe();
+    return;
+  }
   if (target.dataset.action === 'reload-context' || target.dataset.action === 'continue') {
     lastSelectionArguments = null;
     selectionFeedback = null;
@@ -404,6 +524,11 @@ function handleClick(event: Event): void {
 }
 
 function handleInput(event: Event): void {
+  if (event.target instanceof HTMLInputElement && event.target.id === 'observation-focus') {
+    observationFocus = event.target.value;
+    observationFeedback = null;
+    return;
+  }
   if (!(event.target instanceof HTMLTextAreaElement) || event.target.id !== 'narrative-action') return;
   narrativeDraft = event.target.value;
   narrativeError = null;
@@ -414,6 +539,14 @@ function handleInput(event: Event): void {
 }
 
 function handleSubmit(event: SubmitEvent): void {
+  const observationForm = event.target instanceof Element
+    ? event.target.closest<HTMLFormElement>('[data-action="observation-form"]')
+    : null;
+  if (observationForm !== null) {
+    event.preventDefault();
+    observe();
+    return;
+  }
   const form = event.target instanceof Element
     ? event.target.closest<HTMLFormElement>('[data-action="narrative-form"]')
     : null;

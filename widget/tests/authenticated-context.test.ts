@@ -6,6 +6,7 @@ import {
 } from '../src/authenticated-render.js';
 import {
   parseAuthenticatedSelectionResult,
+  parseAuthenticatedObservationResult,
   parseAuthenticatedToolResult,
 } from '../src/authenticated-tool-result.js';
 
@@ -65,6 +66,7 @@ function context(
         stateVersion: 1,
         canContinue: true,
         selection: { campaignSelectionRef, characterSelectionRef },
+        lastAction: null,
       },
       sessionState: 'READ_ONLY_READY',
       navigation: {
@@ -112,6 +114,7 @@ describe('authenticated read-only widget', () => {
       stateVersion: 0,
       canContinue: false,
       selection: null,
+      lastAction: null,
     };
     const hostOutput = structuredClone(withoutSession) as AuthenticatedContext & {
       widgetContext: AuthenticatedContext['widgetContext'] & {
@@ -249,6 +252,7 @@ describe('authenticated read-only widget', () => {
       stateVersion: 0,
       canContinue: false,
       selection: null,
+      lastAction: null,
     };
     preview.widgetContext.activeContext!.campaign.sessionVersion = 0;
     expect(renderAuthenticatedContext(preview)).toContain('data-action="confirm-selection"');
@@ -278,6 +282,26 @@ describe('authenticated read-only widget', () => {
     expect(persisted).not.toMatch(/data-action="attack|data-action="use|data-action="equip/i);
   });
 
+  it('renders the v5 observation action and its persisted official result without exposing private data', () => {
+    const playable = context();
+    playable.widgetContext.navigation.canMutate = true;
+    playable.widgetContext.gameSession.lastAction = {
+      type: 'OBSERVE',
+      status: 'RESOLVED',
+      summary: 'A observação foi registrada.',
+      focus: 'a porta antiga',
+      occurredAt: '2026-07-27T02:00:00.000Z',
+      discoveredFacts: [],
+    };
+    const html = renderAuthenticatedContext(playable);
+    expect(html).toContain('Onde deseja concentrar sua atenção?');
+    expect(html).toContain('data-action="observation-form"');
+    expect(html).toContain('Observar os arredores');
+    expect(html).toContain('Versão atual da sessão: 1');
+    expect(html).toContain('A observação foi registrada.');
+    expect(html).not.toMatch(/MASTER_ONLY|secret|uuid/i);
+  });
+
   it('strictly parses stable selection results and rejects privileged additions', () => {
     const result = {
       status: 'SUCCESS',
@@ -296,6 +320,29 @@ describe('authenticated read-only widget', () => {
       .toEqual(result);
     expect(() => parseAuthenticatedSelectionResult(selectionToolResult({
       ...result,
+      MASTER_ONLY: 'secret',
+    }))).toThrow(/contrato seguro/u);
+  });
+
+  it('strictly parses an official observation result and rejects privileged additions', () => {
+    const observation = {
+      action: {
+        type: 'OBSERVE',
+        status: 'RESOLVED',
+        summary: 'A observação foi registrada.',
+        focus: null,
+        occurredAt: '2026-07-27T02:00:00.000Z',
+      },
+      continuity: { sessionVersion: 2, canContinue: true },
+      discoveredFacts: [],
+    };
+    const observationToolResult = (structuredContent: unknown) => ({
+      content: [{ type: 'text' as const, text: 'Observação oficial' }],
+      structuredContent,
+    });
+    expect(parseAuthenticatedObservationResult(observationToolResult(observation))).toEqual(observation);
+    expect(() => parseAuthenticatedObservationResult(observationToolResult({
+      ...observation,
       MASTER_ONLY: 'secret',
     }))).toThrow(/contrato seguro/u);
   });

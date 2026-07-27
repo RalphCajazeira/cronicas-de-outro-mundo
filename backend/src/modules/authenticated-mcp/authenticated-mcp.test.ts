@@ -41,6 +41,7 @@ import {
   GET_AUTHENTICATED_BOOTSTRAP_TOOL,
   LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL,
   LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL,
+  PERFORM_AUTHENTICATED_OBSERVATION_TOOL,
   SELECT_AUTHENTICATED_GAME_CONTEXT_TOOL,
 } from './authenticated-mcp.server.js';
 import { authenticatedGameContextSchema } from '../authenticated-game-context/authenticated-game-context.dto.js';
@@ -53,7 +54,10 @@ import { authenticatedCharacterViewSchema } from '../authenticated-character-vie
 import { authenticatedSelectionRef } from '../authenticated-game-context/authenticated-selection-ref.js';
 import { createAuthenticatedGameSessionService } from '../authenticated-game-session/authenticated-game-session.service.js';
 import type { AuthenticatedGameSessionRepository } from '../authenticated-game-session/authenticated-game-session.types.js';
-import { authenticatedGameSessionSelectionResultSchema } from '../authenticated-game-session/authenticated-game-session.dto.js';
+import {
+  authenticatedGameSessionSelectionResultSchema,
+  authenticatedObservationResultSchema,
+} from '../authenticated-game-session/authenticated-game-session.dto.js';
 
 const widgetAssets: WidgetAssets = {
   readHome: () => Promise.resolve('<!doctype html><title>Public fixture</title>'),
@@ -251,6 +255,20 @@ async function startHost(
       canContinue: false,
       recovery: 'SELECT_AGAIN',
       message: 'A seleção solicitada não está disponível para esta conta.',
+    }),
+    observe: (_userId, input) => Promise.resolve({
+      action: {
+        type: 'OBSERVE',
+        status: 'REJECTED',
+        summary: 'A observação não está disponível.',
+        focus: null,
+        occurredAt: new Date().toISOString(),
+      },
+      continuity: {
+        sessionVersion: input.baseSessionVersion,
+        canContinue: false,
+      },
+      discoveredFacts: [],
     }),
   },
 ): Promise<AuthenticatedHost> {
@@ -617,7 +635,7 @@ describe('authenticated MCP resource server', () => {
     const { client, transport } = await connectClient(host, await host.token());
     try {
       const tools = await client.listTools();
-      expect(tools.tools).toHaveLength(4);
+      expect(tools.tools).toHaveLength(5);
       expect(tools.tools[0]).toMatchObject({
         name: GET_AUTHENTICATED_BOOTSTRAP_TOOL,
         annotations: {
@@ -695,6 +713,21 @@ describe('authenticated MCP resource server', () => {
           },
         });
       expect(tools.tools.find((tool) => tool.name === SELECT_AUTHENTICATED_GAME_CONTEXT_TOOL))
+        .toMatchObject({
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+          _meta: {
+            ui: {
+              resourceUri: AUTHENTICATED_HOME_RESOURCE_URI,
+              visibility: ['app'],
+            },
+          },
+        });
+      expect(tools.tools.find((tool) => tool.name === PERFORM_AUTHENTICATED_OBSERVATION_TOOL))
         .toMatchObject({
           annotations: {
             readOnlyHint: false,
@@ -837,6 +870,7 @@ describe('authenticated MCP resource server', () => {
 
   it('keeps selection app-only, versioned, idempotent, and mechanically non-destructive', async () => {
     const calls: Array<{ userId: string; baseSessionVersion: number; origin: string }> = [];
+    const observations: Array<{ userId: string; focus: string | undefined; baseSessionVersion: number; origin: string }> = [];
     const campaignSelectionRef = authenticatedSelectionRef(
       'campaign',
       '00000000-0000-4000-8000-000000000001',
@@ -865,6 +899,25 @@ describe('authenticated MCP resource server', () => {
             message: 'Campanha e personagem salvos para continuar depois.',
           });
         },
+        observe: (userId, input, observationAudit) => {
+          observations.push({
+            userId,
+            focus: input.focus,
+            baseSessionVersion: input.baseSessionVersion,
+            origin: observationAudit.origin,
+          });
+          return Promise.resolve({
+          action: {
+            type: 'OBSERVE' as const,
+            status: 'RESOLVED' as const,
+            summary: 'A observação foi registrada.',
+            focus: input.focus ?? null,
+            occurredAt: '2026-07-27T02:00:00.000Z',
+          },
+          continuity: { sessionVersion: input.baseSessionVersion + 1, canContinue: true },
+          discoveredFacts: [],
+          });
+        },
       },
     );
     const { client, transport } = await connectClient(host, await host.token());
@@ -886,6 +939,24 @@ describe('authenticated MCP resource server', () => {
         origin: 'widget',
       }]);
       expect(JSON.stringify(selected)).not.toMatch(/campaign-synthetic|actor-synthetic|userId|MASTER_ONLY/i);
+
+      const observed = CallToolResultSchema.parse(await client.callTool({
+        name: PERFORM_AUTHENTICATED_OBSERVATION_TOOL,
+        arguments: {
+          focus: 'a porta antiga',
+          idempotencyKey: 'observation-test-001',
+          baseSessionVersion: 1,
+        },
+      }));
+      expect(authenticatedObservationResultSchema.parse(observed.structuredContent))
+        .toMatchObject({ action: { status: 'RESOLVED', focus: 'a porta antiga' }, continuity: { sessionVersion: 2 } });
+      expect(observations).toEqual([{
+        userId: '00000000-0000-4000-8000-000000000001',
+        focus: 'a porta antiga',
+        baseSessionVersion: 1,
+        origin: 'widget',
+      }]);
+      expect(JSON.stringify(observed)).not.toMatch(/campaign-synthetic|actor-synthetic|userId|MASTER_ONLY/i);
     } finally {
       await transport.terminateSession();
       await client.close();
@@ -980,7 +1051,7 @@ describe('authenticated MCP resource server', () => {
       expect(suspended.status).toBe(403);
 
       records[0] = identity('active-subject');
-      expect((await client.listTools()).tools).toHaveLength(4);
+      expect((await client.listTools()).tools).toHaveLength(5);
     } finally {
       await transport.terminateSession();
       await client.close();

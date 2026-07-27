@@ -18,6 +18,7 @@ import { updateAuthenticationAudit } from '../../shared/http/request-audit.js';
 import {
   createAuthenticatedMcpServer,
   GET_AUTHENTICATED_BOOTSTRAP_TOOL,
+  PERFORM_AUTHENTICATED_OBSERVATION_TOOL,
   LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL,
   LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL,
   SELECT_AUTHENTICATED_GAME_CONTEXT_TOOL,
@@ -71,6 +72,9 @@ function auditTool(request: Request, response: Response): void {
   if (params.name === SELECT_AUTHENTICATED_GAME_CONTEXT_TOOL) {
     updateAuthenticationAudit(response, { tool: SELECT_AUTHENTICATED_GAME_CONTEXT_TOOL });
   }
+  if (params.name === PERFORM_AUTHENTICATED_OBSERVATION_TOOL) {
+    updateAuthenticationAudit(response, { tool: PERFORM_AUTHENTICATED_OBSERVATION_TOOL });
+  }
 }
 
 export function createAuthenticatedMcpRouter(
@@ -89,6 +93,17 @@ export function createAuthenticatedMcpRouter(
       canContinue: false,
       recovery: 'SELECT_AGAIN',
       message: 'A seleção solicitada não está disponível para esta conta.',
+    }),
+    observe: (_userId, input) => Promise.resolve({
+      action: {
+        type: 'OBSERVE' as const,
+        status: 'REJECTED' as const,
+        summary: 'A observação não está disponível para esta conta.',
+        focus: null,
+        occurredAt: new Date().toISOString(),
+      },
+      continuity: { sessionVersion: input.baseSessionVersion, canContinue: false },
+      discoveredFacts: [],
     }),
   },
 ) {

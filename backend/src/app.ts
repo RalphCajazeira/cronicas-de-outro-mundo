@@ -99,6 +99,20 @@ export function createApp(config: AppConfig, dependencies: AppDependencies) {
           recovery: 'SELECT_AGAIN' as const,
           message: 'A seleção solicitada não está disponível para esta conta.',
         }),
+        observe: (_userId, input) => Promise.resolve({
+          action: {
+            type: 'OBSERVE',
+            status: 'REJECTED',
+            summary: 'A observação não está disponível no momento.',
+            focus: null,
+            occurredAt: new Date().toISOString(),
+          },
+          continuity: {
+            sessionVersion: input.baseSessionVersion,
+            canContinue: false,
+          },
+          discoveredFacts: [],
+        }),
       },
     );
     app.use(createProtectedResourceMetadataRouter(config.OAUTH_RESOURCE_SERVER));
