@@ -44,7 +44,8 @@ describe('content shell DOM', () => {
     const launcher = shadowRoot?.querySelector<HTMLButtonElement>('.chronicles-launcher');
     launcher?.click();
     const overlay = shadowRoot?.querySelector<HTMLElement>('.chronicles-overlay');
-    const controls = [...(overlay?.querySelectorAll<HTMLElement>('button') ?? [])];
+    const controls = [...(overlay?.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea') ?? [])]
+      .filter((node) => node.tabIndex >= 0 && !node.hidden && node.getAttribute('hidden') === null);
     const first = controls[0];
     const last = controls.at(-1);
     expect(first).toBeDefined();
@@ -61,6 +62,47 @@ describe('content shell DOM', () => {
     expect(shadowRoot?.activeElement).toBe(launcher);
     shadowRoot?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, composed: true }));
     expect(overlay?.hidden).toBe(true);
+  });
+
+  it('uses real keyboard order and ignores inactive roving tabs', async () => {
+    installChromeMock();
+    await mountContentShell();
+    const shadowRoot = document.getElementById('cronicas-extension-root')?.shadowRoot;
+    const launcher = shadowRoot?.querySelector<HTMLButtonElement>('.chronicles-launcher');
+    launcher?.click();
+    const overlay = shadowRoot?.querySelector<HTMLElement>('.chronicles-overlay');
+    expect(overlay).not.toBeNull();
+
+    const combat = overlay?.querySelector<HTMLButtonElement>('[data-tab="combat"]');
+    const summary = overlay?.querySelector<HTMLButtonElement>('[data-tab="summary"]');
+    expect(combat).not.toBeNull();
+    expect(summary).not.toBeNull();
+    expect(combat?.tabIndex).toBe(-1);
+    expect(summary?.tabIndex).toBe(0);
+
+    const sequence = [...(overlay?.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea') ?? [])]
+      .filter((node) => node.tabIndex >= 0 && !node.hidden && node.getAttribute('hidden') === null);
+    expect(sequence).not.toContain(combat);
+
+    const first = sequence[0];
+    const last = sequence.at(-1);
+    expect(first).toBeDefined();
+    expect(last).toBeDefined();
+
+    last?.focus();
+    last?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, composed: true }));
+    expect(shadowRoot?.activeElement).toBe(first);
+    expect(shadowRoot?.activeElement).not.toBe(combat);
+
+    first?.focus();
+    first?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, composed: true }));
+    expect(shadowRoot?.activeElement).toBe(last);
+    expect(shadowRoot?.activeElement).not.toBe(combat);
+
+    last?.focus();
+    last?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, composed: true }));
+    expect(shadowRoot?.activeElement).toBe(first);
+    expect(shadowRoot?.activeElement).not.toBe(combat);
   });
 
   it('opens, minimizes, closes with Escape, and restores focus to the launcher', () => {
