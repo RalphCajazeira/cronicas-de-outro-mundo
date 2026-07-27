@@ -58,6 +58,14 @@ export const authenticatedContextSchema = z.object({
         campaignSelectionRef: selectionRefSchema,
         characterSelectionRef: selectionRefSchema,
       }).strict().nullable(),
+      lastAction: z.object({
+        type: z.literal('OBSERVE'),
+        status: z.literal('RESOLVED'),
+        summary: z.string().min(1).max(500),
+        focus: z.string().min(1).max(300).nullable(),
+        occurredAt: z.string().datetime(),
+        discoveredFacts: z.array(z.string().min(1).max(240)).max(15),
+      }).strict().nullable(),
     }).strict(),
     sessionState: z.enum([
       'NO_PLAYER',
@@ -71,7 +79,7 @@ export const authenticatedContextSchema = z.object({
       canSelectCampaign: z.boolean(),
       canSelectCharacter: z.boolean(),
       canViewContext: z.boolean(),
-      canMutate: z.literal(false),
+      canMutate: z.boolean(),
       canPersistSelection: z.boolean(),
       canContinue: z.boolean(),
     }).strict(),

@@ -1,5 +1,14 @@
 import { z } from 'zod';
 
+export const observedActionReferenceSchema = z.object({
+  type: z.literal('OBSERVE'),
+  status: z.literal('RESOLVED'),
+  summary: z.string().trim().min(1).max(500),
+  focus: z.string().trim().min(1).max(300).nullable(),
+  occurredAt: z.string().datetime(),
+  discoveredFacts: z.array(z.string().trim().min(1).max(240)).max(15),
+}).strict();
+
 export const authorizedSelectionRefSchema = z.string()
   .regex(/^sel_[A-Za-z0-9_-]{43}$/u);
 
@@ -57,6 +66,7 @@ const persistedGameSessionSchema = z.object({
     campaignSelectionRef: authorizedSelectionRefSchema,
     characterSelectionRef: authorizedSelectionRefSchema,
   }).strict().nullable(),
+  lastAction: observedActionReferenceSchema.nullable(),
 }).strict();
 
 export const widgetContextSchema = z.object({
@@ -77,7 +87,7 @@ export const widgetContextSchema = z.object({
     canSelectCampaign: z.boolean(),
     canSelectCharacter: z.boolean(),
       canViewContext: z.boolean(),
-      canMutate: z.literal(false),
+      canMutate: z.boolean(),
       canPersistSelection: z.boolean(),
       canContinue: z.boolean(),
   }).strict(),
@@ -157,6 +167,7 @@ export function authorizationErrorContext(
         stateVersion: 0,
         canContinue: false,
         selection: null,
+        lastAction: null,
       },
     },
     environment: {

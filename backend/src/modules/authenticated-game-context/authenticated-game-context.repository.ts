@@ -146,6 +146,23 @@ export function createPrismaAuthenticatedGameContextRepository(
         },
       });
     },
+    findLatestObservation(campaignId, actorId) {
+      return client.gameEvent.findFirst({
+        where: {
+          campaignId,
+          actorId,
+          eventType: 'AUTHENTICATED_OBSERVATION',
+        },
+        select: {
+          payload: true,
+          createdAt: true,
+        },
+        orderBy: [
+          { createdAt: 'desc' },
+          { id: 'desc' },
+        ],
+      });
+    },
   };
 }
 

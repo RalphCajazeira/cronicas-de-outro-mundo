@@ -20,6 +20,8 @@ import {
 import type { createAuthenticatedCharacterViewService } from '../authenticated-character-view/authenticated-character-view.service.js';
 import {
   authenticatedGameSessionSelectionResultSchema,
+  authenticatedObservationResultSchema,
+  performAuthenticatedObservationInputSchema,
   selectAuthenticatedGameContextInputSchema,
 } from '../authenticated-game-session/authenticated-game-session.dto.js';
 import type { createAuthenticatedGameSessionService } from '../authenticated-game-session/authenticated-game-session.service.js';
@@ -30,7 +32,8 @@ export const GET_AUTHENTICATED_BOOTSTRAP_TOOL = 'getAuthenticatedBootstrap';
 export const LOAD_AUTHENTICATED_GAME_CONTEXT_TOOL = 'loadAuthenticatedGameContext';
 export const LOAD_AUTHENTICATED_CHARACTER_VIEW_TOOL = 'loadAuthenticatedCharacterView';
 export const SELECT_AUTHENTICATED_GAME_CONTEXT_TOOL = 'selectAuthenticatedGameContext';
-export const AUTHENTICATED_HOME_RESOURCE_URI = 'ui://game/authenticated-home/v4.html';
+export const PERFORM_AUTHENTICATED_OBSERVATION_TOOL = 'performAuthenticatedObservation';
+export const AUTHENTICATED_HOME_RESOURCE_URI = 'ui://game/authenticated-home/v5.html';
 export const LEGACY_AUTHENTICATED_HOME_RESOURCE_URI = 'ui://game/authenticated-home/v3.html';
 
 export const authenticatedBootstrapSchema = z.object({
@@ -57,7 +60,7 @@ export function createAuthenticatedMcpServer(
       version: '0.1.0',
     },
     {
-      instructions: 'Load the authorized game context before showing the authenticated home interface. Selection persistence is available only through the app-only selection tool and never changes mechanical game state.',
+      instructions: 'Load the authorized game context before showing the authenticated home interface. Selection persistence is app-only. Observation is app-only, persists only its official action event and GameSession version, and must be narrated only after its confirmed result without adding effects.',
     },
   );
 
@@ -133,6 +136,51 @@ export function createAuthenticatedMcpServer(
         ...(result.status === 'REJECTED' ? { isError: true } : {}),
         structuredContent: result,
         content: [{ type: 'text' as const, text: result.message }],
+      };
+    },
+  );
+
+  registerAppTool(
+    server,
+    PERFORM_AUTHENTICATED_OBSERVATION_TOOL,
+    {
+      title: 'Observar os arredores',
+      description: 'Registra a ação de observação na sessão ativa com persistência oficial.',
+      inputSchema: performAuthenticatedObservationInputSchema,
+      outputSchema: authenticatedObservationResultSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      _meta: {
+        ui: {
+          resourceUri: AUTHENTICATED_HOME_RESOURCE_URI,
+          visibility: ['app'],
+        },
+      },
+    },
+    async (input, extra) => {
+      const authenticatedContext = readAuthenticatedMcpContext(extra.authInfo);
+      if (authenticatedContext === undefined || authenticatedContext.userStatus !== 'ACTIVE') {
+        throw new Error('Authenticated MCP context is unavailable');
+      }
+      const result = await gameSessionService.observe(authenticatedContext.userId, input, {
+        origin: 'widget',
+        ...(authenticatedContext.requestId === undefined ? {} : { requestId: authenticatedContext.requestId }),
+        ...(authenticatedContext.traceId === undefined ? {} : { traceId: authenticatedContext.traceId }),
+      });
+      authenticatedContext.recordAuthorizationDecision({
+        result: result.action.status === 'RESOLVED' ? 'allowed' : 'denied',
+        reasonCode: `observation_${result.action.status.toLowerCase()}`,
+      });
+      return {
+        ...(result.action.status === 'REJECTED' || result.action.status === 'BLOCKED'
+          ? { isError: true }
+          : {}),
+        structuredContent: result,
+        content: [{ type: 'text' as const, text: result.action.summary }],
       };
     },
   );
@@ -262,7 +310,7 @@ export function createAuthenticatedMcpServer(
     'Crônicas de Outro Mundo — Personagem autenticado',
     AUTHENTICATED_HOME_RESOURCE_URI,
     {
-      description: 'Interface autenticada v4 para seleção persistente e contexto mecânico somente leitura.',
+      description: 'Interface autenticada v5 para seleção persistente, observação oficial e contexto mecânico seguro.',
       mimeType: RESOURCE_MIME_TYPE,
       _meta: {
         ui: {

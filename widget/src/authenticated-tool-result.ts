@@ -21,6 +21,22 @@ export const authenticatedSelectionResultSchema = z.object({
 }).strict();
 export type AuthenticatedSelectionResult = z.infer<typeof authenticatedSelectionResultSchema>;
 
+export const authenticatedObservationResultSchema = z.object({
+  action: z.object({
+    type: z.literal('OBSERVE'),
+    status: z.enum(['RESOLVED', 'CONFLICT', 'BLOCKED', 'REJECTED']),
+    summary: z.string().min(1).max(500),
+    focus: z.string().min(1).max(300).nullable(),
+    occurredAt: z.string().datetime(),
+  }).strict(),
+  continuity: z.object({
+    sessionVersion: z.number().int().min(0),
+    canContinue: z.boolean(),
+  }).strict(),
+  discoveredFacts: z.array(z.string().min(1).max(240)).max(15),
+}).strict();
+export type AuthenticatedObservationResult = z.infer<typeof authenticatedObservationResultSchema>;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -76,7 +92,7 @@ function restoreAuthenticatedContextNulls(input: unknown): unknown {
       }
     : input.widgetContext.activeContext;
   const gameSession = isRecord(input.widgetContext.gameSession)
-    ? restoreMissingNulls(input.widgetContext.gameSession, ['selection'])
+    ? restoreMissingNulls(input.widgetContext.gameSession, ['selection', 'lastAction'])
     : input.widgetContext.gameSession;
   return {
     ...input,
@@ -220,5 +236,15 @@ export function parseAuthenticatedSelectionResult(input: unknown): Authenticated
   }
   const parsed = authenticatedSelectionResultSchema.safeParse(result.structuredContent);
   if (!parsed.success) throw new Error('O resultado da seleção não corresponde ao contrato seguro.');
+  return parsed.data;
+}
+
+export function parseAuthenticatedObservationResult(input: unknown): AuthenticatedObservationResult {
+  const result = normalizeToolResultEvent(input);
+  if (result.structuredContent === undefined) {
+    throw new Error('O resultado da observação não foi recebido.');
+  }
+  const parsed = authenticatedObservationResultSchema.safeParse(result.structuredContent);
+  if (!parsed.success) throw new Error('O resultado da observação não corresponde ao contrato seguro.');
   return parsed.data;
 }

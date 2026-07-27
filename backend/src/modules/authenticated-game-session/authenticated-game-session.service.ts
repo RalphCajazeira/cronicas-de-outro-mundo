@@ -1,7 +1,10 @@
 import {
   authenticatedGameSessionSelectionResultSchema,
+  authenticatedObservationResultSchema,
+  performAuthenticatedObservationInputSchema,
   selectAuthenticatedGameContextInputSchema,
   type SelectAuthenticatedGameContextInput,
+  type PerformAuthenticatedObservationInput,
 } from './authenticated-game-session.dto.js';
 import type {
   AuthenticatedGameSessionAuditContext,
@@ -20,6 +23,16 @@ export function createAuthenticatedGameSessionService(
       const parsedInput = selectAuthenticatedGameContextInputSchema.parse(input);
       return authenticatedGameSessionSelectionResultSchema.parse(
         await repository.select(userId, parsedInput, audit),
+      );
+    },
+    async observe(
+      userId: string,
+      input: PerformAuthenticatedObservationInput,
+      audit: AuthenticatedGameSessionAuditContext,
+    ) {
+      const parsedInput = performAuthenticatedObservationInputSchema.parse(input);
+      return authenticatedObservationResultSchema.parse(
+        await repository.observe(userId, parsedInput, audit),
       );
     },
   };
