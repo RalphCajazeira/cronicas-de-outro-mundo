@@ -26,7 +26,7 @@ describe('render build validation', () => {
 
   it('rejects npm run build:chatgpt-app as equivalent command', async () => {
     await expect(() => validateRenderBuildConfiguration({
-      rootPackage: { ...baseScripts, 'build:chatgpt-app': 'npm run build --prefix backend' },
+      rootPackage: { scripts: { ...baseScripts, 'build:chatgpt-app': 'npm run build --prefix backend' } },
       renderYaml: 'buildCommand: npm ci --prefix backend --include=dev && npm ci --prefix widget --include=dev && npm ci --prefix oauth-ui --include=dev && npm ci --prefix extension --include=dev && npm run build:chatgpt-app',
     })).rejects.toThrow('must invoke npm run build as an independent command segment');
   });
@@ -48,9 +48,11 @@ describe('render build validation', () => {
   it('rejects unknown workspace install when referenced by build', async () => {
     await expect(() => validateRenderBuildConfiguration({
       rootPackage: {
-        ...baseScripts,
-        build: 'npm run build:widget && npm run build:widget-extra',
-        'build:widget-extra': 'npm run build --prefix extension-extra',
+        scripts: {
+          ...baseScripts,
+          build: 'npm run build:widget && npm run build:widget-extra',
+          'build:widget-extra': 'npm run build --prefix extension-extra',
+        },
       },
       renderYaml: 'buildCommand: npm ci --prefix backend --include=dev && npm ci --prefix widget --include=dev && npm ci --prefix oauth-ui --include=dev && npm ci --prefix extension --include=dev && npm run build',
     })).rejects.toThrow('must install extension-extra');

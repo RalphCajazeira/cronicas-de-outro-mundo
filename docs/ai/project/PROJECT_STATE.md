@@ -70,8 +70,8 @@ Actions/OpenAPI no GPT
 | Ação autenticada `Observar` | `DEPLOYED_STAGING` | PRs #78–#80; backend live em `5ed97b32a10f140312517b7154d6e3fb633ecd70` | Persistência, idempotência e projeção pública prontas; validação visual do iframe não é mais requisito principal. |
 | Projeção pública de `GameEvent` | `DEPLOYED_STAGING` | PR #80 | Eventos sem contrato público falham fechado. |
 | Widget como frontend principal | `DEPRECATED` | decisão arquitetural de 2026-07-27 | Mantido como fallback, bootstrap e diagnóstico. |
-| Fundação da extensão MV3 | `MANUALLY_VALIDATED` | PR #81; PR #82; commit de correção de revisão | Shell local validado manualmente no navegador e overlay/page demonstrados. |
-| Botão flutuante + overlay + página própria | `MANUALLY_VALIDATED` | pacote `extension/` + PR corretivo final | Navegação, estados e controle de foco validados; página própria sem controles inertes. |
+| Fundação da extensão MV3 | `MANUALLY_VALIDATED` | PR #81; PR #82; PR #84; suíte de extensão | Shell local validado manualmente em etapa anterior; este ajuste corrige apenas suíte de validação do Render. |
+| Botão flutuante + overlay + página própria | `INTEGRATED` | pacote `extension/` + testes + validação de regressão | Overlay manualmente validado em rodadas anteriores. Página própria coberta automaticamente por testes; validação manual nesta sessão não executada no navegador. |
 | OAuth próprio da extensão | `NOT_STARTED` | — | Próxima fase após validação/hotfix da fundação. |
 | Leitura real do backend pela extensão | `NOT_STARTED` | — | Reutilizar projeções e autorização existentes. |
 | Atualização automática da extensão | `NOT_STARTED` | — | Começar por recarga após mutação/polling; evoluir para SSE ou WebSocket. |
@@ -129,7 +129,7 @@ Não reutilizar Ralph, Kael, Elarion ou campanhas reais como fixture da extensã
 
 1. concluir o hotfix de revisão da fundação da extensão [concluído nesta task];
 2. carregar `extension/dist` manualmente no Chromium;
-3. validar botão, overlay, teclado, página própria e console [validado nesta task];
+3. validar botão, overlay, teclado, página própria e console;
 4. implementar OAuth próprio da extensão;
 5. carregar contexto/ficha/inventário reais;
 6. implementar atualização automática;
@@ -157,7 +157,7 @@ Ao mudar ordem ou escopo das próximas tasks, atualizar:
 - documentos antigos ainda podem afirmar que o widget é o frontend principal;
 - a arquitetura canônica atual usa a extensão como frontend principal;
 - o roadmap histórico centrado em widget continua útil como referência de requisitos, mas não como ordem atual de entrega;
-- o status `MANUALLY_VALIDATED` da extensão inclui validação manual de overlay/page e fluxo de navegação.
+- o status `MANUALLY_VALIDATED` da extensão inclui validação manual de overlay.
 
 ## 11. Condição para primeiro teste jogável pela extensão
 
