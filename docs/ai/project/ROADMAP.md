@@ -1,95 +1,331 @@
-# Roadmap — Game-GPT / Crônicas de Outro Mundo
+# Roadmap Executável do Projeto
 
-Atualizado em: 2026-07-26
+**Atualizado em:** 2026-07-27  
+**Branch de integração:** `develop`
 
-Este roadmap registra as próximas frentes conhecidas após a integração das correções finais da resolução automática. Nenhuma fase é considerada implantada ou publicada apenas por estar integrada em `develop`.
+## 1. Objetivo imediato
 
-## Baseline
+Colocar o jogo em teste manual real pela extensão, com entregas verticais pequenas e correções rápidas baseadas no uso.
 
-- Baseline anterior à Fase 2D-B: `38694c7ca6df4470f25776f4989ce156b134e3aa`.
-- Fundação integrada: Fases 1A–1L-C, 1M-A e resolução de encontros por beat.
-- Próximo gate: revisar e implantar no staging as correções posteriores à baseline intermediária de auto-resolução e só então atualizar o GPT Builder.
+```text
+fundação da extensão
+→ OAuth
+→ leitura real
+→ atualização automática
+→ primeira ação real
+→ testar
+→ corrigir
+→ ampliar jogabilidade
+```
 
-## Gate atual — Fase 2D-B
+## 2. Política de execução
 
-Objetivo: integrar e publicar a consulta autenticada somente leitura do
-personagem no App OAuth privado.
+- uma task lógica por objetivo e change set;
+- PR pequeno quando houver separação técnica real;
+- implementar, integrar e validar antes de ampliar;
+- bugs causados pela task permanecem na mesma task;
+- bugs independentes viram nova task;
+- staging opera sem cliques manuais depois de autorização da task;
+- `main`, produção, custo e operações destrutivas exigem autorização explícita;
+- atualizar `PROJECT_STATE.md` a cada mudança de capacidade.
 
-Ordem:
+## 3. Roadmap atual
 
-1. validar contratos, autorização negativa, projeções, widget e fixture local;
-2. integrar a branch em `develop` por PR verde;
-3. aguardar o release normal de staging e confirmar o SHA live;
-4. executar automaticamente o provisioning protegido acionado pelo manifesto;
-5. verificar health, readiness, `/mcp`, `/mcp-auth` e logs sanitizados;
-6. atualizar ou recriar somente o App OAuth privado, se o cache de resource URI
-   exigir;
-7. testar login e as cinco abas no ChatGPT, incluindo remontagem e ausência de
-   qualquer mutação.
+### EXT-1B — Hotfix e validação da fundação
 
-## Rollout da resolução automática
+**Estado:** `IN_PROGRESS`
 
-Objetivo: validar ponta a ponta a cápsula `scene` v2, criação assistida, plano curto e política automática sem regressão terminal, fuga inválida ou efeito artificial de `wait`.
+Objetivo:
 
-Ordem obrigatória:
+- corrigir dependências da extensão no build Render;
+- corrigir focus trap no Shadow DOM;
+- remover controles inertes na página própria;
+- responder e resolver threads do PR #81;
+- carregar `extension/dist` manualmente no Chromium.
 
-1. confirmar `develop` e working tree limpa;
-2. executar lint, typecheck, unitários, integração PostgreSQL, validação OpenAPI e build;
-3. revisar o diff dos commits de integridade terminal, fuga em etapas e `wait` temporal;
-4. confirmar migrations do staging sem reset ou operação destrutiva;
-5. implantar manualmente no Render somente após o gate;
-6. validar health, readiness, criação, carga, auto-resolução, replay, terminalidade, fuga e ações genéricas;
-7. atualizar OpenAPI, Instructions e Knowledge no GPT Builder de staging;
-8. confirmar exatamente 20 Actions, a classificação consequencial explícita e a configuração salva;
-9. observar logs sanitizados e preservar rollback.
+Critérios:
 
-Condições de parada:
+- CI verde;
+- build Render limpo compatível;
+- Tab/Shift+Tab contidos no overlay;
+- Escape fecha e devolve foco;
+- página própria sem botões inertes;
+- botão/overlay/página validados no ChatGPT web;
+- console sem erro.
 
-- conflito entre `develop`, staging e GPT Builder;
-- migration inesperada;
-- falha de replay, idempotência, integridade terminal ou autoridade;
-- exposição de payload, roll, UUID, credencial ou detalhe de infraestrutura;
-- necessidade de ampliar escopo para recompensa, morte ou produção.
+Fora de escopo:
 
-## Fase 1M-B — XP e level-up
+- OAuth;
+- backend;
+- realtime;
+- ação real.
 
-Escopo previsto:
+### EXT-2 — OAuth próprio da extensão
 
-- política versionada de XP;
-- distribuição e progressão idempotentes;
-- limites e auditoria;
-- nenhuma recompensa duplicada em replay;
-- integração com o ledger terminal existente.
+**Estado:** `NOT_STARTED`
 
-Não misturar com ouro, loot, comércio ou deploy de produção.
+Objetivo:
 
-## Fase 1M-C — ouro, drop e claim de loot
+- autenticar a extensão sem usar cookies ou tokens do ChatGPT;
+- vincular a identidade ao mesmo `User` interno do App MCP;
+- armazenar a sessão com segurança;
+- suportar refresh, logout e revogação.
 
-Escopo previsto:
+Critérios:
 
-- geração e persistência autoritativa de drops;
-- claim explícito e idempotente;
-- ouro e inventário com capacidade/peso;
-- distribuição entre protagonista e companheiros;
-- proteção contra duplicação, perda silenciosa e replay.
+- PKCE;
+- um client apropriado ou extensão segura do modelo atual, após auditoria;
+- nenhuma credencial no manifest;
+- User suspenso/revogado falha fechado;
+- expiração recuperável;
+- User A não acessa User B.
 
-## Backlog posterior
+Fora de escopo:
 
-- checkpoints ou resumos narrativos persistidos;
-- bestiário e persistência ampliada de NPCs, criaturas e companheiros;
-- missões e relacionamentos;
-- tempo, clima, localização e viagem;
-- vendedores, lojas e economia;
-- treinamento e progressão de habilidades;
-- frontend geral ou expansão posterior do ChatGPT App para mapa, missões e
-  outros atores;
-- autenticação de produção, CORS, rate limit e observabilidade externa;
-- consolidação editorial contínua do Knowledge narrativo.
+- leitura de ficha;
+- realtime;
+- ações.
 
-## Regras de sequência
+### EXT-3 — Contexto read-only real
 
-- Não misturar rollout de staging/GPT, XP e loot em uma única task.
-- Banco remoto, Render, GPT Builder e produção exigem autorização explícita.
-- Cada fase deve declarar escopo, fora de escopo, critérios, validações e rollback.
-- Atualizar `CURRENT_STATE.md` após merge funcional, rollout ou mudança relevante de ambiente.
-- Confirmar fatos mutáveis no Git e nos ambientes; documentação é baseline, não prova de implantação.
+**Estado:** `NOT_STARTED`
+
+Objetivo:
+
+- substituir fixture local por projeções reais do backend;
+- carregar Resumo, Ficha, Inventário, Equipamentos, Habilidades e continuidade.
+
+Critérios:
+
+- reutilizar serviços atuais;
+- paginação;
+- loading, vazio e erro;
+- sem `MASTER_ONLY`;
+- sem UUID interno desnecessário;
+- reload reconstrói pelo backend;
+- nenhuma mutação.
+
+### EXT-4 — Atualização automática
+
+**Estado:** `NOT_STARTED`
+
+Objetivo:
+
+- manter a extensão sincronizada com mudanças vindas do GPT/MCP ou da própria extensão.
+
+Estratégia:
+
+1. recarga após mutação;
+2. polling controlado como fallback;
+3. SSE ou WebSocket autenticado;
+4. invalidação por `sessionVersion` e áreas alteradas.
+
+Critérios:
+
+- reconexão com backoff;
+- recarga oficial após reconectar;
+- evento perdido não deixa estado divergente;
+- canal não vira fonte de verdade;
+- deploy/restart recuperável.
+
+### EXT-5 — Observar pela extensão
+
+**Estado:** `NOT_STARTED`
+
+Objetivo:
+
+- executar `performAuthenticatedObservation` pelo frontend principal;
+- mostrar resultado oficial;
+- atualizar `lastAction` e versão;
+- refletir mudanças automaticamente;
+- disponibilizar resultado ao GPT para narração.
+
+Critérios:
+
+- idempotência;
+- clique duplo protegido;
+- conflito recuperável;
+- retry apenas de transporte com mesma chave;
+- bloqueio/rejeição exigem reload ou nova tentativa deliberada;
+- HP, Mana, SP e inventário inalterados.
+
+### GAME-1 — Movimento simples
+
+**Estado:** `NOT_STARTED`
+
+Objetivo:
+
+- carregar localização pública;
+- listar destinos válidos;
+- mostrar prévia;
+- confirmar deslocamento;
+- persistir localização e tempo quando aplicável.
+
+Fora de escopo inicial:
+
+- mapa tático;
+- pathfinding complexo;
+- encontro aleatório avançado.
+
+### GAME-2 — Consumível simples
+
+**Estado:** `NOT_STARTED`
+
+Objetivo:
+
+- selecionar consumível;
+- prever efeito;
+- confirmar;
+- aplicar exatamente um consumo;
+- atualizar inventário e recursos.
+
+Critérios:
+
+- item narrativo não consumível;
+- quantidade e posse revalidadas;
+- idempotência;
+- conflito;
+- projeção pública segura.
+
+### GAME-3 — Habilidade simples
+
+**Estado:** `NOT_STARTED`
+
+Objetivo:
+
+- selecionar habilidade autorizada;
+- escolher alvo simples;
+- aplicar custo e efeito;
+- persistir evento;
+- atualizar recursos;
+- gerar aprendizagem quando aplicável.
+
+Começar fora de encontro ou em cenário controlado.
+
+### GAME-4 — Primeiro encontro jogável
+
+**Estado:** `NOT_STARTED`
+
+Objetivo:
+
+- um personagem;
+- um inimigo;
+- janela de decisão;
+- movimento simples;
+- ataque básico;
+- habilidade simples;
+- fim do encontro;
+- loot mínimo;
+- retomada após interrupção.
+
+Critérios:
+
+- `NEXT_PLAYER_DECISION`;
+- mapa simples;
+- resolução autoritativa;
+- atualização automática;
+- idempotência;
+- conflito;
+- nova conversa/aba recupera estado.
+
+## 4. Depois do primeiro ciclo jogável
+
+Ordem aproximada, sujeita a testes:
+
+1. equipamentos mutáveis;
+2. comércio;
+3. treino;
+4. progressão por uso;
+5. Cansaço e sono;
+6. mapa de exploração;
+7. combate tático por ticks;
+8. loot completo;
+9. relações e companheiros;
+10. missões;
+11. crafting;
+12. painel administrativo;
+13. criação inicial completa;
+14. GPT definitivo sem Actions.
+
+## 5. Migração do GPT definitivo
+
+Somente após equivalência suficiente:
+
+- preservar backup da configuração atual;
+- revisar Instructions;
+- revisar Knowledge;
+- remover Actions da configuração do GPT;
+- conectar somente App MCP;
+- instruir uso da extensão;
+- validar criação, retomada, narrativa e mecânica;
+- manter rollback até aprovação.
+
+## 6. Critérios para considerar o jogo testável
+
+### Teste visual
+
+```text
+fundação validada
+→ OAuth
+→ leitura real
+→ extensão atualiza sem recarregar manualmente toda hora
+```
+
+### Teste jogável mínimo
+
+```text
+Observar
+→ movimento
+→ consumível ou habilidade
+→ primeiro encontro
+```
+
+### Não exigir antes do primeiro teste
+
+- mapa final;
+- combate completo;
+- comércio completo;
+- crafting;
+- progressão final;
+- produção;
+- publicação da extensão na loja.
+
+## 7. Backlog descoberto durante testes
+
+Todo problema novo deve virar Issue quando:
+
+- não foi causado pela task atual;
+- exige commit próprio;
+- muda produto;
+- amplia escopo;
+- precisa priorização.
+
+Classificações sugeridas:
+
+```text
+type: bug | feature | change | removal | technical-debt
+area: extension | backend | oauth | mcp | gameplay | combat | inventory | progression | security
+```
+
+## 8. Dependências críticas
+
+- backend e `develop` saudáveis;
+- Node 22.22.0;
+- staging OAuth sintético;
+- `GameSession` e projeções atuais;
+- extensão com permissões mínimas;
+- pipeline não deve implantar backend em mudanças apenas da extensão;
+- build Render deve continuar instalando todo workspace chamado pelo build raiz.
+
+## 9. Atualização deste arquivo
+
+Atualizar quando:
+
+- uma task entrar em andamento;
+- uma task for integrada;
+- uma capacidade for bloqueada;
+- a ordem mudar;
+- uma decisão arquitetural alterar dependências;
+- surgir nova prioridade a partir de teste manual.
+
+O estado detalhado por capacidade vive em `PROJECT_STATE.md`.
