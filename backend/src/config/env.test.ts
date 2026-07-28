@@ -130,6 +130,34 @@ describe('application configuration', () => {
     }).OAUTH_RESOURCE_SERVER?.resourceUri).toBe(stagingResource);
   });
 
+  it('enables an extension public client only with its exact Chromium redirect and separate audience', () => {
+    const extensionResource = 'https://cronicas-de-outro-mundo-staging-api.onrender.com/extension/session';
+    expect(parseConfig({
+      ...validEnvironment,
+      NODE_ENV: 'production',
+      APP_ENV: 'staging',
+      PUBLIC_BASE_URL: 'https://cronicas-de-outro-mundo-staging-api.onrender.com',
+      OAUTH_RESOURCE_SERVER_ENABLED: 'true',
+      OAUTH_ISSUER: 'https://project-ref.supabase.co/auth/v1',
+      OAUTH_AUTHORIZATION_SERVER: 'https://project-ref.supabase.co/auth/v1',
+      OAUTH_JWKS_URI: 'https://project-ref.supabase.co/auth/v1/.well-known/jwks.json',
+      OAUTH_RESOURCE_URI: 'https://cronicas-de-outro-mundo-staging-api.onrender.com/mcp-auth',
+      OAUTH_REQUIRED_SCOPES: 'openid',
+      OAUTH_ALLOWED_ALGORITHMS: 'ES256',
+      EXTENSION_OAUTH_ENABLED: 'true',
+      EXTENSION_OAUTH_CLIENT_ID: 'extension-public-client',
+      EXTENSION_OAUTH_REDIRECT_URI: 'https://ddmcennimefoiapgjhmienohiapencdm.chromiumapp.org/oauth2',
+      EXTENSION_OAUTH_RESOURCE_URI: extensionResource,
+      EXTENSION_OAUTH_REQUIRED_SCOPES: 'openid,profile',
+      EXTENSION_OAUTH_ALLOWED_ALGORITHMS: 'ES256',
+    }).EXTENSION_OAUTH).toMatchObject({
+      resourceUri: extensionResource,
+      allowedClientIds: ['extension-public-client'],
+      extensionOrigin: 'chrome-extension://ddmcennimefoiapgjhmienohiapencdm',
+      requiredScopes: ['openid', 'profile'],
+    });
+  });
+
   it.each([
     { OAUTH_JWKS_URI: 'http://keys.example.test/jwks' },
     { OAUTH_JWKS_URI: 'http://127.0.0.2:4100/jwks' },

@@ -3,8 +3,8 @@
   "name": "Crônicas de Outro Mundo",
   "description": "Shell visual local para Crônicas de Outro Mundo.",
   "version": "0.1.0",
-  "permissions": ["storage"],
-  "host_permissions": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+  "permissions": ["storage", "identity"],
+  "host_permissions": ["https://chatgpt.com/*", "https://chat.openai.com/*", "https://cronicas-de-outro-mundo-staging-api.onrender.com/*"],
   "background": {
     "service_worker": "background/service-worker.js",
     "type": "module"

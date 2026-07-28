@@ -25,10 +25,14 @@ describe('OAuth staging provisioning guards', () => {
     expect(() => parseProvisionMode(['--dry-run', '--apply'])).toThrow();
   });
 
-  it('accepts only exact bounded client IDs and the canonical protected resource', () => {
+  it('accepts only exact bounded client IDs and the approved protected resources', () => {
     expect(() => validateOAuthClientPolicyInput(
       'synthetic-client',
       'https://cronicas-de-outro-mundo-staging-api.onrender.com/mcp-auth',
+    )).not.toThrow();
+    expect(() => validateOAuthClientPolicyInput(
+      'extension-client',
+      'https://cronicas-de-outro-mundo-staging-api.onrender.com/extension/session',
     )).not.toThrow();
     expect(() => validateOAuthClientPolicyInput(
       'synthetic-client ',

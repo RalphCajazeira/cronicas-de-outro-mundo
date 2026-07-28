@@ -125,3 +125,37 @@ npm run validate:extension-manifest
 Depois de `npm run build:extension`, carregue `extension/dist` como extensão
 descompactada em `chrome://extensions`. Não é necessário instalar
 permanentemente no navegador de Ralph para esta fundação.
+
+## OAuth próprio da extensão — Extensão 2B
+
+A extensão é um cliente OAuth público independente do App MCP. O fluxo é
+Authorization Code com PKCE S256: o service worker gera state e verifier,
+abre chrome.identity.launchWebAuthFlow, valida o callback exato de
+chrome.identity.getRedirectURL('oauth2') e troca o código sem client secret.
+Tokens nunca entram no DOM, content script ou mensagens React.
+
+O service worker retém access token somente em memória. Antes de qualquer
+leitura ou gravação de credencial, ele restringe `chrome.storage.local` a
+`TRUSTED_CONTEXTS`; se isso falhar, encerra a recuperação de sessão. Para
+sobreviver à suspensão MV3, somente o refresh token rotativo é mantido nesse
+storage; state, code e verifier vivem apenas durante a transação. Logout e
+refresh inválido removem a credencial local. O provedor atual não expõe um
+endpoint OAuth de revogação para este cliente público; a expiração curta do
+access token e a rotação/revogação de refresh do provedor limitam a sessão.
+A UI recebe apenas `PublicAuthState`.
+
+O backend publica configuração pública sem segredo em /extension/oauth-config
+e protege /extension/session com audience própria, distinta de /mcp-auth. A
+configuração exige client allowlisted, redirect Chromium exata, issuer/JWKS,
+scopes mínimos e CORS limitado ao origin exato da extensão. A policy OAuth
+existente mapeia o client da extensão para essa audience; não há migration
+adicional.
+
+O manifest adiciona somente identity e o host HTTPS exato do backend staging.
+O host web continua em estado desconectado determinístico e não chama
+chrome.* nem OAuth real.
+
+Depois de cada mudança de sessão o worker publica somente
+`AUTH_STATE_CHANGED` com `PublicAuthState`; overlay e página própria se
+inscrevem no evento e também consultam `AUTH_GET_STATE` ao montar. A mensagem
+é validada de forma estrita e não comporta token, código ou cabeçalho.

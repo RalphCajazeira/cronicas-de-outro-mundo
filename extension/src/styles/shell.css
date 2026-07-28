@@ -54,6 +54,7 @@ body { min-width: 320px; background: #09080e; }
   box-shadow: 0 26px 70px rgba(0, 0, 0, .5);
 }
 .chronicles-header { display: flex; gap: 16px; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid rgba(255,255,255,.1); }
+.chronicles-auth { align-items: center; border-bottom: 1px solid rgba(255,255,255,.1); display: flex; gap: 12px; justify-content: space-between; padding: 10px 18px; }
 .chronicles-brand { display: flex; gap: 12px; align-items: center; min-width: 0; }
 .chronicles-sigil { display: grid; width: 40px; height: 40px; flex: 0 0 auto; place-items: center; border: 1px solid #dfb866; border-radius: 50%; color: #ffe6a7; font-size: 1.2rem; }
 .chronicles-brand p, .chronicles-brand h1, .chronicles-content h2, .chronicles-content h3, .chronicles-content p { margin: 0; }

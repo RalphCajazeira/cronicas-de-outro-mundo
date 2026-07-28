@@ -37,6 +37,12 @@ const rawEnvSchema = z.object({
   OAUTH_JWKS_TIMEOUT_MS: z.coerce.number().int().min(50).max(30_000).default(2_000),
   OAUTH_JWKS_COOLDOWN_MS: z.coerce.number().int().min(0).max(300_000).default(30_000),
   OAUTH_JWKS_CACHE_MAX_AGE_MS: z.coerce.number().int().min(1_000).max(86_400_000).default(600_000),
+  EXTENSION_OAUTH_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+  EXTENSION_OAUTH_CLIENT_ID: z.string().trim().optional(),
+  EXTENSION_OAUTH_REDIRECT_URI: z.string().trim().optional(),
+  EXTENSION_OAUTH_RESOURCE_URI: z.string().trim().optional(),
+  EXTENSION_OAUTH_REQUIRED_SCOPES: z.string().trim().optional(),
+  EXTENSION_OAUTH_ALLOWED_ALGORITHMS: z.string().trim().optional(),
 }).superRefine((value, context) => {
   if (value.NODE_ENV === 'production' && value.PUBLIC_BASE_URL === undefined) {
     context.addIssue({ code: 'custom', path: ['PUBLIC_BASE_URL'], message: 'Required in production' });
@@ -73,7 +79,12 @@ const rawEnvSchema = z.object({
       context.addIssue({ code: 'custom', path: ['OAUTH_UI_BASE_PATH'], message: 'Must use the reviewed /oauth base path' });
     }
   }
-  if (!value.OAUTH_RESOURCE_SERVER_ENABLED) return;
+  if (!value.OAUTH_RESOURCE_SERVER_ENABLED) {
+    if (value.EXTENSION_OAUTH_ENABLED) {
+      context.addIssue({ code: 'custom', path: ['EXTENSION_OAUTH_ENABLED'], message: 'Requires the OAuth resource server' });
+    }
+    return;
+  }
 
   const requiredFields = [
     'OAUTH_ISSUER',
@@ -174,6 +185,56 @@ const rawEnvSchema = z.object({
     || algorithms.some((algorithm) => !asymmetricAlgorithms.includes(algorithm as typeof asymmetricAlgorithms[number]))) {
     context.addIssue({ code: 'custom', path: ['OAUTH_ALLOWED_ALGORITHMS'], message: 'Must contain only allowlisted asymmetric algorithms' });
   }
+
+  if (!value.EXTENSION_OAUTH_ENABLED) return;
+  const extensionFields = [
+    'EXTENSION_OAUTH_CLIENT_ID',
+    'EXTENSION_OAUTH_REDIRECT_URI',
+    'EXTENSION_OAUTH_RESOURCE_URI',
+    'EXTENSION_OAUTH_REQUIRED_SCOPES',
+    'EXTENSION_OAUTH_ALLOWED_ALGORITHMS',
+  ] as const;
+  for (const field of extensionFields) {
+    if (value[field] === undefined || value[field].length === 0) {
+      context.addIssue({ code: 'custom', path: [field], message: 'Required when extension OAuth is enabled' });
+    }
+  }
+  const redirect = value.EXTENSION_OAUTH_REDIRECT_URI === undefined ? undefined : (() => {
+    try { return new URL(value.EXTENSION_OAUTH_REDIRECT_URI); } catch { return undefined; }
+  })();
+  if (redirect === undefined
+    || redirect.protocol !== 'https:'
+    || redirect.username.length > 0
+    || redirect.password.length > 0
+    || redirect.search.length > 0
+    || redirect.hash.length > 0
+    || !/^[a-p]{32}\.chromiumapp\.org$/u.test(redirect.hostname)
+    || redirect.pathname !== '/oauth2') {
+    context.addIssue({ code: 'custom', path: ['EXTENSION_OAUTH_REDIRECT_URI'], message: 'Must be the exact Chromium oauth2 redirect URI' });
+  }
+  const extensionResource = value.EXTENSION_OAUTH_RESOURCE_URI === undefined ? undefined : (() => {
+    try { return new URL(value.EXTENSION_OAUTH_RESOURCE_URI); } catch { return undefined; }
+  })();
+  if (extensionResource === undefined
+    || extensionResource.protocol !== 'https:'
+    || extensionResource.username.length > 0
+    || extensionResource.password.length > 0
+    || extensionResource.search.length > 0
+    || extensionResource.hash.length > 0
+    || extensionResource.pathname !== '/extension/session'
+    || (value.PUBLIC_BASE_URL !== undefined && extensionResource.origin !== new URL(value.PUBLIC_BASE_URL).origin)) {
+    context.addIssue({ code: 'custom', path: ['EXTENSION_OAUTH_RESOURCE_URI'], message: 'Must be the exact public extension session resource URI' });
+  }
+  const extensionScopes = value.EXTENSION_OAUTH_REQUIRED_SCOPES?.split(',').map((item) => item.trim()).filter(Boolean) ?? [];
+  if (extensionScopes.length === 0 || new Set(extensionScopes).size !== extensionScopes.length
+    || extensionScopes.some((scope) => !supportedOAuthScopes.includes(scope as typeof supportedOAuthScopes[number]))) {
+    context.addIssue({ code: 'custom', path: ['EXTENSION_OAUTH_REQUIRED_SCOPES'], message: 'Must contain supported unique OAuth scopes' });
+  }
+  const extensionAlgorithms = value.EXTENSION_OAUTH_ALLOWED_ALGORITHMS?.split(',').map((item) => item.trim()).filter(Boolean) ?? [];
+  if (extensionAlgorithms.length === 0 || new Set(extensionAlgorithms).size !== extensionAlgorithms.length
+    || extensionAlgorithms.some((algorithm) => !asymmetricAlgorithms.includes(algorithm as typeof asymmetricAlgorithms[number]))) {
+    context.addIssue({ code: 'custom', path: ['EXTENSION_OAUTH_ALLOWED_ALGORITHMS'], message: 'Must contain allowlisted asymmetric algorithms' });
+  }
 });
 
 export interface OAuthResourceServerConfig {
@@ -196,6 +257,12 @@ export interface OAuthUiConfig {
   readonly supabasePublishableKey: string;
   readonly environment: 'staging';
   readonly basePath: '/oauth';
+}
+
+export interface ExtensionOAuthConfig extends OAuthResourceServerConfig {
+  readonly clientId: string;
+  readonly redirectUri: string;
+  readonly extensionOrigin: string;
 }
 
 const envSchema = rawEnvSchema.transform((value) => {
@@ -225,22 +292,36 @@ const envSchema = rawEnvSchema.transform((value) => {
     if (input === undefined || input.length === 0) throw new Error('Invalid application configuration');
     return new URL(input).href;
   };
+  const oauthResourceServer = {
+    issuer: canonicalUrl(value.OAUTH_ISSUER),
+    authorizationServer: canonicalUrl(value.OAUTH_AUTHORIZATION_SERVER),
+    jwksUri: canonicalUrl(value.OAUTH_JWKS_URI),
+    resourceUri: canonicalUrl(value.OAUTH_RESOURCE_URI),
+    protectedMcpPath: value.OAUTH_PROTECTED_MCP_PATH,
+    requiredScopes: value.OAUTH_REQUIRED_SCOPES?.split(',').map((item) => item.trim()).filter(Boolean) ?? [],
+    allowedClientIds: value.OAUTH_ALLOWED_CLIENT_IDS?.split(',').map((item) => item.trim()).filter(Boolean) ?? [],
+    allowedAlgorithms: value.OAUTH_ALLOWED_ALGORITHMS?.split(',').map((item) => item.trim()).filter(Boolean) ?? [],
+    clockSkewSeconds: value.OAUTH_CLOCK_SKEW_SECONDS,
+    jwksTimeoutMs: value.OAUTH_JWKS_TIMEOUT_MS,
+    jwksCooldownMs: value.OAUTH_JWKS_COOLDOWN_MS,
+    jwksCacheMaxAgeMs: value.OAUTH_JWKS_CACHE_MAX_AGE_MS,
+  } satisfies OAuthResourceServerConfig;
   return {
     ...base,
-    OAUTH_RESOURCE_SERVER: {
-      issuer: canonicalUrl(value.OAUTH_ISSUER),
-      authorizationServer: canonicalUrl(value.OAUTH_AUTHORIZATION_SERVER),
-      jwksUri: canonicalUrl(value.OAUTH_JWKS_URI),
-      resourceUri: canonicalUrl(value.OAUTH_RESOURCE_URI),
-      protectedMcpPath: value.OAUTH_PROTECTED_MCP_PATH,
-      requiredScopes: value.OAUTH_REQUIRED_SCOPES?.split(',').map((item) => item.trim()).filter(Boolean) ?? [],
-      allowedClientIds: value.OAUTH_ALLOWED_CLIENT_IDS?.split(',').map((item) => item.trim()).filter(Boolean) ?? [],
-      allowedAlgorithms: value.OAUTH_ALLOWED_ALGORITHMS?.split(',').map((item) => item.trim()).filter(Boolean) ?? [],
-      clockSkewSeconds: value.OAUTH_CLOCK_SKEW_SECONDS,
-      jwksTimeoutMs: value.OAUTH_JWKS_TIMEOUT_MS,
-      jwksCooldownMs: value.OAUTH_JWKS_COOLDOWN_MS,
-      jwksCacheMaxAgeMs: value.OAUTH_JWKS_CACHE_MAX_AGE_MS,
-    } satisfies OAuthResourceServerConfig,
+    OAUTH_RESOURCE_SERVER: oauthResourceServer,
+    ...(value.EXTENSION_OAUTH_ENABLED ? {
+      EXTENSION_OAUTH: {
+        ...oauthResourceServer,
+        resourceUri: canonicalUrl(value.EXTENSION_OAUTH_RESOURCE_URI),
+        protectedMcpPath: '/extension/session',
+        requiredScopes: value.EXTENSION_OAUTH_REQUIRED_SCOPES?.split(',').map((item) => item.trim()).filter(Boolean) ?? [],
+        allowedClientIds: [value.EXTENSION_OAUTH_CLIENT_ID ?? ''],
+        allowedAlgorithms: value.EXTENSION_OAUTH_ALLOWED_ALGORITHMS?.split(',').map((item) => item.trim()).filter(Boolean) ?? [],
+        clientId: value.EXTENSION_OAUTH_CLIENT_ID ?? '',
+        redirectUri: canonicalUrl(value.EXTENSION_OAUTH_REDIRECT_URI),
+        extensionOrigin: 'chrome-extension://' + (new URL(value.EXTENSION_OAUTH_REDIRECT_URI ?? '').hostname.split('.')[0] ?? ''),
+      } satisfies ExtensionOAuthConfig,
+    } : {}),
   };
 });
 
@@ -256,6 +337,7 @@ export interface AppConfig {
   readonly CHATGPT_APP_PROOF_MODE: boolean;
   readonly OAUTH_UI?: OAuthUiConfig;
   readonly OAUTH_RESOURCE_SERVER?: OAuthResourceServerConfig;
+  readonly EXTENSION_OAUTH?: ExtensionOAuthConfig;
 }
 
 export function parseConfig(environment: NodeJS.ProcessEnv): AppConfig {
