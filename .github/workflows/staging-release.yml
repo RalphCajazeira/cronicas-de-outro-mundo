@@ -252,6 +252,8 @@ jobs:
 
       - name: Wait for exact commit and health
         shell: bash
+        env:
+          STAGING_PREVIOUS_SHA: ${{ steps.render.outputs.previous_release_sha }}
         run: |
           set -euo pipefail
           npm run staging:deploy:poll

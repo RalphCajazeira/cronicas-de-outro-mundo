@@ -125,7 +125,7 @@ async function trigger(): Promise<void> {
   const existing = await currentRelease(baseUrl);
   if (existing?.commit === targetCommit) {
     console.info('Target commit is already live; deploy hook was not called');
-    appendOutput(['deploy_status=already_live', 'deploy_id=']);
+    appendOutput(['deploy_status=already_live', 'deploy_id=', `previous_release_sha=${existing.commit}`]);
     appendSummary(['## Render deploy', '', '- Deploy hook: skipped (target already live)', `- Target commit: \`${targetCommit}\``, '']);
     return;
   }
@@ -158,7 +158,11 @@ async function trigger(): Promise<void> {
 
   const deployStatus = response.status === 200 ? 'started' : 'queued';
   console.info(`Render deploy ${deployStatus} for the exact target commit`);
-  appendOutput([`deploy_status=${deployStatus}`, `deploy_id=${deployId}`]);
+  appendOutput([
+    `deploy_status=${deployStatus}`,
+    `deploy_id=${deployId}`,
+    `previous_release_sha=${existing?.commit ?? ''}`,
+  ]);
   appendSummary([
     '## Render deploy',
     '',
