@@ -67,7 +67,7 @@ npm run staging:oauth:policy --prefix backend -- --dry-run
 npm run staging:oauth:identity --prefix backend -- --dry-run
 ```
 
-`upsert-oauth-client-policy.ts` lê `STAGING_OAUTH_CLIENT_ID` e `OAUTH_RESOURCE_URI`, aceita somente `/mcp-auth` HTTPS e recusa uma policy de outro client.
+`upsert-oauth-client-policy.ts` lê `STAGING_OAUTH_CLIENT_ID` e `OAUTH_RESOURCE_URI`, aceita somente os recursos HTTPS exatos `/mcp-auth` e `/extension/session`. Cada client é upsertado por ID, portanto a policy pública da extensão não altera nem substitui a policy do App MCP.
 
 `provision-synthetic-identity.ts` lê `OAUTH_ISSUER`, `STAGING_SYNTHETIC_AUTH_SUBJECT` e `STAGING_SYNTHETIC_EMAIL`. Ele aceita somente issuer Supabase canônico, subject UUID e domínio reservado `example.test`; em uma transação cria no máximo um `User` ACTIVE e uma `ExternalIdentity`. Não cria Player, World, Campaign, membership, ActorControl ou AuditEvent narrativo.
 

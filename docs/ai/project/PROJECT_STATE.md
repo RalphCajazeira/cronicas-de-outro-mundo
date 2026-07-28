@@ -76,7 +76,7 @@ Actions/OpenAPI no GPT
 | Game UI React compartilhada + host Vite local | `MANUALLY_VALIDATED` | `extension/src/app`, `extension/src/platform`, `extension/src/entries`, `extension/src/content` | Mesmo componente atende web, overlay e página própria com fixture local; validação manual da extensão em Chromium realizada em 2026-07-28. |
 | Host web/HMR da extensão | `MANUALLY_VALIDATED` | `npm run dev:web --prefix extension` + build/run do Vite | Ambiente de desenvolvimento web funcional com HMR para a árvore React compartilhada. |
 | Correção de consistência de preferências | `INTEGRATED` | `AppProviders` + `extension/tests/app-providers-queue.test.tsx` | Reconciliação por `lastPersistedPreferencesRef`; falha da última gravação restaura para o último estado persistido confirmado. |
-| OAuth próprio da extensão | `NOT_STARTED` | — | Próxima fase após validação/hotfix da fundação. |
+| OAuth próprio da extensão | `INTEGRATED` | Extensão 2B: client público staging, PKCE S256, `/extension/session`, testes e pipeline | Requer checkpoint manual de recarga da extensão e smoke interativo em staging; não libera leitura real ainda. |
 | Leitura real do backend pela extensão | `NOT_STARTED` | — | Reutilizar projeções e autorização existentes. |
 | Atualização automática da extensão | `NOT_STARTED` | — | Começar por recarga após mutação/polling; evoluir para SSE ou WebSocket. |
 | `Observar` executado pela extensão | `NOT_STARTED` | — | Reutilizar serviço já implantado. |
@@ -134,7 +134,7 @@ Não reutilizar Ralph, Kael, Elarion ou campanhas reais como fixture da extensã
 1. revisar, integrar e validar a migração React/Web da extensão;
 2. carregar `extension/dist` manualmente no Chromium;
 3. validar botão, overlay, teclado, página própria e console;
-4. implementar OAuth próprio da extensão;
+4. concluir checkpoint manual do OAuth próprio da extensão;
 5. carregar contexto/ficha/inventário reais;
 6. implementar atualização automática;
 7. executar `Observar` pela extensão;

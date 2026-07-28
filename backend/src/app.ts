@@ -39,6 +39,7 @@ import type { AuthenticatedCharacterViewRepository } from './modules/authenticat
 import { createAuthenticatedCharacterViewService } from './modules/authenticated-character-view/authenticated-character-view.service.js';
 import { createAuthenticatedGameSessionService } from './modules/authenticated-game-session/authenticated-game-session.service.js';
 import type { AuthenticatedGameSessionRepository } from './modules/authenticated-game-session/authenticated-game-session.types.js';
+import { createExtensionOAuthRouter } from './modules/extension-oauth/extension-oauth.routes.js';
 
 export interface AppDependencies {
   actorRepository: ActorRepository;
@@ -128,6 +129,13 @@ export function createApp(config: AppConfig, dependencies: AppDependencies) {
         authenticatedGameSessionService,
       ),
     );
+    if (config.EXTENSION_OAUTH !== undefined) {
+      app.use('/extension', createExtensionOAuthRouter(
+        config.EXTENSION_OAUTH,
+        identityService,
+        dependencies.authenticatedGameContextRepository,
+      ));
+    }
   }
   app.use('/chatgpt-app-preview', createChatGptAppPreviewRouter(config, widgetAssets));
   app.use('/api/v1', createApiKeyAuth(config.RPG_API_KEY));

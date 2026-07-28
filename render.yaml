@@ -59,3 +59,15 @@ projects:
                 sync: false
               - key: OAUTH_ALLOWED_ALGORITHMS
                 value: ES256
+              - key: EXTENSION_OAUTH_ENABLED
+                sync: false
+              - key: EXTENSION_OAUTH_CLIENT_ID
+                sync: false
+              - key: EXTENSION_OAUTH_REDIRECT_URI
+                sync: false
+              - key: EXTENSION_OAUTH_RESOURCE_URI
+                sync: false
+              - key: EXTENSION_OAUTH_REQUIRED_SCOPES
+                sync: false
+              - key: EXTENSION_OAUTH_ALLOWED_ALGORITHMS
+                value: ES256

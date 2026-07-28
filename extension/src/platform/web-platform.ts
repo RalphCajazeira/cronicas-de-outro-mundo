@@ -15,6 +15,9 @@ function readStoredPreferences(): ExtensionPreferences {
 export function createWebPlatform(): PlatformAdapter {
   return {
     mode: 'web',
+    readAuthState: () => Promise.resolve({ status: 'signed_out' }),
+    login: () => Promise.resolve({ status: 'signed_out' }),
+    logout: () => Promise.resolve({ status: 'signed_out' }),
     readPreferences() { return Promise.resolve(readStoredPreferences()); },
     savePreferences(patch) {
       const next = normalizePreferences({ ...readStoredPreferences(), ...patch });

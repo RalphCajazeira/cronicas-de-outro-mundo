@@ -12,6 +12,7 @@ function installChromeMock(): void {
   Object.assign(globalThis, {
     chrome: {
       runtime: {
+        id: 'test',
         getURL: vi.fn((path: string) => `chrome-extension://test/${path}`),
         onMessage: {
           addListener: vi.fn((listener: OnMessageListener) => listeners.push(listener)),
@@ -39,7 +40,7 @@ describe('service worker messages', () => {
     const listener = listeners?.[0];
     expect(listener).toBeDefined();
     const response = new Promise<Record<string, unknown>>((resolve) => {
-      listener?.({ type: 'OPEN_PAGE' }, {}, (value: unknown) => resolve(value as Record<string, unknown>));
+      listener?.({ type: 'OPEN_PAGE' }, { id: 'test' }, (value: unknown) => resolve(value as Record<string, unknown>));
     });
     const result = await response;
     expect(chrome.tabs.create).toHaveBeenCalledTimes(1);

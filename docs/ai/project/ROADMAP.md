@@ -86,9 +86,9 @@ Fora de escopo:
 - leitura ou ações reais;
 - publicação web.
 
-### EXT-2 — OAuth próprio da extensão
+### EXT-2B — OAuth próprio da extensão
 
-**Estado:** `NOT_STARTED`
+**Estado:** `INTEGRATED` — checkpoint manual pendente
 
 Objetivo:
 
@@ -105,6 +105,13 @@ Critérios:
 - User suspenso/revogado falha fechado;
 - expiração recuperável;
 - User A não acessa User B.
+
+Checkpoint restante:
+
+- recarregar `extension/dist` com a nova permissão `identity`;
+- concluir login interativo em staging e confirmar convergência entre overlay
+  e página própria;
+- testar reinício do service worker, logout e novo login.
 
 Fora de escopo:
 

@@ -38,7 +38,7 @@ export function validateOAuthClientPolicyInput(clientId: string, audience: strin
     || resource.password.length > 0
     || resource.search.length > 0
     || resource.hash.length > 0
-    || resource.pathname !== '/mcp-auth') {
+    || !['/mcp-auth', '/extension/session'].includes(resource.pathname)) {
     throw new Error('OAuth resource URI is invalid');
   }
 }
@@ -51,14 +51,10 @@ async function main(): Promise<void> {
   validateOAuthClientPolicyInput(clientId, audience);
 
   await prisma.$transaction(async (transaction) => {
-    const policies = await transaction.oAuthClientResourcePolicy.findMany({
-      select: { clientId: true, audience: true, enabled: true },
-      take: 2,
+    const matching = await transaction.oAuthClientResourcePolicy.findUnique({
+      where: { clientId },
+      select: { audience: true, enabled: true },
     });
-    const matching = policies.find((policy) => policy.clientId === clientId);
-    if (policies.some((policy) => policy.clientId !== clientId)) {
-      throw new Error('An unexpected OAuth client resource policy already exists');
-    }
     const unchanged = matching?.audience === audience && matching.enabled;
     if (mode === 'dry-run') {
       console.info(unchanged ? 'OAuth client policy dry-run: no change required' : 'OAuth client policy dry-run: one upsert required');

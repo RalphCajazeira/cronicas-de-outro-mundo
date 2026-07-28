@@ -99,7 +99,7 @@ Side Panel:
 
 ## D-006 — Sessão própria da extensão
 
-**Status:** aprovada como direção; implementação pendente
+**Status:** implementada em staging, pendente de checkpoint manual
 
 A extensão terá OAuth/sessão próprios e será vinculada ao mesmo `User` interno do App MCP.
 
@@ -109,6 +109,23 @@ Não reutilizar:
 - token capturado da página;
 - token interno do App MCP;
 - segredo embutido no manifest.
+
+Protocolo consolidado:
+
+```text
+cliente público Chromium
+→ Authorization Code + PKCE S256 + state aleatório
+→ redirect exato chromiumapp.org/oauth2
+→ service worker troca código e possui a sessão
+→ access token em memória; refresh rotativo somente em storage local restrito
+→ audience /extension/session independente de /mcp-auth
+→ ExternalIdentity → User ACTIVE → Player
+```
+
+O content script e o React recebem apenas estado público. A configuração e
+o CORS aceitam somente o origin da extensão de staging. Sem endpoint de
+revogação OAuth disponível no provedor atual, logout limpa sempre o refresh
+local e o provedor controla expiração/rotação/revogação do refresh.
 
 ## D-007 — Realtime é invalidação, não fonte de verdade
 

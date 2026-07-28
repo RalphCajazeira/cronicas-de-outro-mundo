@@ -23,6 +23,14 @@ function Panel({ tab }: { readonly tab: ShellTab }) {
   return <section aria-labelledby="chronicles-tab-abilities" id="chronicles-panel-abilities" role="tabpanel"><h2>Habilidades</h2><p className="chronicles-muted">Capacidades sintéticas; nenhuma ação é enviada.</p><DemoList items={DEMO_CHARACTER.abilities} /></section>;
 }
 
+function AuthPanel() {
+  const { auth, login, logout } = useGameApp();
+  if (auth.status === 'authenticated') return <div className="chronicles-auth"><span>Conectado como {auth.user.displayName}</span><button className="chronicles-action" onClick={logout} type="button">Sair</button></div>;
+  if (auth.status === 'authorizing') return <div className="chronicles-auth">Abrindo login seguro…</div>;
+  if (auth.status === 'signed_out') return <div className="chronicles-auth"><span>Entre para conectar sua sessão do jogo.</span><button className="chronicles-action" onClick={login} type="button">Entrar</button></div>;
+  return <div className="chronicles-auth"><span>Não foi possível confirmar a sessão.</span><button className="chronicles-action" onClick={login} type="button">Tentar novamente</button></div>;
+}
+
 function focusable(container: HTMLElement): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]')].filter((node) => node.tabIndex >= 0 && !node.hasAttribute('disabled') && !node.hidden);
 }
@@ -79,7 +87,7 @@ function GameAppContent() {
     <div aria-label="Crônicas de Outro Mundo" aria-modal={isOverlay || undefined} className="chronicles-overlay" hidden={!overlayOpen} ref={overlayRef} role={isOverlay ? 'dialog' : undefined}>
       <section className="chronicles-shell"><header className="chronicles-header"><div className="chronicles-brand"><span className="chronicles-sigil">✦</span><div><p className="chronicles-eyebrow">Crônicas de Outro Mundo</p><h1>Compêndio do Viajante</h1></div></div>
         {isOverlay && <div className="chronicles-actions">{adapter.openFullPage && <button className="chronicles-action" onClick={() => { void adapter.openFullPage?.(); }} title="Abrir a interface em uma aba da extensão" type="button">Abrir em aba</button>}<button className="chronicles-action" onClick={minimize} type="button">Minimizar</button><button className="chronicles-action" onClick={close} ref={closeRef} type="button">Fechar</button></div>}
-      </header><div aria-label="Seções do compêndio" className="chronicles-tabs" role="tablist">{SHELL_TABS.map((tab, index) => <button aria-controls={`chronicles-panel-${tab}`} aria-selected={activeTab === tab} className="chronicles-tab" id={`chronicles-tab-${tab}`} key={tab} onClick={() => selectTab(tab)} onKeyDown={(event) => onTabKeyDown(event, index)} ref={(node) => { tabRefs.current[index] = node; }} role="tab" tabIndex={activeTab === tab ? 0 : -1} type="button">{tabLabels[tab]}</button>)}</div><main aria-live="polite" className="chronicles-content"><p className="chronicles-demo-banner">Modo de demonstração local — sem conexão com o jogo</p><Panel tab={activeTab} /></main></section>
+      </header><AuthPanel /><div aria-label="Seções do compêndio" className="chronicles-tabs" role="tablist">{SHELL_TABS.map((tab, index) => <button aria-controls={`chronicles-panel-${tab}`} aria-selected={activeTab === tab} className="chronicles-tab" id={`chronicles-tab-${tab}`} key={tab} onClick={() => selectTab(tab)} onKeyDown={(event) => onTabKeyDown(event, index)} ref={(node) => { tabRefs.current[index] = node; }} role="tab" tabIndex={activeTab === tab ? 0 : -1} type="button">{tabLabels[tab]}</button>)}</div><main aria-live="polite" className="chronicles-content"><p className="chronicles-demo-banner">Modo de demonstração local — sem conexão com o jogo</p><Panel tab={activeTab} /></main></section>
     </div>
   </div>;
 }

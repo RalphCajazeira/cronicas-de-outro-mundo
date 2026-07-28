@@ -11,12 +11,16 @@ import {
 import type { PlatformAdapter } from '../platform/platform-adapter.js';
 import { DEFAULT_PREFERENCES } from '../shared/preferences.js';
 import type { ExtensionPreferences } from '../shared/types.js';
+import type { PublicAuthState } from '../auth/auth-types.js';
 
 interface AppContextValue {
   readonly adapter: PlatformAdapter;
   readonly preferences: ExtensionPreferences;
   readonly preferencesLoaded: boolean;
   readonly savePreferences: (patch: Partial<ExtensionPreferences>) => void;
+  readonly auth: PublicAuthState;
+  readonly login: () => void;
+  readonly logout: () => void;
 }
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
@@ -31,6 +35,7 @@ type SaveOutcome = { readonly requestId: number; readonly adapterVersion: number
 export function AppProviders({ adapter, children }: PropsWithChildren<{ readonly adapter: PlatformAdapter }>) {
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const [auth, setAuth] = useState<PublicAuthState>({ status: 'signed_out' });
   const adapterRef = useRef(adapter);
   const isActiveRef = useRef(true);
   const adapterVersionRef = useRef(0);
@@ -76,6 +81,13 @@ export function AppProviders({ adapter, children }: PropsWithChildren<{ readonly
       isActiveRef.current = false;
       adapterVersionRef.current += 1;
     };
+  }, [adapter]);
+
+  useEffect(() => {
+    let active = true;
+    void (adapter.readAuthState?.() ?? Promise.resolve<PublicAuthState>({ status: 'signed_out' })).then((next) => { if (active) setAuth(next); }).catch(() => { if (active) setAuth({ status: 'error', code: 'backend_unavailable' }); });
+    const unsubscribe = adapter.subscribeAuthState?.((next) => { if (active) setAuth(next); });
+    return () => { active = false; unsubscribe?.(); };
   }, [adapter]);
 
   const savePreferences = useCallback((patch: Partial<ExtensionPreferences>) => {
@@ -127,7 +139,13 @@ export function AppProviders({ adapter, children }: PropsWithChildren<{ readonly
     preferences,
     preferencesLoaded,
     savePreferences,
-  }), [adapter, preferences, preferencesLoaded, savePreferences]);
+    auth,
+    login: () => {
+      setAuth({ status: 'authorizing' });
+      void (adapter.login?.() ?? Promise.resolve<PublicAuthState>({ status: 'signed_out' })).then(setAuth);
+    },
+    logout: () => { void (adapter.logout?.() ?? Promise.resolve<PublicAuthState>({ status: 'signed_out' })).then(setAuth); },
+  }), [adapter, preferences, preferencesLoaded, savePreferences, auth]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
