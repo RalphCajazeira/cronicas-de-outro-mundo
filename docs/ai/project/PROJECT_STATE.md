@@ -71,9 +71,9 @@ Actions/OpenAPI no GPT
 | Projeção pública de `GameEvent` | `DEPLOYED_STAGING` | PR #80 | Eventos sem contrato público falham fechado. |
 | Widget como frontend principal | `DEPRECATED` | decisão arquitetural de 2026-07-27 | Mantido como fallback, bootstrap e diagnóstico. |
 | Fundação da extensão MV3 | `MANUALLY_VALIDATED` | PR #81; PR #82; PR #84; suíte de extensão | Shell local validado manualmente em etapa anterior; este ajuste corrige apenas suíte de validação do Render. |
-| Overlay da extensão (React) | `INTEGRATED` | suíte de testes de overlay e fila | `content script` monta o `GameApp`; validação manual MV3 pendente. |
-| Página própria da extensão (React) | `INTEGRATED` | suíte de render e plataforma | Compartilha `GameApp`; validação manual em Chrome pendente. |
-| Game UI React compartilhada + host Vite local | `INTEGRATED` | `extension/src/app`, `extension/src/platform`, `extension/src/entries`, `extension/src/content` | Mesmo componente atende web, overlay e página própria com fixture local; checkpoint da extensão descompactada segue pendente nesta correção. |
+| Overlay da extensão (React) | `MANUALLY_VALIDATED` | suíte de testes de overlay e fila | `content script` monta o `GameApp`; validação manual MV3 concluída em 2026-07-28 no Chromium. |
+| Página própria da extensão (React) | `MANUALLY_VALIDATED` | suíte de render e plataforma | Compartilha `GameApp`; validação manual em Chrome realizada em 2026-07-28. |
+| Game UI React compartilhada + host Vite local | `MANUALLY_VALIDATED` | `extension/src/app`, `extension/src/platform`, `extension/src/entries`, `extension/src/content` | Mesmo componente atende web, overlay e página própria com fixture local; validação manual da extensão em Chromium realizada em 2026-07-28. |
 | Host web/HMR da extensão | `MANUALLY_VALIDATED` | `npm run dev:web --prefix extension` + build/run do Vite | Ambiente de desenvolvimento web funcional com HMR para a árvore React compartilhada. |
 | Correção de consistência de preferências | `INTEGRATED` | `AppProviders` + `extension/tests/app-providers-queue.test.tsx` | Reconciliação por `lastPersistedPreferencesRef`; falha da última gravação restaura para o último estado persistido confirmado. |
 | OAuth próprio da extensão | `NOT_STARTED` | — | Próxima fase após validação/hotfix da fundação. |
