@@ -19,6 +19,11 @@ export interface ReleaseInfo {
   nodeVersion: string;
 }
 
+export interface StagingDeployRuntime {
+  fetch?: typeof fetch;
+  sleep?: (durationMs: number) => Promise<void>;
+}
+
 class SafePipelineError extends Error {}
 
 function requiredEnvironment(name: string): string {
@@ -87,26 +92,42 @@ export function validateExpectedRelease(
   return parsed.data;
 }
 
-async function fetchWithTimeout(url: URL, init: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
+async function fetchWithTimeoutUsing(
+  fetchImplementation: typeof fetch,
+  url: URL,
+  init: RequestInit = {},
+  timeoutMs = 15_000,
+): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await fetchImplementation(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function currentRelease(baseUrl: URL): Promise<ReleaseInfo | null> {
+async function requireLiveRelease(
+  baseUrl: URL,
+  fetchImplementation: typeof fetch,
+): Promise<ReleaseInfo> {
+  let response: Response;
   try {
-    const response = await fetchWithTimeout(new URL('/health/version', baseUrl));
-    if (response.status === 404) return null;
-    if (!response.ok) return null;
-    const parsed = releaseInfoSchema.safeParse(await response.json());
-    return parsed.success ? parsed.data : null;
+    response = await fetchWithTimeoutUsing(fetchImplementation, new URL('/health/version', baseUrl));
   } catch {
-    return null;
+    throw new SafePipelineError('Live staging release baseline is unavailable');
   }
+  if (response.status !== 200) throw new SafePipelineError('Live staging release baseline is unavailable');
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new SafePipelineError('Live staging release baseline is unavailable');
+  }
+  const parsed = releaseInfoSchema.safeParse(body);
+  if (!parsed.success) throw new SafePipelineError('Live staging release baseline is unavailable');
+  return parsed.data;
 }
 
 function appendOutput(lines: string[]): void {
@@ -119,11 +140,12 @@ function appendSummary(lines: string[]): void {
   if (summary !== undefined) appendFileSync(summary, `${lines.join('\n')}\n`);
 }
 
-async function trigger(): Promise<void> {
+export async function trigger(runtime: StagingDeployRuntime = {}): Promise<void> {
+  const fetchImplementation = runtime.fetch ?? fetch;
   const targetCommit = validateCommit(requiredEnvironment('STAGING_TARGET_SHA'), 'Target commit');
   const baseUrl = validateStagingBaseUrl(requiredEnvironment('STAGING_BASE_URL'));
-  const existing = await currentRelease(baseUrl);
-  if (existing?.commit === targetCommit) {
+  const existing = await requireLiveRelease(baseUrl, fetchImplementation);
+  if (existing.commit === targetCommit) {
     console.info('Target commit is already live; deploy hook was not called');
     appendOutput(['deploy_status=already_live', 'deploy_id=', `previous_release_sha=${existing.commit}`]);
     appendSummary(['## Render deploy', '', '- Deploy hook: skipped (target already live)', `- Target commit: \`${targetCommit}\``, '']);
@@ -135,7 +157,7 @@ async function trigger(): Promise<void> {
     requiredEnvironment('STAGING_RENDER_SERVICE_ID'),
     targetCommit,
   );
-  const response = await fetchWithTimeout(hook, { method: 'POST', redirect: 'error' }, 30_000);
+  const response = await fetchWithTimeoutUsing(fetchImplementation, hook, { method: 'POST', redirect: 'error' }, 30_000);
   if (![200, 202].includes(response.status)) throw new SafePipelineError(`Render rejected the deploy request with status ${response.status}`);
 
   let deployId = '';
@@ -161,7 +183,7 @@ async function trigger(): Promise<void> {
   appendOutput([
     `deploy_status=${deployStatus}`,
     `deploy_id=${deployId}`,
-    `previous_release_sha=${existing?.commit ?? ''}`,
+    `previous_release_sha=${existing.commit}`,
   ]);
   appendSummary([
     '## Render deploy',
@@ -173,12 +195,12 @@ async function trigger(): Promise<void> {
   ]);
 }
 
-async function poll(): Promise<void> {
+export async function poll(runtime: StagingDeployRuntime = {}): Promise<void> {
+  const fetchImplementation = runtime.fetch ?? fetch;
+  const sleep = runtime.sleep ?? ((durationMs: number) => new Promise<void>((resolvePromise) => setTimeout(resolvePromise, durationMs)));
   const targetCommit = validateCommit(requiredEnvironment('STAGING_TARGET_SHA'), 'Target commit');
-  const previousCommitValue = process.env.STAGING_PREVIOUS_SHA?.trim().toLowerCase();
-  const previousCommit = previousCommitValue === undefined || ZERO_OR_EMPTY(previousCommitValue)
-    ? undefined
-    : validateCommit(previousCommitValue, 'Previous commit');
+  const previousCommit = validateCommit(requiredEnvironment('STAGING_PREVIOUS_SHA'), 'Previous commit');
+  if (/^0{40}$/u.test(previousCommit)) throw new SafePipelineError('Previous commit must be a live release SHA');
   const expectedBranch = requiredEnvironment('STAGING_EXPECTED_BRANCH');
   const expectedNodeVersion = `v${requiredEnvironment('STAGING_NODE_VERSION')}`;
   const baseUrl = validateStagingBaseUrl(requiredEnvironment('STAGING_BASE_URL'));
@@ -191,15 +213,20 @@ async function poll(): Promise<void> {
   let attempt = 0;
   while (Date.now() - startedAt < timeoutMs) {
     attempt += 1;
-    const release = await currentRelease(baseUrl);
-    if (release !== null && release.commit !== targetCommit && previousCommit !== undefined && release.commit !== previousCommit) {
+    let release: ReleaseInfo | undefined;
+    try {
+      release = await requireLiveRelease(baseUrl, fetchImplementation);
+    } catch {
+      release = undefined;
+    }
+    if (release !== undefined && release.commit !== targetCommit && release.commit !== previousCommit) {
       throw new SafePipelineError('A different commit became live during the staging rollout');
     }
     if (release?.commit === targetCommit) {
       validateExpectedRelease(release, targetCommit, expectedBranch, expectedNodeVersion);
       const [health, readiness] = await Promise.all([
-        fetchWithTimeout(new URL('/health', baseUrl)).catch(() => null),
-        fetchWithTimeout(new URL('/health/ready', baseUrl)).catch(() => null),
+        fetchWithTimeoutUsing(fetchImplementation, new URL('/health', baseUrl)).catch(() => null),
+        fetchWithTimeoutUsing(fetchImplementation, new URL('/health/ready', baseUrl)).catch(() => null),
       ]);
       if (health?.status === 200 && readiness?.status === 200) {
         const durationSeconds = Math.round((Date.now() - startedAt) / 1_000);
@@ -221,13 +248,9 @@ async function poll(): Promise<void> {
 
     if (attempt === 1 || attempt % 6 === 0) console.info(`Waiting for exact staging commit (attempt ${attempt})`);
     const intervalMs = Math.min(20_000, 8_000 + attempt * 1_000);
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, intervalMs));
+    await sleep(intervalMs);
   }
   throw new SafePipelineError('Timed out waiting for the exact staging commit');
-}
-
-function ZERO_OR_EMPTY(value: string): boolean {
-  return value.length === 0 || /^0{40}$/u.test(value);
 }
 
 async function main(): Promise<void> {

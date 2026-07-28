@@ -172,7 +172,6 @@ jobs:
       STAGING_MCP_RESOURCE_URI: ${{ vars.STAGING_MCP_RESOURCE_URI }}
       STAGING_OAUTH_RESOURCE_SERVER_ENABLED: ${{ vars.STAGING_OAUTH_RESOURCE_SERVER_ENABLED }}
       STAGING_TARGET_SHA: ${{ github.sha }}
-      STAGING_PREVIOUS_SHA: ${{ github.event_name == 'push' && github.event.before || inputs.base_sha }}
       STAGING_EXPECTED_BRANCH: develop
       STAGING_NODE_VERSION: 22.22.0
     steps:
@@ -256,6 +255,8 @@ jobs:
           STAGING_PREVIOUS_SHA: ${{ steps.render.outputs.previous_release_sha }}
         run: |
           set -euo pipefail
+          test -n "$STAGING_PREVIOUS_SHA"
+          [[ "$STAGING_PREVIOUS_SHA" =~ ^[0-9a-f]{40}$ ]]
           npm run staging:deploy:poll
 
       - name: Run isolated staging MCP smoke
@@ -284,7 +285,7 @@ jobs:
       STAGING_BASE_URL: ${{ vars.STAGING_BASE_URL }}
       STAGING_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
       STAGING_TARGET_SHA: ${{ github.sha }}
-      STAGING_PREVIOUS_SHA: ${{ github.event.before }}
+      STAGING_PREVIOUS_SHA: ${{ github.sha }}
       STAGING_EXPECTED_BRANCH: develop
       STAGING_NODE_VERSION: 22.22.0
       STAGING_DEPLOY_TIMEOUT_MS: 60000
