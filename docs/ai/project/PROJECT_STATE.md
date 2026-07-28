@@ -71,8 +71,8 @@ Actions/OpenAPI no GPT
 | Projeção pública de `GameEvent` | `DEPLOYED_STAGING` | PR #80 | Eventos sem contrato público falham fechado. |
 | Widget como frontend principal | `DEPRECATED` | decisão arquitetural de 2026-07-27 | Mantido como fallback, bootstrap e diagnóstico. |
 | Fundação da extensão MV3 | `MANUALLY_VALIDATED` | PR #81; PR #82; PR #84; suíte de extensão | Shell local validado manualmente em etapa anterior; este ajuste corrige apenas suíte de validação do Render. |
-| Overlay da extensão (React) | `IN_PROGRESS` | suíte de testes de overlay e fila | `content script` monta o `GameApp`; validação manual da recarga e fluxo completo de overlay ainda pendente nesta correção. |
-| Página própria da extensão (React) | `NOT_STARTED` | suíte de render e plataforma | Compartilha `GameApp`; inspeção manual da página própria ainda pendente nesta correção. |
+| Overlay da extensão (React) | `INTEGRATED` | suíte de testes de overlay e fila | `content script` monta o `GameApp`; validação manual MV3 pendente. |
+| Página própria da extensão (React) | `INTEGRATED` | suíte de render e plataforma | Compartilha `GameApp`; validação manual em Chrome pendente. |
 | Game UI React compartilhada + host Vite local | `INTEGRATED` | `extension/src/app`, `extension/src/platform`, `extension/src/entries`, `extension/src/content` | Mesmo componente atende web, overlay e página própria com fixture local; checkpoint da extensão descompactada segue pendente nesta correção. |
 | Host web/HMR da extensão | `MANUALLY_VALIDATED` | `npm run dev:web --prefix extension` + build/run do Vite | Ambiente de desenvolvimento web funcional com HMR para a árvore React compartilhada. |
 | Correção de consistência de preferências | `INTEGRATED` | `AppProviders` + `extension/tests/app-providers-queue.test.tsx` | Reconciliação por `lastPersistedPreferencesRef`; falha da última gravação restaura para o último estado persistido confirmado. |
