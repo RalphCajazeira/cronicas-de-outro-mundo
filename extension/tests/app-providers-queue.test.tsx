@@ -18,6 +18,7 @@ type SaveCall = {
 };
 
 type ControlledAdapter = {
+  readonly read: Deferred<ExtensionPreferences>;
   readonly calls: SaveCall[];
   readonly preferences: { current: ExtensionPreferences };
   readonly adapter: PlatformAdapter;
@@ -36,12 +37,17 @@ function createDeferred<T>(): Deferred<T> {
 function createControlledAdapter(
   mode: PlatformAdapter['mode'],
   initialPreferences: ExtensionPreferences = DEFAULT_PREFERENCES,
+  autoResolveRead = true,
 ): ControlledAdapter {
+  const read = createDeferred<ExtensionPreferences>();
   const calls: SaveCall[] = [];
   const adapterState = { current: { ...initialPreferences } };
   const adapter: PlatformAdapter = {
     mode,
-    readPreferences: vi.fn(() => Promise.resolve(adapterState.current)),
+    readPreferences: vi.fn(() => read.promise.then((value) => {
+      adapterState.current = value;
+      return value;
+    })),
     savePreferences: vi.fn((patch: Partial<ExtensionPreferences>) => {
       const deferred = createDeferred<ExtensionPreferences>();
       calls.push({ patch: { ...patch }, deferred });
@@ -51,7 +57,10 @@ function createControlledAdapter(
       });
     }),
   };
-  return { adapter, calls, preferences: adapterState };
+  if (autoResolveRead) {
+    read.resolve({ ...adapterState.current });
+  }
+  return { adapter, calls, preferences: adapterState, read };
 }
 
 function PreferencesPanel() {
@@ -81,6 +90,167 @@ afterEach(() => {
 });
 
 describe('preference save queue', () => {
+  it('aguarda a leitura inicial para iniciar o primeiro save', async () => {
+    const { adapter, calls, read } = createControlledAdapter('web', DEFAULT_PREFERENCES, false);
+    renderWithAdapter(adapter);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
+    expect(calls).toHaveLength(0);
+
+    act(() => read.resolve({ ...DEFAULT_PREFERENCES }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    act(() => calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('inventory'));
+  });
+
+  it('não desfaz atualização otimista quando a leitura tarda', async () => {
+    const { adapter, calls, read, preferences } = createControlledAdapter('web', { ...DEFAULT_PREFERENCES, activeTab: 'summary' }, false);
+    renderWithAdapter(adapter);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('inventory'));
+    expect(calls).toHaveLength(0);
+
+    act(() => read.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('inventory'));
+    expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'summary' });
+  });
+
+  it('estabelece estado persistido inicial pela leitura antes de salvar', async () => {
+    const { adapter, read, preferences } = createControlledAdapter('web', { ...DEFAULT_PREFERENCES, activeTab: 'abilities' }, false);
+    renderWithAdapter(adapter);
+    act(() => read.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('summary'));
+    expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'summary' });
+  });
+
+  it('persiste corretamente após leitura concluída', async () => {
+    const { adapter, calls, read, preferences } = createControlledAdapter('web', { ...DEFAULT_PREFERENCES, activeTab: 'summary' }, false);
+    renderWithAdapter(adapter);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Abilities' }));
+
+    await waitFor(() => expect(calls).toHaveLength(0));
+    act(() => read.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    act(() => calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    act(() => calls[1]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' }));
+
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('abilities'));
+    expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' });
+  });
+
+  it('retorna ao valor lido após falha do save', async () => {
+    const { adapter, calls, read, preferences } = createControlledAdapter('web', { ...DEFAULT_PREFERENCES, activeTab: 'summary' }, false);
+    renderWithAdapter(adapter);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
+    act(() => read.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    act(() => calls[0]!.deferred.reject(new Error('fail after read')));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('summary'));
+    expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'summary' });
+  });
+
+  it('duas mudanças rápidas durante leitura finalizam na última', async () => {
+    const { adapter, calls, read, preferences } = createControlledAdapter('web', { ...DEFAULT_PREFERENCES, activeTab: 'summary' }, false);
+    renderWithAdapter(adapter);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Abilities' }));
+    await waitFor(() => expect(calls).toHaveLength(0));
+
+    act(() => read.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    act(() => calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    act(() => calls[1]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' }));
+
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('abilities'));
+    expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' });
+  });
+
+  it('continua salvando após leitura rejeitada', async () => {
+    const { adapter, calls, read, preferences } = createControlledAdapter('web', { ...DEFAULT_PREFERENCES, activeTab: 'summary' }, false);
+    renderWithAdapter(adapter);
+    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
+
+    expect(calls).toHaveLength(0);
+    act(() => read.reject(new Error('read failed')));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    act(() => calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('inventory'));
+    expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' });
+  });
+
+  it('ignora leitura tardia de adapter antigo após troca', async () => {
+    const first = createControlledAdapter('overlay', { ...DEFAULT_PREFERENCES, activeTab: 'summary' }, false);
+    const second = createControlledAdapter('extension-page', { ...DEFAULT_PREFERENCES, activeTab: 'inventory' });
+
+    const { rerender } = render(
+      <AppProviders adapter={first.adapter}>
+        <PreferencesPanel />
+      </AppProviders>,
+    );
+
+    rerender(
+      <AppProviders adapter={second.adapter}>
+        <PreferencesPanel />
+      </AppProviders>,
+    );
+
+    act(() => first.read.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('inventory'));
+    expect(second.preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' });
+  });
+
+  it('desmontagem ignora leitura tardia sem warning', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { preferences, read, unmount } = (() => {
+      const tuple = createControlledAdapter('web', { ...DEFAULT_PREFERENCES, activeTab: 'summary' }, false);
+      const renderResult = renderWithAdapter(tuple.adapter);
+      return { ...tuple, ...renderResult };
+    })();
+    unmount();
+    act(() => read.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
+    await act(async () => Promise.resolve());
+    expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'summary' });
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it('mantém serialização após leitura inicial', async () => {
+    const { adapter, calls, read } = createControlledAdapter('web', { ...DEFAULT_PREFERENCES, activeTab: 'summary' }, false);
+    renderWithAdapter(adapter);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Abilities' }));
+    act(() => read.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    act(() => calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    act(() => calls[1]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' }));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('abilities'));
+  });
+
+  it('converge UI e storage após leitura + saves', async () => {
+    const { adapter, calls, read, preferences } = createControlledAdapter('web', { ...DEFAULT_PREFERENCES, activeTab: 'summary' }, false);
+    renderWithAdapter(adapter);
+    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Abilities' }));
+
+    act(() => read.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    act(() => calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    act(() => calls[1]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' }));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('abilities'));
+    expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' });
+  });
+
   it('mantém estado no último sucesso, apesar de falha final', async () => {
     const { adapter, calls, preferences } = createControlledAdapter('web');
     renderWithAdapter(adapter);

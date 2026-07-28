@@ -48,19 +48,30 @@ export function AppProviders({ adapter, children }: PropsWithChildren<{ readonly
     latestRequestIdRef.current = 0;
     lastPersistedPreferencesRef.current = DEFAULT_PREFERENCES;
     setPreferencesLoaded(false);
-    void adapter.readPreferences()
-      .then((value) => {
+    const initialRead = (async () => {
+      try {
+        const next = await adapter.readPreferences();
         if (isActiveRef.current && adapterVersion === adapterVersionRef.current) {
-          lastPersistedPreferencesRef.current = value;
-          setPreferences(value);
+          lastPersistedPreferencesRef.current = next;
+          if (latestRequestIdRef.current === 0) {
+            setPreferences(next);
+          }
         }
-      })
-      .catch(() => {})
-      .finally(() => {
+      } catch {
+        if (isActiveRef.current && adapterVersion === adapterVersionRef.current) {
+          lastPersistedPreferencesRef.current = DEFAULT_PREFERENCES;
+          if (latestRequestIdRef.current === 0) {
+            setPreferences(DEFAULT_PREFERENCES);
+          }
+        }
+      } finally {
         if (isActiveRef.current && adapterVersion === adapterVersionRef.current) {
           setPreferencesLoaded(true);
         }
-      });
+      }
+    })();
+    saveQueueRef.current = initialRead.then(() => undefined).catch(() => undefined);
+
     return () => {
       isActiveRef.current = false;
       adapterVersionRef.current += 1;
