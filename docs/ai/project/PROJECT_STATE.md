@@ -3,7 +3,7 @@
 **Projeto:** Crônicas de Outro Mundo  
 **Atualizado em:** 2026-07-27  
 **Branch de integração:** `develop`  
-**Baseline ao criar este documento:** `c21aaec72ad05126c0adc0fe1925687eeff8a140`  
+**Baseline ao criar este documento:** `ace80762237ce7bfb7ca8b19db9d37c9bfc75fff`
 **`main` de produção:** `58fa8d234a2822877c5cd06998382e8e9d092524`
 
 ## 1. Como usar este documento
@@ -72,7 +72,7 @@ Actions/OpenAPI no GPT
 | Widget como frontend principal | `DEPRECATED` | decisão arquitetural de 2026-07-27 | Mantido como fallback, bootstrap e diagnóstico. |
 | Fundação da extensão MV3 | `MANUALLY_VALIDATED` | PR #81; PR #82; PR #84; suíte de extensão | Shell local validado manualmente em etapa anterior; este ajuste corrige apenas suíte de validação do Render. |
 | Botão flutuante + overlay + página própria | `INTEGRATED` | pacote `extension/` + testes + validação de regressão | Overlay manualmente validado em rodadas anteriores. Página própria coberta automaticamente por testes; validação manual nesta sessão não executada no navegador. |
-| Game UI React compartilhada + host Vite local | `IMPLEMENTED_LOCAL` | `extension/src/app`, adapters e builds web/MV3 | Mesmo componente atende web, overlay e página própria com fixture local; aguarda PR, CI e checkpoint manual da extensão descompactada. |
+| Game UI React compartilhada + host Vite local | `INTEGRATED` | `extension/src/app`, `extension/src/platform`, `extension/src/entries`, `extension/src/content` | Mesmo componente atende web, overlay e página própria com fixture local; checkpoint da extensão descompactada segue pendente nesta correção. |
 | OAuth próprio da extensão | `NOT_STARTED` | — | Próxima fase após validação/hotfix da fundação. |
 | Leitura real do backend pela extensão | `NOT_STARTED` | — | Reutilizar projeções e autorização existentes. |
 | Atualização automática da extensão | `NOT_STARTED` | — | Começar por recarga após mutação/polling; evoluir para SSE ou WebSocket. |
