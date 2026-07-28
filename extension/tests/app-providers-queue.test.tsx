@@ -17,6 +17,12 @@ type SaveCall = {
   readonly deferred: Deferred<ExtensionPreferences>;
 };
 
+type ControlledAdapter = {
+  readonly calls: SaveCall[];
+  readonly preferences: { current: ExtensionPreferences };
+  readonly adapter: PlatformAdapter;
+};
+
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -27,21 +33,25 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-function createControlledAdapter(mode: PlatformAdapter['mode']): {
-  readonly adapter: PlatformAdapter;
-  readonly calls: SaveCall[];
-} {
+function createControlledAdapter(
+  mode: PlatformAdapter['mode'],
+  initialPreferences: ExtensionPreferences = DEFAULT_PREFERENCES,
+): ControlledAdapter {
   const calls: SaveCall[] = [];
+  const adapterState = { current: { ...initialPreferences } };
   const adapter: PlatformAdapter = {
     mode,
-    readPreferences: vi.fn(() => Promise.resolve(DEFAULT_PREFERENCES)),
+    readPreferences: vi.fn(() => Promise.resolve(adapterState.current)),
     savePreferences: vi.fn((patch: Partial<ExtensionPreferences>) => {
       const deferred = createDeferred<ExtensionPreferences>();
       calls.push({ patch: { ...patch }, deferred });
-      return deferred.promise;
+      return deferred.promise.then((next) => {
+        adapterState.current = next;
+        return next;
+      });
     }),
   };
-  return { adapter, calls };
+  return { adapter, calls, preferences: adapterState };
 }
 
 function PreferencesPanel() {
@@ -71,86 +81,142 @@ afterEach(() => {
 });
 
 describe('preference save queue', () => {
-  it('aplica rapidamente e finaliza no último estado visual/persistido', async () => {
-    const { adapter, calls } = createControlledAdapter('web');
+  it('mantém estado no último sucesso, apesar de falha final', async () => {
+    const { adapter, calls, preferences } = createControlledAdapter('web');
     renderWithAdapter(adapter);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Summary' }));
     fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
     fireEvent.click(screen.getByRole('button', { name: 'Abilities' }));
-    expect(screen.getByTestId('active-tab').textContent).toBe('abilities');
 
     await waitFor(() => expect(calls).toHaveLength(1));
-    const first = calls[0]!;
-    act(() => first.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
+    act(() => calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
     await waitFor(() => expect(calls).toHaveLength(2));
-    const second = calls[1]!;
-    act(() => second.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
-    await waitFor(() => expect(calls).toHaveLength(3));
-    const third = calls[2]!;
-    act(() => third.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' }));
-    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('abilities'));
-  });
 
-  it('não inicia o segundo save antes do primeiro concluir', async () => {
-    const { adapter, calls } = createControlledAdapter('web');
-    renderWithAdapter(adapter);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Summary' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
-    await waitFor(() => expect(calls).toHaveLength(1));
-    const first = calls[0]!;
-    act(() => first.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
-    await waitFor(() => expect(calls).toHaveLength(2));
-  });
-
-  it('não restaura estado antigo com resposta vencida', async () => {
-    const { adapter, calls } = createControlledAdapter('web');
-    renderWithAdapter(adapter);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Summary' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
-    await waitFor(() => expect(calls).toHaveLength(1));
-    const first = calls[0]!;
-    act(() => first.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
-    await waitFor(() => expect(calls).toHaveLength(2));
-    const second = calls[1]!;
-    act(() => second.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
+    act(() => calls[1]!.deferred.reject(new Error('fail final')));
     await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('inventory'));
+    expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' });
   });
 
-  it('segue para a segunda gravação após falha da primeira', async () => {
-    const { adapter, calls } = createControlledAdapter('web');
+  it('reverte para o valor inicial quando todas as gravações falham', async () => {
+    const { adapter, calls, preferences } = createControlledAdapter('web', { ...DEFAULT_PREFERENCES, activeTab: 'summary' });
     renderWithAdapter(adapter);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Summary' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
     fireEvent.click(screen.getByRole('button', { name: 'Abilities' }));
     await waitFor(() => expect(calls).toHaveLength(1));
-    const first = calls[0]!;
-    act(() => first.deferred.reject(new Error('erro controlado')));
+    act(() => calls[0]!.deferred.reject(new Error('fail first')));
     await waitFor(() => expect(calls).toHaveLength(2));
-    const second = calls[1]!;
-    act(() => second.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' }));
-    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('abilities'));
+    act(() => calls[1]!.deferred.reject(new Error('fail last')));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('summary'));
+    expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'summary' });
   });
 
-  it('mantém a última opção em três mudanças rápidas', async () => {
-    const { adapter, calls } = createControlledAdapter('web');
+  it('não desfaz sucesso intermediário por falha anterior', async () => {
+    const { adapter, calls, preferences } = createControlledAdapter('web');
     renderWithAdapter(adapter);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('inventory'));
+    fireEvent.click(screen.getByRole('button', { name: 'Abilities' }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('abilities'));
+
+    act(() => calls[0]!.deferred.reject(new Error('fail first')));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('abilities'));
+
+    act(() => calls[1]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' }));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('abilities'));
+    expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' });
+  });
+
+  it('permanece no penúltimo estado confirmado quando a última falha', async () => {
+    const { adapter, calls, preferences } = createControlledAdapter('web');
+    renderWithAdapter(adapter);
+
     fireEvent.click(screen.getByRole('button', { name: 'Summary' }));
     fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
     fireEvent.click(screen.getByRole('button', { name: 'Abilities' }));
 
     await waitFor(() => expect(calls).toHaveLength(1));
-    const first = calls[0]!;
-    act(() => first.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
+    act(() => calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
     await waitFor(() => expect(calls).toHaveLength(2));
-    const second = calls[1]!;
-    act(() => second.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
+    act(() => calls[1]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
     await waitFor(() => expect(calls).toHaveLength(3));
-    const third = calls[2]!;
-    act(() => third.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' }));
-    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('abilities'));
+    act(() => calls[2]!.deferred.reject(new Error('fail last')));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('inventory'));
+    expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' });
+  });
+
+  it('a fila continua serial: o segundo não inicia antes do primeiro concluir', async () => {
+    const { adapter, calls } = createControlledAdapter('web');
+    renderWithAdapter(adapter);
+    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Abilities' }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    act(() => calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
+    await waitFor(() => expect(calls).toHaveLength(2));
+  });
+
+  it('restaura UI na falha da operação mais recente, não de operações antigas', async () => {
+    const { adapter, calls, preferences } = createControlledAdapter('web');
+    renderWithAdapter(adapter);
+    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Abilities' }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    act(() => calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    act(() => calls[1]!.deferred.reject(new Error('fail last')));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('inventory'));
+    expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' });
+  });
+
+  it('atualiza lastPersistedPreferences a cada sucesso', async () => {
+    const { adapter, calls, preferences } = createControlledAdapter('web');
+    renderWithAdapter(adapter);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Summary' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Abilities' }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    act(() => calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
+    await waitFor(() => expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    act(() => calls[1]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
+    await waitFor(() => expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
+    await waitFor(() => expect(calls).toHaveLength(3));
+    act(() => calls[2]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' }));
+    await waitFor(() => expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' }));
+  });
+
+  it('troca de adapter não reaplica ref persistido do adapter anterior', async () => {
+    const first = createControlledAdapter('overlay', { ...DEFAULT_PREFERENCES, activeTab: 'summary' });
+    const second = createControlledAdapter('extension-page', { ...DEFAULT_PREFERENCES, activeTab: 'inventory' });
+
+    const { rerender } = render(
+      <AppProviders adapter={first.adapter}>
+        <PreferencesPanel />
+      </AppProviders>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Abilities' }));
+    await waitFor(() => expect(first.calls).toHaveLength(1));
+
+    rerender(
+      <AppProviders adapter={second.adapter}>
+        <PreferencesPanel />
+      </AppProviders>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Summary' }));
+    await waitFor(() => expect(second.calls).toHaveLength(1));
+
+    act(() => first.calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' }));
+    act(() => second.calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
+    await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('summary'));
+
+    expect(second.preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'summary' });
+    expect(first.preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' });
   });
 
   it('desmontagem bloqueia atualização tardia sem warning de estado', async () => {
@@ -169,28 +235,21 @@ describe('preference save queue', () => {
     consoleError.mockRestore();
   });
 
-  it('troca de adapter invalida resposta antiga', async () => {
-    const first = createControlledAdapter('overlay');
-    const second = createControlledAdapter('extension-page');
-    const { rerender } = render(
-      <AppProviders adapter={first.adapter}>
-        <PreferencesPanel />
-      </AppProviders>,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Summary' }));
-    await waitFor(() => expect(first.calls).toHaveLength(1));
-
-    rerender(
-      <AppProviders adapter={second.adapter}>
-        <PreferencesPanel />
-      </AppProviders>,
-    );
+  it('converge armazenamento e UI para o mesmo valor final após falha final', async () => {
+    const { adapter, calls, preferences } = createControlledAdapter('web');
+    renderWithAdapter(adapter);
+    fireEvent.click(screen.getByRole('button', { name: 'Inventory' }));
     fireEvent.click(screen.getByRole('button', { name: 'Abilities' }));
-    await waitFor(() => expect(second.calls).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Summary' }));
 
-    act(() => first.calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'summary' }));
-    act(() => second.calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    act(() => calls[0]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'inventory' }));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    act(() => calls[1]!.deferred.resolve({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' }));
+    await waitFor(() => expect(calls).toHaveLength(3));
+    act(() => calls[2]!.deferred.reject(new Error('final fail')));
+
     await waitFor(() => expect(screen.getByTestId('active-tab').textContent).toBe('abilities'));
+    expect(preferences.current).toEqual({ ...DEFAULT_PREFERENCES, activeTab: 'abilities' });
   });
 });

@@ -34,6 +34,7 @@ export function AppProviders({ adapter, children }: PropsWithChildren<{ readonly
   const adapterRef = useRef(adapter);
   const isActiveRef = useRef(true);
   const adapterVersionRef = useRef(0);
+  const lastPersistedPreferencesRef = useRef(DEFAULT_PREFERENCES);
   const saveQueueRef = useRef(Promise.resolve());
   const lastRequestIdRef = useRef(0);
   const latestRequestIdRef = useRef(0);
@@ -45,9 +46,12 @@ export function AppProviders({ adapter, children }: PropsWithChildren<{ readonly
     saveQueueRef.current = Promise.resolve();
     lastRequestIdRef.current = 0;
     latestRequestIdRef.current = 0;
+    lastPersistedPreferencesRef.current = DEFAULT_PREFERENCES;
+    setPreferencesLoaded(false);
     void adapter.readPreferences()
       .then((value) => {
         if (isActiveRef.current && adapterVersion === adapterVersionRef.current) {
+          lastPersistedPreferencesRef.current = value;
           setPreferences(value);
         }
       })
@@ -90,8 +94,19 @@ export function AppProviders({ adapter, children }: PropsWithChildren<{ readonly
     saveQueueRef.current = execution.then(() => undefined).catch(() => undefined);
 
     void execution.then((outcome) => {
-      if (outcome.ok && isActiveRef.current && adapterVersion === adapterVersionRef.current && outcome.requestId === latestRequestIdRef.current) {
-        setPreferences(outcome.next);
+      if (!isActiveRef.current || adapterVersion !== adapterVersionRef.current) {
+        return;
+      }
+      if (outcome.ok) {
+        lastPersistedPreferencesRef.current = outcome.next;
+        if (outcome.requestId === latestRequestIdRef.current) {
+          setPreferences(outcome.next);
+        }
+        return;
+      }
+
+      if (outcome.requestId === latestRequestIdRef.current) {
+        setPreferences(lastPersistedPreferencesRef.current);
       }
     });
   }, []);
